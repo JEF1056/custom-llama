@@ -1,0 +1,40 @@
+version: "3.8"
+
+services:
+  llama-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: llama-server:latest
+    container_name: llama-server-cpu
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./models:/models:rw
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=none
+      - LLAMA_THREADS=${LLAMA_THREADS:-8}
+      - LLAMA_CTX_SIZE=${LLAMA_CTX_SIZE:-4096}
+      - LLAMA_GPU_LAYERS=${LLAMA_GPU_LAYERS:-0}
+      - LLAMA_MAX_TOKENS=${LLAMA_MAX_TOKENS:-512}
+      - LLAMA_TOP_P=${LLAMA_TOP_P:-0.95}
+      - LLAMA_TEMP=${LLAMA_TEMP:-0.7}
+      - LLAMA_MODEL=${LLAMA_MODEL:-}
+      - LLAMA_MMPROJ=${LLAMA_MMPROJ:-}
+      - LLAMA_IMAGE=${LLAMA_IMAGE:-}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - MODEL_NAME=${MODEL_NAME:-}
+      - MODEL_QUANT=${MODEL_QUANT:-}
+      - TQ_QUANT=${TQ_QUANT:-}
+      - MMPROJ=${MMPROJ:-}
+      # TurboQuant KV-cache settings
+      - LLAMA_CACHE_TYPE_K=${LLAMA_CACHE_TYPE_K:-f16}
+      - LLAMA_CACHE_TYPE_V=${LLAMA_CACHE_TYPE_V:-f16}
+      - LLAMA_FLASH_ATTN=${LLAMA_FLASH_ATTN:-on}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

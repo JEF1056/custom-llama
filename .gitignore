@@ -1,0 +1,28 @@
+# Model files (large binary files)
+models/*.gguf
+models/*.bin
+models/*.ckpt
+models/*.mmproj
+models/*.png
+models/*.jpg
+models/*.jpeg
+models/*.bmp
+models/*.gif
+models/.model_path
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Docker
+.docker/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
