@@ -95,6 +95,44 @@ if [ -n "$MODEL_NAME" ]; then
     if [ -n "$TQ_QUANT" ]; then
         echo ""
         echo "Converting to TurboQuant ($TQ_QUANT)..."
+        
+        # Check if the downloaded model is Q8_0 - llama-quantize doesn't allow requantizing from q8_0
+        # If so, delete it and download the FP16 version from the base HuggingFace repo
+        if echo "$MODEL_FILE" | grep -q "Q8_0"; then
+            echo "WARNING: Downloaded model is Q8_0 quantization."
+            echo "llama-quantize does not allow requantizing from q8_0."
+            echo "Deleting Q8_0 model and downloading FP16 version..."
+            rm -f "$MODEL_FILE"
+            
+            # Determine the model name for the base repo download
+            # Extract model name from the Q8_0 filename (e.g., Qwopus3.6-35B-A3B-v1-Q8_0 -> Qwopus3.6-35B-A3B-v1)
+            MODEL_BASE_NAME=$(basename "$MODEL_FILE" .gguf | sed 's/-Q8_0$//')
+            
+            # Download FP16 version from the base HuggingFace repo (not the GGUF repo)
+            echo "Downloading FP16 version from base repo..."
+            python3 /scripts/manage_models.py download "$MODEL_NAME" \
+                -o /models \
+                --force-fp16
+            
+            # Find the FP16 model file
+            FP16_MODEL=""
+            for f in /models/*.gguf; do
+                if [ -f "$f" ] && echo "$f" | grep -q "fp16\|bf16"; then
+                    FP16_MODEL="$f"
+                    break
+                fi
+            done
+            
+            if [ -z "$FP16_MODEL" ]; then
+                echo "ERROR: Could not find FP16/BF16 model for TurboQuant conversion."
+                echo "Please download the FP16 version manually from the base HuggingFace repo."
+                exit 1
+            fi
+            
+            MODEL_FILE="$FP16_MODEL"
+            echo "Using FP16 model: $MODEL_FILE"
+        fi
+        
         # Get the base model name without quantization suffix for the output filename
         MODEL_BASE=$(basename "$MODEL_FILE" .gguf)
         TQ_MODEL="/models/${MODEL_BASE}-${TQ_QUANT}.gguf"
