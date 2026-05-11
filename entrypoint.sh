@@ -21,6 +21,37 @@ CACHE_TYPE_V=${LLAMA_CACHE_TYPE_V:-f16}
 # Flash Attention: required for TurboQuant KV cache (auto-enabled by server, but explicit is better)
 FLASH_ATTN=${LLAMA_FLASH_ATTN:-on}
 
+# Parallel inference slots (concurrent requests)
+# Does not increase VRAM usage — slots share the same model weights, only KV cache is duplicated per slot
+PARALLEL=${LLAMA_PARALLEL:-2}
+
+# Memory mapping (off = mmap enabled, which is efficient for large models)
+# Set to "on" to disable mmap (loads entire model into RAM first — faster but requires more RAM)
+NO_MMAP=${LLAMA_NO_MMAP:-off}
+
+# Reasoning mode (on = chain-of-thought output for reasoning models)
+# Per-model setting; enable for models trained with reasoning capabilities (e.g., DeepSeek-R1, QwQ)
+REASONING=${LLAMA_REASONING:-on}
+
+# Prompt caching capacity (in tokens)
+CACHE_CAPACITY=${LLAMA_CACHE_CAPACITY:-4096}
+
+# Multimodal optimizations
+# Multi-KV attention: reduces KV cache size for multimodal models by sharing KV heads across image tokens
+MUL_KV=${LLAMA_MUL_KV:-on}
+# Cache chunk size for multimodal: controls how KV cache chunks are allocated for image tokens
+CACHE_CHUNK_SIZE=${LLAMA_CACHE_CHUNK_SIZE:-0}
+# No KV offload: keeps KV cache on GPU for multimodal (faster access for image tokens)
+NO_KV_OFFLOAD=${LLAMA_NO_KV_OFFLOAD:-off}
+
+# Tensor split for multi-GPU (e.g., "13,14" splits model across GPU 0 and GPU 1)
+# Leave empty for single GPU — model must fit on one GPU
+TS=${LLAMA_TS:-}
+
+# MoE CPU offload (number of experts to offload to CPU)
+# For Mixture-of-Experts models like Mixtral — controls which experts run on CPU vs GPU
+NCMOE=${LLAMA_NCMOE:-}
+
 # Multimodal settings
 MMPROJ=${LLAMA_MMPROJ:-}  # Multimodal projector file (.mmproj)
 IMAGE=${LLAMA_IMAGE:-}     # Image file for multimodal input (base64 or path)
@@ -125,6 +156,19 @@ fi
 echo "  KV Cache K: $CACHE_TYPE_K"
 echo "  KV Cache V: $CACHE_TYPE_V"
 echo "  Flash Attention: $FLASH_ATTN"
+echo "  Parallel Slots: $PARALLEL"
+echo "  Memory Mapping: $([ "$NO_MMAP" = "on" ] && echo "disabled (no-mmap)" || echo "enabled (mmap)")"
+echo "  Reasoning Mode: $REASONING"
+echo "  Cache Capacity: $CACHE_CAPACITY"
+echo "  Multi-KV Attention: $MUL_KV"
+echo "  Cache Chunk Size: $CACHE_CHUNK_SIZE"
+echo "  No KV Offload: $([ "$NO_KV_OFFLOAD" = "on" ] && echo "enabled" || echo "disabled")"
+if [ -n "$TS" ]; then
+    echo "  Tensor Split: $TS"
+fi
+if [ -n "$NCMOE" ]; then
+    echo "  MoE CPU Offload: $NCMOE"
+fi
 
 # Build multimodal flags
 MMFLAGS=""
@@ -150,5 +194,14 @@ exec llama-server \
     -ctv "$CACHE_TYPE_V" \
     -fa "$FLASH_ATTN" \
     ${STOP:+--stop "$STOP"} \
+    ${PARALLEL:+--parallel "$PARALLEL"} \
+    ${NO_MMAP:+--no-mmap} \
+    ${REASONING:+--reasoning "$REASONING"} \
+    --cache-capacity "$CACHE_CAPACITY" \
+    ${MUL_KV:+--mul-kv} \
+    ${CACHE_CHUNK_SIZE:+--cache-chunk-size "$CACHE_CHUNK_SIZE"} \
+    ${NO_KV_OFFLOAD:+--no-kv-offload} \
+    ${TS:+-ts "$TS"} \
+    ${NCMOE:+-ncmoe "$NCMOE"} \
     $MMFLAGS \
     "$@"

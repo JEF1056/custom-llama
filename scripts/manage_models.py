@@ -10,46 +10,116 @@ import argparse
 from pathlib import Path
 
 # HuggingFace model repositories that support GGUF downloads
+# Models are organized by size for 24GB GPU compatibility:
+#   - Small (<4GB at Q4_K_M): fits with large context
+#   - Medium (4-12GB at Q4_K_M): fits with moderate context
+#   - Large (12-18GB at Q4_K_M): fits with small context
 MODELS = {
-    "llama3.1-8b": {
-        "hf_repo": "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
-        "default_file": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
-        "description": "Meta Llama 3.1 8B Instruct (4-bit quantized)",
+    # ============================================
+    # SMALL MODELS (<4GB at Q4_K_M) - Best for 24GB GPU with large context
+    # ============================================
+    "qwen3.5-0.8b": {
+        "hf_repo": "unsloth/Qwen3.5-0.8B-GGUF",
+        "default_file": "Qwen3.5-0.8B-Q4_K_M.gguf",
+        "description": "Qwen 3.5 0.8B (4-bit quantized, ~0.5GB)",
+        "size_gb": 0.5,
     },
-    "llama3.1-70b": {
-        "hf_repo": "bartowski/Meta-Llama-3.1-70B-Instruct-GGUF",
-        "default_file": "Meta-Llama-3.1-70B-Instruct-Q4_K_M.gguf",
-        "description": "Meta Llama 3.1 70B Instruct (4-bit quantized)",
+    "llama3.2-1b": {
+        "hf_repo": "lmstudio-community/Llama-3.2-1B-Instruct-GGUF",
+        "default_file": "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+        "description": "Llama 3.2 1B Instruct (4-bit quantized, ~0.7GB)",
+        "size_gb": 0.7,
     },
-    "llama3.1-405b": {
-        "hf_repo": "bartowski/Meta-Llama-3.1-405B-Instruct-GGUF",
-        "default_file": "Meta-Llama-3.1-405B-Instruct-Q4_K_M.gguf",
-        "description": "Meta Llama 3.1 405B Instruct (4-bit quantized)",
+    "llama3.2-3b": {
+        "hf_repo": "lmstudio-community/Llama-3.2-3B-Instruct-GGUF",
+        "default_file": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+        "description": "Llama 3.2 3B Instruct (4-bit quantized, ~2GB)",
+        "size_gb": 2,
     },
-    "phi3-mini": {
-        "hf_repo": "bartowski/Phi-3-mini-4k-instruct-GGUF",
-        "default_file": "Phi-3-mini-4k-instruct-Q4_K_M.gguf",
-        "description": "Microsoft Phi-3 Mini 4K Instruct (4-bit quantized)",
+    "gemma-4-e2b": {
+        "hf_repo": "lmstudio-community/gemma-4-E2B-it-GGUF",
+        "default_file": "gemma-4-E2B-it-Q4_K_M.gguf",
+        "description": "Gemma 4 E2B (4-bit quantized, ~1.5GB)",
+        "size_gb": 1.5,
+        "mmproj": "mmproj-gemma-4-E2B-it-BF16.gguf",  # Multimodal projector for vision support
     },
-    "mistral-7b": {
-        "hf_repo": "bartowski/Mistral-7B-Instruct-v0.3-GGUF",
-        "default_file": "Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
-        "description": "Mistral 7B Instruct (4-bit quantized)",
+    "qwen3.5-4b": {
+        "hf_repo": "unsloth/Qwen3.5-4B-GGUF",
+        "default_file": "Qwen3.5-4B-Q4_K_M.gguf",
+        "description": "Qwen 3.5 4B (4-bit quantized, ~2.5GB)",
+        "size_gb": 2.5,
     },
-    "mixtral-8x7b": {
-        "hf_repo": "bartowski/Mixtral-8x7B-Instruct-v0.1-GGUF",
-        "default_file": "Mixtral-8x7B-Instruct-v0.1-Q4_K_M.gguf",
-        "description": "Mistral MoE 8x7B Instruct (4-bit quantized)",
+    # ============================================
+    # MEDIUM MODELS (4-12GB at Q4_K_M) - Fits with moderate context
+    # ============================================
+    "qwen2.5-coder-7b": {
+        "hf_repo": "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF",
+        "default_file": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
+        "description": "Qwen 2.5 Coder 7B Instruct (4-bit quantized, ~4.5GB)",
+        "size_gb": 4.5,
     },
-    "qwopus3.6-35b": {
-        "hf_repo": "Jackrong/Qwopus3.6-35B-A3B-v1-GGUF",
-        "default_file": "Qwopus3.6-35B-A3B-v1-Q8_0.gguf",
-        "description": "Qwopus 3.6 35B-A3B v1 (8-bit quantized GGUF - best for TurboQuant conversion)",
-        "notes": "Mixture-of-Experts model: 35B total params with 3.1B active. Multimodal - supports images via mmproj.gguf. For TurboQuant, always convert from FP16 if available (check for FP16 files in the repo), otherwise use Q8_0. Available quantizations: Q3_K_L, Q4_K_M, Q4_K_S, Q5_K_M, Q5_K_S, Q6_K, Q8_0, IQ4_XS.",
-        "turboquant": True,  # This model supports TurboQuant conversion
-        "turboquant_source": "Q8_0",  # Recommended source for TurboQuant conversion (FP16 preferred if available)
-        "fp16_file": None,  # Check repo for FP16 availability - update if found
-        "mmproj": "mmproj.gguf",  # Multimodal projector for vision/image support
+    "gemma-4-e4b": {
+        "hf_repo": "lmstudio-community/gemma-4-E4B-it-GGUF",
+        "default_file": "gemma-4-E4B-it-Q4_K_M.gguf",
+        "description": "Gemma 4 E4B (4-bit quantized, ~3GB)",
+        "size_gb": 3,
+        "mmproj": "mmproj-gemma-4-E4B-it-BF16.gguf",  # Multimodal projector for vision support
+    },
+    "qwen3.5-9b": {
+        "hf_repo": "unsloth/Qwen3.5-9B-GGUF",
+        "default_file": "Qwen3.5-9B-Q4_K_M.gguf",
+        "description": "Qwen 3.5 9B (4-bit quantized, ~5.5GB)",
+        "size_gb": 5.5,
+    },
+    "gpt-oss-20b": {
+        "hf_repo": "unsloth/gpt-oss-20b-GGUF",
+        "default_file": "gpt-oss-20b-Q4_K_M.gguf",
+        "description": "GPT-OSS 20B (4-bit quantized, ~11GB)",
+        "size_gb": 11,
+    },
+    # ============================================
+    # LARGE MODELS (12-18GB at Q4_K_M) - Fits with small context
+    # ============================================
+    "gemma-4-26b-a4b": {
+        "hf_repo": "lmstudio-community/gemma-4-26B-A4B-it-GGUF",
+        "default_file": "gemma-4-26B-A4B-it-Q4_K_M.gguf",
+        "description": "Gemma 4 26B-A4B (4-bit quantized, MoE, ~13GB)",
+        "size_gb": 13,
+        "mmproj": "mmproj-gemma-4-26B-A4B-it-BF16.gguf",  # Multimodal projector for vision support
+    },
+    "gemma-4-31b": {
+        "hf_repo": "lmstudio-community/gemma-4-31B-it-GGUF",
+        "default_file": "gemma-4-31B-it-Q4_K_M.gguf",
+        "description": "Gemma 4 31B (4-bit quantized, ~16GB)",
+        "size_gb": 16,
+        "mmproj": "mmproj-gemma-4-31B-it-BF16.gguf",  # Multimodal projector for vision support
+    },
+    "qwen3.6-27b": {
+        "hf_repo": "unsloth/Qwen3.6-27B-GGUF",
+        "default_file": "Qwen3.6-27B-Q4_K_M.gguf",
+        "description": "Qwen 3.6 27B (4-bit quantized, ~14GB)",
+        "size_gb": 14,
+    },
+    "qwen3.5-27b": {
+        "hf_repo": "unsloth/Qwen3.5-27B-GGUF",
+        "default_file": "Qwen3.5-27B-Q4_K_M.gguf",
+        "description": "Qwen 3.5 27B (4-bit quantized, ~14GB)",
+        "size_gb": 14,
+    },
+    "qwen3.6-35b-a3b": {
+        "hf_repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+        "default_file": "Qwen3.6-35B-A3B-Q4_K_M.gguf",
+        "description": "Qwen 3.6 35B-A3B (4-bit quantized, MoE, ~17GB)",
+        "size_gb": 17,
+    },
+    "minimax-m2.7": {
+        "hf_repo": "unsloth/MiniMax-M2.7-GGUF",
+        "default_file": "MiniMax-M2.7-Q8_0-00001-of-00006.gguf",
+        "description": "MiniMax M2.7 (8-bit quantized, MoE, ~18GB)",
+        "size_gb": 18,
+        "notes": "Mixture-of-Experts model. Use Q8_0 quantization for best quality. BF16 and MXFP4_MOE variants also available.",
+        "turboquant": True,
+        "turboquant_source": "Q8_0",
     },
 }
 
@@ -253,11 +323,43 @@ def turboquant_model(
 def list_models() -> None:
     """List available models."""
     print("Available models:")
-    print("-" * 60)
+    print("=" * 70)
+    print()
+    print("SMALL MODELS (<4GB at Q4_K_M) - Best for 24GB GPU with large context:")
+    print("-" * 70)
     for key, info in MODELS.items():
-        tq_note = " [TurboQuant]" if info.get("turboquant") else ""
-        mm_note = " [Multimodal]" if "mmproj" in info else ""
-        print(f"  {key:20s} - {info['description']}{tq_note}{mm_note}")
+        size_gb = info.get("size_gb", 0)
+        if size_gb < 4:
+            if info.get("turboquant"):
+                print(f"  {key:25s} - {info['description']} [TurboQuant]")
+            elif "mmproj" in info:
+                print(f"  {key:25s} - {info['description']} [Multimodal]")
+            else:
+                print(f"  {key:25s} - {info['description']}")
+    print()
+    print("MEDIUM MODELS (4-12GB at Q4_K_M) - Fits with moderate context:")
+    print("-" * 70)
+    for key, info in MODELS.items():
+        size_gb = info.get("size_gb", 0)
+        if 4 <= size_gb <= 12:
+            if info.get("turboquant"):
+                print(f"  {key:25s} - {info['description']} [TurboQuant]")
+            elif "mmproj" in info:
+                print(f"  {key:25s} - {info['description']} [Multimodal]")
+            else:
+                print(f"  {key:25s} - {info['description']}")
+    print()
+    print("LARGE MODELS (12-18GB at Q4_K_M) - Fits with small context:")
+    print("-" * 70)
+    for key, info in MODELS.items():
+        size_gb = info.get("size_gb", 0)
+        if size_gb > 12:
+            if info.get("turboquant"):
+                print(f"  {key:25s} - {info['description']} [TurboQuant]")
+            elif "mmproj" in info:
+                print(f"  {key:25s} - {info['description']} [Multimodal]")
+            else:
+                print(f"  {key:25s} - {info['description']}")
     print()
     print("Available quantization options:")
     for q in QUANT_OPTIONS:
@@ -270,7 +372,7 @@ def list_models() -> None:
     print("  TQ1_0: ~1-bit per weight - extreme compression")
     print("  TQ2_0: ~2-bit per weight - better quality while still highly compressed")
     print()
-    print("Multimodal models require mmproj.gguf file for vision support.")
+    print("Multimodal models require mmproj.gguf file for vision/image support.")
     print("See README.md for instructions on enabling image input.")
 
 
@@ -286,7 +388,7 @@ def main():
     # Download model
     download_parser = subparsers.add_parser("download", help="Download a model")
     download_parser.add_argument(
-        "model", help="Model name (e.g., llama3.1-8b)"
+        "model", help="Model name (e.g., llama3.2-8b)"
     )
     download_parser.add_argument(
         "-q",

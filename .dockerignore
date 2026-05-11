@@ -1,0 +1,76 @@
+# Git files
+.git
+.gitignore
+.gitmodules
+.gitattributes
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.eggs
+*.egg
+dist/
+build/
+.eggs/
+
+# Docker files
+Dockerfile
+docker-compose*.yml
+docker-compose*.yaml
+.dockerignore
+
+# IDE files
+.vscode
+.idea
+*.swp
+*.swo
+*.swn
+*.bak
+
+# Documentation
+README.md
+LICENSE
+*.md
+docs/
+
+# Models directory
+models/
+*.bin
+*.safetensors
+*.ckpt
+*.gguf
+*.ggml
+
+# Temporary files
+*.tmp
+*.log
+*.cache
+*.swp
+*.swo
+
+# Environment files
+.env
+.env.*
+.env.local
+.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Coverage
+.coverage
+htmlcov/
+.coverage.*
+coverage.xml
+*.cover
+
+# Pytest
+.pytest_cache/
+.pytest_cache
+
+# mypy
+.mypy_cache/
+.mypy_cache

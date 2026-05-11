@@ -28,5 +28,6 @@ Thumbs.db
 .idea/
 
 # Roo
-/plans
-/.roo
+plans
+.roo
+.roomodes

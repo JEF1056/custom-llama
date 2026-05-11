@@ -32,6 +32,22 @@ services:
       - LLAMA_CACHE_TYPE_K=${LLAMA_CACHE_TYPE_K:-f16}
       - LLAMA_CACHE_TYPE_V=${LLAMA_CACHE_TYPE_V:-f16}
       - LLAMA_FLASH_ATTN=${LLAMA_FLASH_ATTN:-on}
+      # Parallel inference slots (concurrent requests)
+      - LLAMA_PARALLEL=${LLAMA_PARALLEL:-2}
+      # Memory mapping (off = mmap enabled, which is efficient for large models)
+      - LLAMA_NO_MMAP=${LLAMA_NO_MMAP:-off}
+      # Reasoning mode (on = chain-of-thought output for reasoning models)
+      - LLAMA_REASONING=${LLAMA_REASONING:-on}
+      # Tensor split for multi-GPU (e.g., "13,14" splits model across GPU 0 and GPU 1)
+      - LLAMA_TS=${LLAMA_TS:-}
+      # MoE CPU offload (number of experts to offload to CPU)
+      - LLAMA_NCMOE=${LLAMA_NCMOE:-}
+      # Prompt caching capacity (in tokens)
+      - LLAMA_CACHE_CAPACITY=${LLAMA_CACHE_CAPACITY:-4096}
+      # Multimodal optimizations
+      - LLAMA_MUL_KV=${LLAMA_MUL_KV:-on}
+      - LLAMA_CACHE_CHUNK_SIZE=${LLAMA_CACHE_CHUNK_SIZE:-0}
+      - LLAMA_NO_KV_OFFLOAD=${LLAMA_NO_KV_OFFLOAD:-off}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
