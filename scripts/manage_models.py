@@ -228,6 +228,7 @@ def download_model(model_name: str, output_dir: str) -> None:
         import subprocess
         
         try:
+            # Stream output to console so progress bar is visible
             result = subprocess.run(
                 [
                     "hf",
@@ -236,14 +237,13 @@ def download_model(model_name: str, output_dir: str) -> None:
                     file_name,
                     "--local-dir", str(output_path),
                 ],
-                capture_output=True,
-                text=True,
+                stdout=None,  # Stream to console
+                stderr=None,  # Stream to console
             )
             if result.returncode != 0:
-                print(f"Error downloading model:")
-                print(result.stderr)
+                print(f"\nError downloading model")
                 sys.exit(1)
-            print(f"Model downloaded to: {file_path}")
+            print(f"\nModel downloaded to: {file_path}")
         except FileNotFoundError:
             print("hf CLI not found. Install with: pip install huggingface_hub")
             sys.exit(1)
@@ -257,6 +257,7 @@ def download_model(model_name: str, output_dir: str) -> None:
             print(f"Source: {model_info['hf_repo']}/{mmproj_file}")
             print(f"Destination: {mmproj_path}")
             try:
+                # Stream output to console so progress bar is visible
                 result = subprocess.run(
                     [
                         "hf",
@@ -265,14 +266,13 @@ def download_model(model_name: str, output_dir: str) -> None:
                         mmproj_file,
                         "--local-dir", str(output_path),
                     ],
-                    capture_output=True,
-                    text=True,
+                    stdout=None,  # Stream to console
+                    stderr=None,  # Stream to console
                 )
                 if result.returncode != 0:
-                    print(f"Error downloading mmproj:")
-                    print(result.stderr)
+                    print(f"\nError downloading mmproj")
                 else:
-                    print(f"Multimodal projector downloaded to: {mmproj_path}")
+                    print(f"\nMultimodal projector downloaded to: {mmproj_path}")
             except FileNotFoundError:
                 print("hf CLI not found. Please download mmproj.gguf manually.")
         else:
