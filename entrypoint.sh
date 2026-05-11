@@ -70,24 +70,34 @@ if [ -n "$MODEL_NAME" ]; then
     echo "  Model Download"
     echo "========================================"
     echo "Model: $MODEL_NAME"
-    echo "Quantization: ${MODEL_QUANT:-Q4_K_M}"
     echo "TurboQuant: ${TQ_QUANT:-none}"
     echo ""
     
-    # Download the model
+    # Download the model (automatically fetches largest quantized version)
     echo "Downloading model..."
-    python /scripts/manage_models.py download "$MODEL_NAME" \
-        -q "${MODEL_QUANT:-Q4_K_M}" \
+    python3 /scripts/manage_models.py download "$MODEL_NAME" \
         -o /models
     
-    # Determine the downloaded model file
-    MODEL_FILE="/models/${MODEL_NAME}-${MODEL_QUANT:-Q4_K_M}.gguf"
+    # Determine the downloaded model file by scanning the models directory
+    MODEL_FILE=""
+    for f in /models/*.gguf; do
+        if [ -f "$f" ]; then
+            MODEL_FILE="$f"
+            break
+        fi
+    done
+    if [ -z "$MODEL_FILE" ]; then
+        echo "ERROR: No model file found in /models/ after download"
+        exit 1
+    fi
     
     # Convert to TurboQuant if requested
     if [ -n "$TQ_QUANT" ]; then
         echo ""
         echo "Converting to TurboQuant ($TQ_QUANT)..."
-        TQ_MODEL="/models/${MODEL_NAME}-${MODEL_QUANT:-Q4_K_M}-${TQ_QUANT}.gguf"
+        # Get the base model name without quantization suffix for the output filename
+        MODEL_BASE=$(basename "$MODEL_FILE" .gguf)
+        TQ_MODEL="/models/${MODEL_BASE}-${TQ_QUANT}.gguf"
         llama-quantize "$MODEL_FILE" "$TQ_MODEL" "$TQ_QUANT"
         MODEL="$TQ_MODEL"
         echo "TurboQuant model: $TQ_MODEL"
@@ -100,10 +110,17 @@ if [ -n "$MODEL_NAME" ]; then
     if [ -n "$MMPROJ" ]; then
         echo ""
         echo "Downloading multimodal projector..."
-        python /scripts/manage_models.py download "$MODEL_NAME" \
-            -q "${MODEL_QUANT:-Q4_K_M}" \
+        python3 /scripts/manage_models.py download "$MODEL_NAME" \
             -o /models
-        MMPROJ="/models/${MODEL_NAME}-${MODEL_QUANT:-Q4_K_M}-mmproj.gguf"
+        # Find the mmproj file by scanning the models directory
+        MMPROJ_FILE=""
+        for f in /models/*-mmproj.gguf; do
+            if [ -f "$f" ]; then
+                MMPROJ_FILE="$f"
+                break
+            fi
+        done
+        MMPROJ="$MMPROJ_FILE"
         echo "Multimodal projector: $MMPROJ"
     fi
     

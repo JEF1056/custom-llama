@@ -25,7 +25,6 @@ services:
       - LLAMA_IMAGE=${LLAMA_IMAGE:-}
       - HF_TOKEN=${HF_TOKEN:-}
       - MODEL_NAME=${MODEL_NAME:-}
-      - MODEL_QUANT=${MODEL_QUANT:-}
       - TQ_QUANT=${TQ_QUANT:-}
       - MMPROJ=${MMPROJ:-}
       # TurboQuant KV-cache settings
