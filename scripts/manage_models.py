@@ -146,6 +146,7 @@ QUANT_PRIORITY = [
     "Q4_K_M",
     "Q4_K_S",
     "Q3_K_L",
+    "Q3_K_M",
     "Q3_K_S",
     "IQ4_XS",
     "IQ3_XS",
