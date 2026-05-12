@@ -161,7 +161,7 @@ exec llama-server \
     --batch-size "$BATCH_SIZE" \
     --ubatch-size "$UBATCH_SIZE" \
     --n-gpu-layers "$GPU_LAYERS" \
-    --max-tokens "$MAX_TOKENS" \
+    -n "$MAX_TOKENS" \
     --top-p "$TOP_P" \
     --temp "$TEMP" \
     -ctk "$CACHE_TYPE_K" \
