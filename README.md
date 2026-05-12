@@ -20,6 +20,13 @@ services:
   llama-server:
     ports:
       - "8080:8080"
+    networks:
+      - llama-net
+      - host-bridge
+
+networks:
+  host-bridge:
+    driver: bridge
 ```
 
 Then `docker compose up -d llama-server` (not `restart` — that won't re-read the config). Test with `curl http://localhost:8080/health`.
