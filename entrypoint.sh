@@ -166,16 +166,16 @@ exec llama-server \
     --temp "$TEMP" \
     -ctk "$CACHE_TYPE_K" \
     -ctv "$CACHE_TYPE_V" \
-    $([ "$FLASH_ATTN" = "on" ] && echo "--flash-attn") \
+    $([ "$FLASH_ATTN" = "on" ] && echo "--flash-attn 1") \
     ${STOP:+--stop "$STOP"} \
     ${PARALLEL:+--parallel "$PARALLEL"} \
-    $([ "$NO_MMAP" = "on" ] && echo "--no-mmap") \
+    $([ "$NO_MMAP" = "on" ] && echo "--no-mmap 1") \
     ${REASONING:+--reasoning "$REASONING"} \
     $([ "$PRESERVE_THINKING" = "on" ] && echo '--chat-template-kwargs {"preserve_thinking":true}') \
     --cache-capacity "$CACHE_CAPACITY" \
-    $([ "$MUL_KV" = "on" ] && echo "--mul-kv") \
+    $([ "$MUL_KV" = "on" ] && echo "--mul-kv 1") \
     ${CACHE_CHUNK_SIZE:+--cache-chunk-size "$CACHE_CHUNK_SIZE"} \
-    $([ "$NO_KV_OFFLOAD" = "on" ] && echo "--no-kv-offload") \
+    $([ "$NO_KV_OFFLOAD" = "on" ] && echo "--no-kv-offload 1") \
     ${TS:+-ts "$TS"} \
     ${NCMOE:+-ncmoe "$NCMOE"} \
     $MMFLAGS \
