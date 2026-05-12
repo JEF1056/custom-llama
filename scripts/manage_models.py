@@ -758,26 +758,31 @@ def convert_safetensors(model_name: str, quant: str, output_dir: str, nthreads: 
     # ------------------------------------------------------------------ #
     fp16_gguf = output_path / f"{model_name}-fp16.gguf"
     _section("Converting safetensors → fp16 GGUF")
-    print(f"  Source : {st_dir}")
-    print(f"  Output : {fp16_gguf.name}")
 
-    with _keepalive(30, "convert"):
-        result = subprocess.run(
-            [
-                "python3", str(convert_script),
-                str(st_dir),
-                "--outtype", "f16",
-                "--outfile", str(fp16_gguf),
-            ],
-            stdout=None,
-            stderr=None,
-        )
-    if result.returncode != 0:
-        print(f"\nError: convert_hf_to_gguf.py failed (exit {result.returncode})")
-        sys.exit(1)
+    if fp16_gguf.exists():
+        fp16_size = _fmt_bytes(fp16_gguf.stat().st_size)
+        print(f"  ✓ fp16 GGUF already on disk: {fp16_gguf.name} ({fp16_size}) — skipping conversion.")
+    else:
+        print(f"  Source : {st_dir}")
+        print(f"  Output : {fp16_gguf.name}")
 
-    fp16_size = _fmt_bytes(fp16_gguf.stat().st_size) if fp16_gguf.exists() else "unknown"
-    print(f"\n  Done: {fp16_gguf.name} ({fp16_size})")
+        with _keepalive(30, "convert"):
+            result = subprocess.run(
+                [
+                    "python3", str(convert_script),
+                    str(st_dir),
+                    "--outtype", "f16",
+                    "--outfile", str(fp16_gguf),
+                ],
+                stdout=None,
+                stderr=None,
+            )
+        if result.returncode != 0:
+            print(f"\nError: convert_hf_to_gguf.py failed (exit {result.returncode})")
+            sys.exit(1)
+
+        fp16_size = _fmt_bytes(fp16_gguf.stat().st_size) if fp16_gguf.exists() else "unknown"
+        print(f"\n  Done: {fp16_gguf.name} ({fp16_size})")
 
     # ------------------------------------------------------------------ #
     # 3. Quantize fp16 GGUF → target quant
