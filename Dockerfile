@@ -14,7 +14,7 @@ RUN apt-get update && \
   rm -rf /var/lib/apt/lists/*
 
 RUN git clone --depth 1 --recursive \
-  https://github.com/ggerganov/llama.cpp.git /llama.cpp
+  https://github.com/TheTom/llama-cpp-turboquant.git /llama.cpp
 
 WORKDIR /llama.cpp
 
