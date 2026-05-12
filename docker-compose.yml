@@ -58,6 +58,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: runtime
     image: llama-server:latest
     container_name: llama-server
 
