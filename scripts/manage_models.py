@@ -726,6 +726,27 @@ def convert_safetensors(model_name: str, quant: str, output_dir: str, nthreads: 
         return
 
     # ------------------------------------------------------------------ #
+    # 0. Short-circuit: check if a pre-built GGUF already exists in hf_repo
+    #    (same logic as the `download` command). Skip for TurboQuant targets
+    #    since those are never pre-built on HuggingFace.
+    # ------------------------------------------------------------------ #
+    is_turboquant = quant in TQ_QUANT_OPTIONS
+    hf_repo = model_info["hf_repo"]
+    if not is_turboquant:
+        print(f"  Checking HuggingFace for pre-built {quant} in {hf_repo} ...")
+        hf_file = find_quant_in_repo(hf_repo, quant)
+        if hf_file:
+            print(f"  Found pre-built {quant}: {Path(hf_file).name}")
+            print("  Skipping safetensors download — downloading GGUF directly.")
+            downloaded = _hf_download_file(hf_repo, hf_file, str(output_path))
+            if downloaded.resolve() != canonical.resolve():
+                shutil.move(str(downloaded), str(canonical))
+            _done(canonical)
+            _maybe_download_mmproj(model_info, output_path)
+            return
+        print(f"  No pre-built {quant} found — falling back to safetensors conversion.")
+
+    # ------------------------------------------------------------------ #
     # 1. Download safetensors
     # ------------------------------------------------------------------ #
     _section(f"Downloading safetensors: {source_repo}")
