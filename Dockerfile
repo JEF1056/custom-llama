@@ -89,7 +89,7 @@ RUN --mount=from=builder,target=/builder \
 ENV LD_LIBRARY_PATH=/opt/llama/lib:/usr/local/cuda/lib64:/usr/local/nvidia/lib64:/usr/lib:$LD_LIBRARY_PATH
 ENV PATH=/usr/local/bin:$PATH
 
-RUN pip install --no-cache-dir huggingface_hub
+RUN python3 -m pip install --no-cache-dir huggingface_hub
 
 COPY scripts/manage_models.py /scripts/manage_models.py
 COPY entrypoint.sh /entrypoint.sh
