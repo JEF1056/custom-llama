@@ -22,7 +22,7 @@ services:
       - "8080:8080"
 ```
 
-Then `docker compose restart llama-server`. Test with `curl http://localhost:8080/health`.
+Then `docker compose up -d llama-server` (not `restart` — that won't re-read the config). Test with `curl http://localhost:8080/health`.
 
 Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http://localhost:8080/v1`.
 
