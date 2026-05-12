@@ -1,22 +1,10 @@
 networks:
   # Internal-only network. Services here have NO route to the public internet.
-  # llama-server, kv-cache-proxy, openclaw-gateway, pipelines (llama side).
   llama-net:
     internal: true
 
-  # Tailscale egress network. Only the tailscale sidecar is on this network so
-  # it can reach the Tailscale coordination server while keeping all other
-  # inference services air-gapped on llama-net.
-  ts-net:
-
-  # Outbound network for cloudflared and open-webui.
-  # The pipelines container also bridges here to receive requests from Open WebUI.
-  webui-net:
-
 volumes:
-  tailscale-state:    # Tailscale node state (identity key, node certs)
-  open-webui-data:    # Open WebUI SQLite DB, uploads, config
-  openclaw-data:      # OpenClaw Gateway state, sessions, credentials
+  # Model volume — shared between llama-server and llama-convert
 
 services:
   # ---------------------------------------------------------------------------
@@ -73,37 +61,9 @@ services:
     # No GPU needed — conversion and quantization run on CPU.
 
   # ---------------------------------------------------------------------------
-  # Tailscale sidecar — joins the tailnet and exposes llama-server and
-  # kv-cache-proxy on the tailnet via TCP forwarding defined in serve.json.
-  # Tailnet users access:
-  #   http://<TS_HOSTNAME>.<tailnet>.ts.net:8080  → llama-server (raw API)
-  #   http://<TS_HOSTNAME>.<tailnet>.ts.net:8181  → kv-cache-proxy (Roo Code)
-  # ---------------------------------------------------------------------------
-  tailscale:
-    image: tailscale/tailscale:latest
-    container_name: tailscale-llama
-    hostname: ${TS_HOSTNAME:-llama-api}
-    environment:
-      TS_AUTHKEY: "${TS_AUTHKEY:-}"
-      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
-      TS_STATE_DIR: /var/lib/tailscale
-      TS_SERVE_CONFIG: /config/serve.json
-    volumes:
-      - tailscale-state:/var/lib/tailscale
-      - ./tailscale:/config:ro
-      - /dev/net/tun:/dev/net/tun
-    cap_add:
-      - NET_ADMIN
-      - SYS_MODULE
-    networks:
-      - llama-net   # TCP-forwards to llama-server, kv-cache-proxy, openclaw-gateway
-      - ts-net      # egress to Tailscale coordination server
-    restart: unless-stopped
-
-  # ---------------------------------------------------------------------------
   # llama.cpp inference server (TurboQuant fork)
-  # No host port mapping — reachable only via llama-net (pipelines, proxy)
-  # or via the Tailscale sidecar on the tailnet.
+  # Exposed publicly via Cloudflare Tunnel at api.jessfan.com with
+  # Cloudflare Access authentication.
   # ---------------------------------------------------------------------------
   llama-server:
     build:
@@ -113,7 +73,7 @@ services:
     image: llama-server:latest
     container_name: llama-server
 
-    # No ports: — port 8080 is accessible only within llama-net and via tailnet.
+    # No host port mapping — accessible only via Cloudflare Tunnel.
 
     volumes:
       - ./models:/models:rw
@@ -168,8 +128,10 @@ services:
       # per-conversation KV caches survive server restarts.
       LLAMA_SLOT_SAVE_PATH: ${LLAMA_SLOT_SAVE_PATH:-/models/slots}
 
-      # Optional API key — set to restrict direct tailnet API access.
-      # Leave empty to allow unauthenticated access on the tailnet.
+      # Optional API key — when set, all requests to the server must include
+      # Authorization: Bearer <key>. Leave empty for unauthenticated access.
+      # When exposed via Cloudflare Access, this provides an additional
+      # layer of API-level authentication.
       LLAMA_API_KEY: ${LLAMA_API_KEY:-}
 
     networks:
@@ -184,119 +146,20 @@ services:
       start_period: 300s  # allow up to 5 min for large model to load from disk
 
   # ---------------------------------------------------------------------------
-  # KV cache proxy — OpenAI-compatible proxy for Roo Code (tailnet only).
-  # Binds sessions to llama.cpp slots via X-Session-ID request header and
-  # manages save/restore transparently around each completion request.
-  # Roo Code config: base URL = http://<TS_HOSTNAME>.<tailnet>.ts.net:8181/v1
-  # ---------------------------------------------------------------------------
-  kv-cache-proxy:
-    build:
-      context: ./kv-cache-proxy
-    container_name: kv-cache-proxy
-    environment:
-      LLAMA_BASE_URL: http://llama-server:${LLAMA_PORT:-8080}
-      NUM_SLOTS: ${LLAMA_PARALLEL:-2}
-      PORT: ${KV_PROXY_PORT:-8181}
-      SLOT_SAVE_ENABLED: "true"
-    networks:
-      - llama-net
-    restart: unless-stopped
-    depends_on:
-      - llama-server
-
-  # ---------------------------------------------------------------------------
-  # Open WebUI Pipelines — intercepts requests between Open WebUI and
-  # llama-server to inject id_slot / cache_prompt and handle KV save/restore.
-  # Pipeline files in ./pipelines/ are auto-loaded at startup.
-  # Sits on both networks: receives requests from webui-net, calls llama-net.
-  # ---------------------------------------------------------------------------
-  open-webui-pipelines:
-    image: ghcr.io/open-webui/pipelines:main
-    container_name: open-webui-pipelines
-    volumes:
-      - ./pipelines:/app/pipelines
-    environment:
-      LLAMA_BASE_URL: http://llama-server:${LLAMA_PORT:-8080}
-      PIPELINES_API_KEY: "${PIPELINES_API_KEY:-}"
-    networks:
-      - llama-net
-      - webui-net
-    restart: unless-stopped
-    depends_on:
-      - llama-server
-
-  # ---------------------------------------------------------------------------
-  # Open WebUI — chat UI gated by Google OAuth (OIDC via Firebase credentials).
-  # Connects exclusively to open-webui-pipelines; never directly to llama-server.
-  # Public access via Cloudflare Tunnel at https://chat.jessfan.com
-  # ---------------------------------------------------------------------------
-  open-webui:
-    image: ghcr.io/open-webui/open-webui:main
-    container_name: open-webui
-    volumes:
-      - open-webui-data:/app/backend/data
-    environment:
-      WEBUI_SECRET_KEY: "${WEBUI_SECRET_KEY:-}"
-      WEBUI_URL: ${WEBUI_URL:-https://chat.jessfan.com}
-
-      # Google OAuth — credentials from Firebase Console or Google Cloud Console.
-      # Firebase Console → Authentication → Sign-in method → Google → Web SDK config.
-      GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
-      GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
-      OPENID_PROVIDER_URL: ${OPENID_PROVIDER_URL:-https://accounts.google.com/.well-known/openid-configuration}
-
-      # false = only pre-existing accounts can sign in (set to true temporarily
-      # to create your first account, then set back to false and restart).
-      ENABLE_OAUTH_SIGNUP: ${ENABLE_OAUTH_SIGNUP:-false}
-
-      # Route all completions through the pipelines server (KV cache management).
-      OPENAI_API_BASE_URL: http://open-webui-pipelines:9099
-      OPENAI_API_KEY: "${PIPELINES_API_KEY:-}"
-
-      # Disable Ollama integration (not used in this setup).
-      ENABLE_OLLAMA_API: "false"
-
-    networks:
-      - webui-net
-    restart: unless-stopped
-    depends_on:
-      - open-webui-pipelines
-
-  # ---------------------------------------------------------------------------
-  # OpenClaw Gateway — CLI-accessible personal AI assistant on the tailnet.
-  # Provides the `openclaw` CLI interface for ad-hoc queries from any tailnet
-  # machine (including the VSCode integrated terminal).
-  #
-  # CLI usage (from any tailnet machine with openclaw installed):
-  #   openclaw --gateway http://<TS_HOSTNAME>.<tailnet>.ts.net:18789 \
-  #            --token <OPENCLAW_GATEWAY_TOKEN> \
-  #            agent --message "explain this function"
-  #
-  # Or set in ~/.openclaw/openclaw.json on the client:
-  #   { "gateway": { "url": "http://...:18789", "token": "..." } }
-  # ---------------------------------------------------------------------------
-  openclaw-gateway:
-    image: ghcr.io/openclaw/openclaw:latest
-    container_name: openclaw-gateway
-    volumes:
-      - openclaw-data:/root/.openclaw
-      - ./openclaw/openclaw.json:/root/.openclaw/openclaw.json:ro
-    environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN:-}"
-    networks:
-      - llama-net
-    restart: unless-stopped
-    depends_on:
-      - llama-server
-
-  # ---------------------------------------------------------------------------
-  # Cloudflare Tunnel — exposes Open WebUI publicly at chat.jessfan.com with
-  # zero inbound firewall ports. Makes an outbound connection to Cloudflare.
+  # Cloudflare Tunnel — exposes llama-server publicly at api.jessfan.com with
+  # Cloudflare Access authentication. Makes an outbound connection to Cloudflare.
   #
   # One-time setup in Cloudflare Zero Trust → Networks → Tunnels:
   #   1. Create tunnel → Docker → copy token to CF_TUNNEL_TOKEN in .env
-  #   2. Add Public Hostname: chat.jessfan.com → http://open-webui:8080
+  #   2. Add Public Hostname: api.jessfan.com → http://llama-server:8080
   #   (Cloudflare creates the CNAME DNS record automatically.)
+  #
+  # Cloudflare Access setup (Zero Trust → Access → Applications):
+  #   1. Create Application for api.jessfan.com
+  #   2. Choose authentication method:
+  #      - Google OAuth (same credentials as chat.jessfan.com)
+  #      - Email/Password (users get a one-time code via email)
+  #   3. Set "Who can access" to your email or "Anyone with the domain"
   # ---------------------------------------------------------------------------
   cloudflared:
     image: cloudflare/cloudflared:latest
@@ -305,7 +168,7 @@ services:
     environment:
       TUNNEL_TOKEN: "${CF_TUNNEL_TOKEN:-}"
     networks:
-      - webui-net
+      - llama-net
     restart: unless-stopped
     depends_on:
-      - open-webui
+      - llama-server
