@@ -145,7 +145,6 @@ RUN apt-get update && \
 # Pull the HF→GGUF conversion script and its support package from the builder.
 COPY --from=builder /llama.cpp/convert_hf_to_gguf.py /scripts/convert_hf_to_gguf.py
 COPY --from=builder /llama.cpp/gguf-py/ /scripts/gguf-py/
-COPY scripts/manage_models.py /scripts/manage_models.py
 
 RUN python3 -m pip install --no-cache-dir \
   torch --index-url https://download.pytorch.org/whl/cpu && \
@@ -157,6 +156,9 @@ RUN python3 -m pip install --no-cache-dir \
   sentencepiece \
   accelerate \
   /scripts/gguf-py/
+
+# Copied after pip install so that edits to this script don't bust the pip cache.
+COPY scripts/manage_models.py /scripts/manage_models.py
 
 # Enable hf_transfer: Rust-based parallel downloader that ships with
 # huggingface_hub.  Provides multi-connection HTTP range downloads for

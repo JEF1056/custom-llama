@@ -359,6 +359,12 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
     print(f"  Repository  : {repo_id}")
     print(f"  Destination : {dest}")
 
+    on_wsl2 = _is_wsl2()
+    if on_wsl2:
+        print("  Host        : WSL2/Windows — conservative I/O mode active")
+        print("                (hf_transfer suppressed; aria2c capped at 4 connections)")
+        print("                Set CONVERT_DOWNLOAD_RATE (e.g. 300M) to throttle further if crashes persist.")
+
     # When CONVERT_DOWNLOAD_RATE is set, use curl with --limit-rate to cap
     # write throughput and prevent WSL2 memory balloon / BSOD on Windows.
     download_rate = os.environ.get("CONVERT_DOWNLOAD_RATE", "").strip()
@@ -373,7 +379,7 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
         _hf_hub_download = _hfh.hf_hub_download
     except (ImportError, AttributeError):
         print("  huggingface_hub not available — using aria2c/curl fallback.")
-        return _curl_download_file(repo_id, filename, dest)
+        return _curl_download_file(repo_id, filename, dest, on_wsl2=on_wsl2)
 
     # enable_progress_bars: present since 0.14.0; silently skip if absent.
     try:
@@ -386,7 +392,6 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
     # Skip auto-enable on WSL2 — hf_transfer's burst writes overwhelm WSL2's
     # vmmem and can cause the guest to crash on large files.  Users who know
     # their setup can still force it by setting HF_HUB_ENABLE_HF_TRANSFER=1.
-    on_wsl2 = _is_wsl2()
     if os.environ.get("HF_HUB_ENABLE_HF_TRANSFER", "0") != "1":
         try:
             import hf_transfer  # noqa: F401 — presence check only
@@ -418,7 +423,7 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
 
 
 def _curl_download_file(
-    repo_id: str, filename: str, dest: Path, limit_rate: str = ""
+    repo_id: str, filename: str, dest: Path, limit_rate: str = "", on_wsl2: bool | None = None
 ) -> Path:
     """Download a file from HuggingFace.
 
@@ -435,6 +440,8 @@ def _curl_download_file(
     Args:
         limit_rate: Optional curl --limit-rate value (e.g. "300M").  When
             empty, aria2c is tried first.
+        on_wsl2: Pre-computed result of _is_wsl2(); detected automatically
+            when None.
     """
     download_url = f"https://huggingface.co/{repo_id}/resolve/main/{filename}"
     print(f"  Download URL  : {download_url}")
@@ -445,11 +452,11 @@ def _curl_download_file(
     if not limit_rate and shutil.which("aria2c"):
         # On WSL2 reduce to 4 connections — 16 creates a disk-write burst
         # that balloons vmmem and can crash the WSL2 guest on large files.
-        on_wsl2 = _is_wsl2()
+        if on_wsl2 is None:
+            on_wsl2 = _is_wsl2()
         connections = 4 if on_wsl2 else 16
         if on_wsl2:
-            print(f"  WSL2 detected — using {connections} aria2c connections to reduce I/O pressure.")
-            print("  Set CONVERT_DOWNLOAD_RATE (e.g. 300M) to cap throughput further if crashes persist.")
+            print(f"  Using aria2c ({connections} parallel connections — WSL2 conservative mode) ...")
         cmd = [
             "aria2c",
             f"--max-connection-per-server={connections}",
@@ -462,7 +469,8 @@ def _curl_download_file(
         if hf_token:
             cmd += ["--header", f"Authorization: Bearer {hf_token}"]
         cmd.append(download_url)
-        print(f"  Using aria2c ({connections} parallel connections) ...")
+        if not on_wsl2:
+            print(f"  Using aria2c ({connections} parallel connections) ...")
         try:
             result = subprocess.run(cmd, capture_output=False, timeout=7200)
             if result.returncode == 0 and dest.exists():
