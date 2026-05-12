@@ -288,6 +288,26 @@ def _fmt_bytes(n: int) -> str:
     return f"{n:.1f} PB"
 
 
+def _is_wsl2() -> bool:
+    """Return True when running inside a WSL2 guest (Linux on Windows).
+
+    WSL2 kernels advertise themselves in /proc/version with the string
+    "microsoft" or "WSL".  Checking this at runtime lets the download
+    logic apply conservative I/O settings without requiring any user
+    configuration.
+
+    Docker containers on WSL2 share the WSL2 kernel rather than running
+    their own, so /proc/version inside a container also contains "microsoft".
+    This means the same check correctly identifies the WSL2 I/O environment
+    whether the script runs directly in WSL2 or inside a Docker container
+    that is backed by WSL2 (Docker Desktop WSL2 backend).
+    """
+    try:
+        return "microsoft" in Path("/proc/version").read_text().lower()
+    except OSError:
+        return False
+
+
 def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
     """Download a single file from a HuggingFace repo using the huggingface_hub API.
 
@@ -302,9 +322,11 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
     When hf_transfer is installed (pip install hf-transfer) and
     HF_HUB_ENABLE_HF_TRANSFER=1 is set, huggingface_hub routes all downloads
     through a Rust-based multi-connection engine for a significant speedup.
+    On WSL2, hf_transfer is NOT auto-enabled because its burst writes
+    overwhelm WSL2's vmmem and can crash the guest on large files.
 
-    Falls back to aria2c (16 parallel connections) or curl when
-    huggingface_hub is not available.
+    Falls back to aria2c (16 connections on Linux/macOS, 4 on WSL2) or curl
+    when huggingface_hub is not available.
 
     Returns:
         Path to the downloaded file (always a flat path inside local_dir).
@@ -347,11 +369,18 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
 
     # hf_transfer: Rust parallel downloader (pip install hf-transfer).
     # Auto-enable when the package is present and the env var isn't already set.
+    # Skip auto-enable on WSL2 — hf_transfer's burst writes overwhelm WSL2's
+    # vmmem and can cause the guest to crash on large files.  Users who know
+    # their setup can still force it by setting HF_HUB_ENABLE_HF_TRANSFER=1.
+    on_wsl2 = _is_wsl2()
     if os.environ.get("HF_HUB_ENABLE_HF_TRANSFER", "0") != "1":
         try:
             import hf_transfer  # noqa: F401 — presence check only
-            os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
-            print("  hf_transfer detected — enabling fast parallel download.")
+            if on_wsl2:
+                print("  hf_transfer detected but suppressed on WSL2 (set HF_HUB_ENABLE_HF_TRANSFER=1 to force).")
+            else:
+                os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+                print("  hf_transfer detected — enabling fast parallel download.")
         except ImportError:
             pass
 
@@ -380,8 +409,9 @@ def _curl_download_file(
     """Download a file from HuggingFace.
 
     When *limit_rate* is empty and aria2c is available, downloads via
-    aria2c with 16 parallel connections — this saturates typical network
-    links far better than a single TCP stream.
+    aria2c.  On WSL2, uses 4 parallel connections to avoid the burst
+    disk-write pressure that causes vmmem to balloon.  On bare-metal Linux
+    or macOS, uses 16 connections to saturate the link.
 
     When *limit_rate* is set (WSL2 BSOD throttle path), or when aria2c is
     absent, falls back to curl.  curl's --limit-rate caps write throughput
@@ -399,10 +429,17 @@ def _curl_download_file(
 
     # ── aria2c path (multi-connection, no rate limit) ─────────────────────
     if not limit_rate and shutil.which("aria2c"):
+        # On WSL2 reduce to 4 connections — 16 creates a disk-write burst
+        # that balloons vmmem and can crash the WSL2 guest on large files.
+        on_wsl2 = _is_wsl2()
+        connections = 4 if on_wsl2 else 16
+        if on_wsl2:
+            print(f"  WSL2 detected — using {connections} aria2c connections to reduce I/O pressure.")
+            print("  Set CONVERT_DOWNLOAD_RATE (e.g. 300M) to cap throughput further if crashes persist.")
         cmd = [
             "aria2c",
-            "--max-connection-per-server=16",
-            "--split=16",
+            f"--max-connection-per-server={connections}",
+            f"--split={connections}",
             "--min-split-size=50M",
             "--continue=true",
             "--dir", str(dest.parent),
@@ -411,7 +448,7 @@ def _curl_download_file(
         if hf_token:
             cmd += ["--header", f"Authorization: Bearer {hf_token}"]
         cmd.append(download_url)
-        print("  Using aria2c (16 parallel connections) ...")
+        print(f"  Using aria2c ({connections} parallel connections) ...")
         try:
             result = subprocess.run(cmd, capture_output=False, timeout=7200)
             if result.returncode == 0 and dest.exists():
@@ -604,7 +641,7 @@ def download_model(model_name: str, quant: str, output_dir: str, nthreads: int |
     if canonical.exists():
         size_str = _fmt_bytes(canonical.stat().st_size)
         print(f"\n  ✓ Already on disk: {canonical.name} ({size_str}) — skipping download.")
-        _maybe_download_mmproj(model_info, output_path)
+        _maybe_download_mmproj(model_info, output_path, model_name)
         return
 
     hf_repo = model_info["hf_repo"]
@@ -624,7 +661,7 @@ def download_model(model_name: str, quant: str, output_dir: str, nthreads: int |
         if downloaded.resolve() != canonical.resolve():
             shutil.move(str(downloaded), str(canonical))
         _done(canonical)
-        _maybe_download_mmproj(model_info, output_path)
+        _maybe_download_mmproj(model_info, output_path, model_name)
         return
 
     # ------------------------------------------------------------------ #
@@ -677,7 +714,7 @@ def download_model(model_name: str, quant: str, output_dir: str, nthreads: int |
     actual_source.unlink(missing_ok=True)
 
     _done(canonical)
-    _maybe_download_mmproj(model_info, output_path)
+    _maybe_download_mmproj(model_info, output_path, model_name)
 
 
 def _find_mmproj_in_repo(repo_id: str) -> str | None:
@@ -695,8 +732,12 @@ def _find_mmproj_in_repo(repo_id: str) -> str | None:
     return None
 
 
-def _maybe_download_mmproj(model_info: dict, output_path: Path) -> None:
+def _maybe_download_mmproj(model_info: dict, output_path: Path, model_name: str = "") -> None:
     """Download the multimodal projector file if this model requires one.
+
+    The downloaded file is always renamed to ``{model_name}-mmproj.gguf`` so
+    that the entrypoint can locate it by model name without needing an explicit
+    ``LLAMA_MMPROJ`` path.
 
     The ``mmproj`` field in the model entry can be:
     - A specific filename string → download that exact file.
@@ -719,14 +760,19 @@ def _maybe_download_mmproj(model_info: dict, output_path: Path) -> None:
     else:
         mmproj_filename = mmproj_value
 
-    mmproj_path = output_path / Path(mmproj_filename).name
-    if mmproj_path.exists():
-        print(f"Multimodal projector already exists: {mmproj_path}")
+    canonical_name = f"{model_name}-mmproj.gguf" if model_name else Path(mmproj_filename).name
+    canonical_path = output_path / canonical_name
+
+    if canonical_path.exists():
+        size_str = _fmt_bytes(canonical_path.stat().st_size)
+        print(f"  Multimodal projector already exists: {canonical_name} ({size_str})")
         return
 
-    print(f"\nDownloading multimodal projector: {mmproj_filename} ...")
-    _hf_download_file(repo_id, mmproj_filename, str(output_path))
-    print(f"Multimodal projector ready: {mmproj_path}")
+    print(f"\nDownloading multimodal projector: {Path(mmproj_filename).name} ...")
+    downloaded = _hf_download_file(repo_id, mmproj_filename, str(output_path))
+    if downloaded.resolve() != canonical_path.resolve():
+        shutil.move(str(downloaded), str(canonical_path))
+    print(f"  Multimodal projector ready: {canonical_name}")
 
 
 def convert_safetensors(model_name: str, quant: str, output_dir: str, nthreads: int | None = None) -> None:
@@ -779,7 +825,7 @@ def convert_safetensors(model_name: str, quant: str, output_dir: str, nthreads: 
     if canonical.exists():
         size_str = _fmt_bytes(canonical.stat().st_size)
         print(f"\n  ✓ Already on disk: {canonical.name} ({size_str}) — skipping.")
-        _maybe_download_mmproj(model_info, output_path)
+        _maybe_download_mmproj(model_info, output_path, model_name)
         return
 
     # ------------------------------------------------------------------ #
@@ -799,7 +845,7 @@ def convert_safetensors(model_name: str, quant: str, output_dir: str, nthreads: 
             if downloaded.resolve() != canonical.resolve():
                 shutil.move(str(downloaded), str(canonical))
             _done(canonical)
-            _maybe_download_mmproj(model_info, output_path)
+            _maybe_download_mmproj(model_info, output_path, model_name)
             return
         print(f"  No pre-built {quant} found — falling back to safetensors conversion.")
 
@@ -871,7 +917,7 @@ def convert_safetensors(model_name: str, quant: str, output_dir: str, nthreads: 
     shutil.rmtree(st_dir, ignore_errors=True)
 
     _done(canonical)
-    _maybe_download_mmproj(model_info, output_path)
+    _maybe_download_mmproj(model_info, output_path, model_name)
 
 
 def convert_model(

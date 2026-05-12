@@ -73,6 +73,17 @@ API_KEY=${LLAMA_API_KEY:-}
 MMPROJ=${LLAMA_MMPROJ:-}  # Multimodal projector file (.mmproj)
 IMAGE=${LLAMA_IMAGE:-}     # Image file for multimodal input (base64 or path)
 
+# Auto-discover mmproj when MODEL_NAME is set and LLAMA_MMPROJ is not explicit.
+# manage_models.py downloads mmproj as {model_name}-mmproj.gguf, so we can
+# locate it without requiring the user to set LLAMA_MMPROJ manually.
+if [ -z "$MMPROJ" ] && [ -n "$MODEL_NAME" ]; then
+    _auto_mmproj="/models/${MODEL_NAME}-mmproj.gguf"
+    if [ -f "$_auto_mmproj" ]; then
+        MMPROJ="$_auto_mmproj"
+    fi
+    unset _auto_mmproj
+fi
+
 # Determine model path.
 # Priority:
 #   1) LLAMA_MODEL — explicit path to a .gguf already in /models
