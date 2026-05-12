@@ -216,16 +216,22 @@ for an RTX 3090 (24 GB VRAM) desktop.
 |----------|---------|-------------|
 | `LLAMA_CACHE_TYPE_K` | `turbo3` | K-cache type: `f16`, `turbo3`, `turbo4` |
 | `LLAMA_CACHE_TYPE_V` | `turbo3` | V-cache type: `f16`, `turbo3`, `turbo4` |
-| `LLAMA_FLASH_ATTN` | `on` | Required for TurboQuant KV cache |
-| `LLAMA_CACHE_CAPACITY` | `200000` | Prompt cache capacity in tokens |
+| `LLAMA_FLASH_ATTN` | `on` | Flash Attention: `on`, `off`, or `auto`. Required for TurboQuant KV cache |
 | `LLAMA_NO_KV_OFFLOAD` | `off` | `on` = keep KV cache on GPU at all times |
 
 ### Reasoning / chat
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLAMA_REASONING` | `on` | Enable chain-of-thought output |
+| `LLAMA_REASONING` | `on` | Chain-of-thought output: `on`, `off`, or `auto` (detect from template) |
 | `LLAMA_PRESERVE_THINKING` | `on` | Include prior `<think>` blocks in context |
+
+### Security / persistence
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLAMA_API_KEY` | _(empty)_ | Bearer token required on all requests. Leave empty for open access |
+| `LLAMA_SLOT_SAVE_PATH` | _(empty)_ | Directory to persist KV-cache slot state across restarts (`/slots/{id}?action=save\|restore`) |
 
 ### Multi-GPU / MoE
 
