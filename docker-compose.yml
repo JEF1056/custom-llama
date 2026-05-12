@@ -84,7 +84,7 @@ services:
     container_name: tailscale-llama
     hostname: ${TS_HOSTNAME:-llama-api}
     environment:
-      TS_AUTHKEY: "${TS_AUTHKEY:?TS_AUTHKEY must be set in .env (Tailscale admin - Settings - Keys)}"
+      TS_AUTHKEY: "${TS_AUTHKEY:-}"
       TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
       TS_STATE_DIR: /var/lib/tailscale
       TS_SERVE_CONFIG: /config/serve.json
@@ -216,7 +216,7 @@ services:
       - ./pipelines:/app/pipelines
     environment:
       LLAMA_BASE_URL: http://llama-server:${LLAMA_PORT:-8080}
-      PIPELINES_API_KEY: "${PIPELINES_API_KEY:?PIPELINES_API_KEY must be set in .env (generate with: openssl rand -hex 16)}"
+      PIPELINES_API_KEY: "${PIPELINES_API_KEY:-}"
     networks:
       - llama-net
       - webui-net
@@ -235,13 +235,13 @@ services:
     volumes:
       - open-webui-data:/app/backend/data
     environment:
-      WEBUI_SECRET_KEY: "${WEBUI_SECRET_KEY:?WEBUI_SECRET_KEY must be set in .env (generate with: openssl rand -hex 32)}"
+      WEBUI_SECRET_KEY: "${WEBUI_SECRET_KEY:-}"
       WEBUI_URL: ${WEBUI_URL:-https://chat.jessfan.com}
 
       # Google OAuth — credentials from Firebase Console or Google Cloud Console.
       # Firebase Console → Authentication → Sign-in method → Google → Web SDK config.
-      GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:?GOOGLE_CLIENT_ID must be set in .env}"
-      GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:?GOOGLE_CLIENT_SECRET must be set in .env}"
+      GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
+      GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
       OPENID_PROVIDER_URL: ${OPENID_PROVIDER_URL:-https://accounts.google.com/.well-known/openid-configuration}
 
       # false = only pre-existing accounts can sign in (set to true temporarily
@@ -250,7 +250,7 @@ services:
 
       # Route all completions through the pipelines server (KV cache management).
       OPENAI_API_BASE_URL: http://open-webui-pipelines:9099
-      OPENAI_API_KEY: "${PIPELINES_API_KEY:?PIPELINES_API_KEY must be set in .env}"
+      OPENAI_API_KEY: "${PIPELINES_API_KEY:-}"
 
       # Disable Ollama integration (not used in this setup).
       ENABLE_OLLAMA_API: "false"
@@ -281,7 +281,7 @@ services:
       - openclaw-data:/root/.openclaw
       - ./openclaw/openclaw.json:/root/.openclaw/openclaw.json:ro
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN:?OPENCLAW_GATEWAY_TOKEN must be set in .env (generate with: openssl rand -hex 32)}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN:-}"
     networks:
       - llama-net
     restart: unless-stopped
@@ -302,7 +302,7 @@ services:
     container_name: cloudflared
     command: tunnel --no-autoupdate run
     environment:
-      TUNNEL_TOKEN: "${CF_TUNNEL_TOKEN:?CF_TUNNEL_TOKEN must be set in .env (Cloudflare Zero Trust - Networks - Tunnels)}"
+      TUNNEL_TOKEN: "${CF_TUNNEL_TOKEN:-}"
     networks:
       - webui-net
     restart: unless-stopped
