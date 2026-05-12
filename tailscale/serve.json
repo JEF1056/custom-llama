@@ -1,0 +1,13 @@
+{
+  "TCP": {
+    "8080": {
+      "TCPForward": "llama-server:8080"
+    },
+    "8181": {
+      "TCPForward": "kv-cache-proxy:8181"
+    },
+    "18789": {
+      "TCPForward": "openclaw-gateway:18789"
+    }
+  }
+}

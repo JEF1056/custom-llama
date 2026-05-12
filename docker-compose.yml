@@ -10,6 +10,7 @@ networks:
 volumes:
   tailscale-state:    # Tailscale node state (identity key, node certs)
   open-webui-data:    # Open WebUI SQLite DB, uploads, config
+  openclaw-data:      # OpenClaw Gateway state, sessions, credentials
 
 services:
   # ---------------------------------------------------------------------------
@@ -246,6 +247,33 @@ services:
     restart: unless-stopped
     depends_on:
       - open-webui-pipelines
+
+  # ---------------------------------------------------------------------------
+  # OpenClaw Gateway — CLI-accessible personal AI assistant on the tailnet.
+  # Provides the `openclaw` CLI interface for ad-hoc queries from any tailnet
+  # machine (including the VSCode integrated terminal).
+  #
+  # CLI usage (from any tailnet machine with openclaw installed):
+  #   openclaw --gateway http://<TS_HOSTNAME>.<tailnet>.ts.net:18789 \
+  #            --token <OPENCLAW_GATEWAY_TOKEN> \
+  #            agent --message "explain this function"
+  #
+  # Or set in ~/.openclaw/openclaw.json on the client:
+  #   { "gateway": { "url": "http://...:18789", "token": "..." } }
+  # ---------------------------------------------------------------------------
+  openclaw-gateway:
+    image: ghcr.io/openclaw/openclaw:latest
+    container_name: openclaw-gateway
+    volumes:
+      - openclaw-data:/root/.openclaw
+      - ./openclaw/openclaw.json:/root/.openclaw/openclaw.json:ro
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+    networks:
+      - llama-net
+    restart: unless-stopped
+    depends_on:
+      - llama-server
 
   # ---------------------------------------------------------------------------
   # Cloudflare Tunnel — exposes Open WebUI publicly at chat.jessfan.com with
