@@ -289,23 +289,37 @@ def _fmt_bytes(n: int) -> str:
 
 
 def _is_wsl2() -> bool:
-    """Return True when running inside a WSL2 guest (Linux on Windows).
+    """Return True when the I/O environment is a WSL2-backed Windows host.
 
-    WSL2 kernels advertise themselves in /proc/version with the string
-    "microsoft" or "WSL".  Checking this at runtime lets the download
-    logic apply conservative I/O settings without requiring any user
-    configuration.
+    Two signals are checked, either of which is sufficient:
 
-    Docker containers on WSL2 share the WSL2 kernel rather than running
-    their own, so /proc/version inside a container also contains "microsoft".
-    This means the same check correctly identifies the WSL2 I/O environment
-    whether the script runs directly in WSL2 or inside a Docker container
-    that is backed by WSL2 (Docker Desktop WSL2 backend).
+    1. /proc/version contains "microsoft" — set by the WSL2 kernel when
+       running directly in a WSL2 distro, and also by some Docker Desktop
+       builds that expose the WSL2 kernel to containers.
+
+    2. /sys/class/dmi/id/sys_vendor contains "microsoft" — Hyper-V (the VM
+       layer Docker Desktop uses on Windows) always reports "Microsoft
+       Corporation" here, even when the container kernel does not advertise
+       WSL2 in /proc/version.  This covers Docker Desktop for Windows
+       regardless of which WSL2 integration path it uses.
+
+    macOS Docker Desktop uses Apple's Hypervisor framework (DMI vendor
+    "Apple Inc." or "QEMU"), so it is not affected.
     """
     try:
-        return "microsoft" in Path("/proc/version").read_text().lower()
+        if "microsoft" in Path("/proc/version").read_text().lower():
+            return True
     except OSError:
-        return False
+        pass
+
+    for dmi in ("/sys/class/dmi/id/sys_vendor", "/sys/class/dmi/id/board_vendor"):
+        try:
+            if "microsoft" in Path(dmi).read_text().lower():
+                return True
+        except OSError:
+            continue
+
+    return False
 
 
 def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
