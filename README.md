@@ -9,7 +9,7 @@ No Tailscale, Cloudflare, or secrets needed — just the inference server on thi
 ```bash
 cp .env.default .env   # set MODEL_NAME + QUANT; leave everything else blank
 docker compose build && docker compose build llama-convert
-docker compose run --rm llama-convert download qwen3.5-9b --quant Q4_K_M
+docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant Q3_K_L
 docker compose up -d llama-server
 ```
 
@@ -108,7 +108,7 @@ docker compose build llama-convert
 docker compose run --rm llama-convert download qwen3.5-27b --quant Q4_K_M
 
 # Safetensors-only repos (convert → fp16 → quantize)
-docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant Q3_K_M
+docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant Q3_K_L
 ```
 
 > **Gated models:** set `HF_TOKEN=your_token` in `.env`
@@ -164,7 +164,7 @@ In Roo Code settings → **API Provider** → **OpenAI Compatible**:
 |---|---|
 | Base URL | `http://<ts-host>:8181/v1` |
 | API Key | `none` |
-| Model ID | `qwopus3.6-35b-Q3_K_M` |
+| Model ID | `qwopus3.6-35b-Q3_K_L` |
 
 Add a custom header to pin the workspace to a persistent KV cache slot:
 
@@ -208,7 +208,7 @@ All `LLAMA_*` defaults are tuned for RTX 3090 (24 GB VRAM).
 | Variable | Default | Description |
 |---|---|---|
 | `MODEL_NAME` | `qwopus3.6-35b` | Model key |
-| `QUANT` | `Q3_K_M` | Quantization |
+| `QUANT` | `Q3_K_L` | Quantization |
 | `LLAMA_MODEL` | — | Override: explicit `.gguf` path in `/models` |
 
 ### Server
@@ -293,7 +293,7 @@ Run `docker compose run --rm llama-convert list` for the full list with sizes.
 
 | Quant | Bits | Notes |
 |---|---|---|
-| `Q3_K_M` | ~3.35 | **Minimum for coherent output** — default for qwopus3.6-35b |
+| `Q3_K_L` | ~3.35 | **Minimum for coherent output** — default for qwopus3.6-35b |
 | `Q4_K_M` | ~4.5 | Higher quality; requires ~20 GB for 35B, limits KV cache headroom |
 | `Q5_K_M` | ~5.5 | Best quality that still fits smaller models in 24 GB |
 | `Q8_0` | ~8 | Near-lossless; good source for re-quantization |
@@ -340,7 +340,7 @@ docker compose restart llama-server openclaw-gateway  # after changing MODEL_NAM
 
 **Model file not found** — run the prepare step first:
 ```bash
-docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant Q3_K_M
+docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant Q3_K_L
 ```
 
 **TurboQuant: no fp16/bf16 source** — use `convert-st` instead of `download`.
