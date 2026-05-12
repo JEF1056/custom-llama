@@ -36,6 +36,10 @@ NO_MMAP=${LLAMA_NO_MMAP:-off}
 # Per-model setting; enable for models trained with reasoning capabilities (e.g., DeepSeek-R1, QwQ)
 REASONING=${LLAMA_REASONING:-on}
 
+# preserve_thinking: inject prior <think>…</think> blocks back into the prompt each turn.
+# Qwopus3.6 / Qwen3.6 chat templates support this kwarg natively via preserve_thinking=true.
+PRESERVE_THINKING=${LLAMA_PRESERVE_THINKING:-on}
+
 # Prompt caching capacity (in tokens)
 CACHE_CAPACITY=${LLAMA_CACHE_CAPACITY:-200000}
 
@@ -139,6 +143,7 @@ echo "  Flash Attention: $FLASH_ATTN"
 echo "  Parallel Slots: $PARALLEL"
 echo "  Memory Mapping: $([ "$NO_MMAP" = "on" ] && echo "disabled (no-mmap)" || echo "enabled (mmap)")"
 echo "  Reasoning Mode: $REASONING"
+echo "  Preserve Thinking: $PRESERVE_THINKING"
 echo "  Cache Capacity: $CACHE_CAPACITY"
 echo "  Multi-KV Attention: $MUL_KV"
 echo "  Cache Chunk Size: $CACHE_CHUNK_SIZE"
@@ -180,6 +185,7 @@ exec llama-server \
     ${PARALLEL:+--parallel "$PARALLEL"} \
     $([ "$NO_MMAP" = "on" ] && echo "--no-mmap") \
     ${REASONING:+--reasoning "$REASONING"} \
+    $([ "$PRESERVE_THINKING" = "on" ] && echo '--chat-template-kwargs {"preserve_thinking":true}') \
     --cache-capacity "$CACHE_CAPACITY" \
     $([ "$MUL_KV" = "on" ] && echo "--mul-kv") \
     ${CACHE_CHUNK_SIZE:+--cache-chunk-size "$CACHE_CHUNK_SIZE"} \
