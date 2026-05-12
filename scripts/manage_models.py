@@ -8,7 +8,9 @@ import os
 import sys
 import argparse
 import json
+import shutil
 import subprocess
+import time
 from pathlib import Path
 
 # HuggingFace model repositories that support GGUF downloads
@@ -39,7 +41,7 @@ MODELS = {
         "hf_repo": "lmstudio-community/gemma-4-E2B-it-GGUF",
         "description": "Gemma 4 E2B (~1.5GB)",
         "size_gb": 1.5,
-        "mmproj": "mmproj-gemma-4-E2B-it-BF16.gguf",  # Multimodal projector for vision support
+        "mmproj": "mmproj-gemma-4-E2B-it-BF16.gguf",
     },
     "qwen3.5-4b": {
         "hf_repo": "unsloth/Qwen3.5-4B-GGUF",
@@ -58,7 +60,7 @@ MODELS = {
         "hf_repo": "lmstudio-community/gemma-4-E4B-it-GGUF",
         "description": "Gemma 4 E4B (~3GB)",
         "size_gb": 3,
-        "mmproj": "mmproj-gemma-4-E4B-it-BF16.gguf",  # Multimodal projector for vision support
+        "mmproj": "mmproj-gemma-4-E4B-it-BF16.gguf",
     },
     "qwen3.5-9b": {
         "hf_repo": "unsloth/Qwen3.5-9B-GGUF",
@@ -77,13 +79,13 @@ MODELS = {
         "hf_repo": "lmstudio-community/gemma-4-26B-A4B-it-GGUF",
         "description": "Gemma 4 26B-A4B (~13GB)",
         "size_gb": 13,
-        "mmproj": "mmproj-gemma-4-26B-A4B-it-BF16.gguf",  # Multimodal projector for vision support
+        "mmproj": "mmproj-gemma-4-26B-A4B-it-BF16.gguf",
     },
     "gemma-4-31b": {
         "hf_repo": "lmstudio-community/gemma-4-31B-it-GGUF",
         "description": "Gemma 4 31B (~16GB)",
         "size_gb": 16,
-        "mmproj": "mmproj-gemma-4-31B-it-BF16.gguf",  # Multimodal projector for vision support
+        "mmproj": "mmproj-gemma-4-31B-it-BF16.gguf",
     },
     "qwen3.6-27b": {
         "hf_repo": "unsloth/Qwen3.6-27B-GGUF",
@@ -105,26 +107,30 @@ MODELS = {
         "fp16_repo": "Jackrong/Qwopus3.6-35B-A3B-v1",
         "description": "Qwopus 3.6 35B-A3B-v1 (~17GB)",
         "size_gb": 17,
+        "mmproj": "mmproj.gguf",
     },
     "minimax-m2.7": {
         "hf_repo": "unsloth/MiniMax-M2.7-GGUF",
         "fp16_repo": "unsloth/MiniMax-M2.7",
         "description": "MiniMax M2.7 (~18GB)",
         "size_gb": 18,
-        "notes": "Mixture-of-Experts model. Use Q8_0 quantization for best quality. BF16 and MXFP4_MOE variants also available.",
+        "notes": "Mixture-of-Experts model. Use Q8_0 quantization for best quality.",
         "turboquant": True,
         "turboquant_source": "Q8_0",
     },
 }
 
-# TurboQuant quantization options (extreme compression)
+DEFAULT_MODELS_DIR = "./models"
+DEFAULT_OUTPUT_DIR_HELP = "Output directory (default: ./models)"
+
+# TurboQuant quantization options (extreme compression, must be quantized locally)
 TQ_QUANT_OPTIONS = [
-    "TQ2_0",   # 2-bit per weight - better quality while still highly compressed
-    "TQ1_0",   # 1-bit per weight - extreme compression
+    "TQ2_0",  # 2-bit per weight - better quality while still highly compressed
+    "TQ1_0",  # 1-bit per weight - extreme compression
 ]
 
-# Quantization priority for selecting largest quantized version
-# FP16 > BF16 > Q8_0 > Q6_K > Q5_K_M > Q4_K_M > others
+# Ordered list of quantization types from highest to lowest quality.
+# Used when selecting the best available source file for local quantization.
 QUANT_PRIORITY = [
     "fp16",
     "bf16",
@@ -151,12 +157,16 @@ QUANT_PRIORITY = [
     "Q1_K",
 ]
 
+# Quantizations that are acceptable as re-quantization sources.
+# All standard quants including Q8_0 are valid inputs to llama-quantize.
+# (The historical concern about Q8_0 only applied to certain older llama.cpp builds
+# and does not affect TurboQuant targets.)
+NON_REQUANTIZABLE: set = set()
 
-def get_largest_quantized_file(repo_id: str) -> str:
-    """Fetch the largest quantized file (FP16 or Q8_0 preferred) from HuggingFace repo using the HuggingFace API."""
-    # Use HuggingFace API to list files
+
+def _fetch_repo_files(repo_id: str) -> list:
+    """Return the list of file entries from the HuggingFace /tree/main API."""
     api_url = f"https://huggingface.co/api/models/{repo_id}/tree/main"
-    
     try:
         result = subprocess.run(
             ["curl", "-s", api_url],
@@ -165,424 +175,396 @@ def get_largest_quantized_file(repo_id: str) -> str:
             timeout=30,
         )
         if result.returncode != 0:
-            print(f"Warning: Failed to fetch files from HuggingFace API for {repo_id}")
-            return None
-        
-        files = json.loads(result.stdout)
+            print(f"Warning: Failed to fetch file list from HuggingFace for {repo_id}")
+            return []
+        return json.loads(result.stdout)
     except subprocess.TimeoutExpired:
-        print(f"Warning: Timeout fetching files from HuggingFace API for {repo_id}")
-        return None
-    except json.JSONDecodeError:
-        print(f"Warning: Failed to parse HuggingFace API response for {repo_id}")
-        return None
+        print(f"Warning: Timeout fetching file list from HuggingFace for {repo_id}")
+        return []
     except Exception as e:
-        print(f"Warning: Error fetching files from HuggingFace API for {repo_id}: {e}")
-        return None
-    
-    # Filter for .gguf files
-    gguf_files = [(f["path"], f.get("size", 0)) for f in files if f.get("type") == "file" and f.get("path", "").endswith(".gguf")]
-    
-    if not gguf_files:
-        print(f"Warning: No .gguf files found in {repo_id}")
-        return None
-    
-    # Sort by quantization priority (FP16 > BF16 > Q8_0 > ...)
-    def quant_priority(filepath):
-        path_lower = filepath.lower()
-        for i, quant in enumerate(QUANT_PRIORITY):
-            if quant.lower() in path_lower:
-                return i
-        return len(QUANT_PRIORITY)  # Files without known quantization go to the end
-    
-    # Sort by priority (lower = better), then by file size (larger first)
-    gguf_files.sort(key=lambda f: (quant_priority(f[0]), -f[1]))
-    
-    return gguf_files[0][0]
+        print(f"Warning: Error fetching file list from HuggingFace for {repo_id}: {e}")
+        return []
 
 
-def get_safetensors_files(repo_id: str) -> tuple:
-    """Fetch safetensors files from a HuggingFace repo using the HuggingFace API.
-    
-    Returns:
-        Tuple of (safetensors_files_list, index_file_path) or ([], None) if no safetensors found
-    """
-    api_url = f"https://huggingface.co/api/models/{repo_id}/tree/main"
-    
-    try:
-        result = subprocess.run(
-            ["curl", "-s", api_url],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode != 0:
-            print(f"Warning: Failed to fetch files from HuggingFace API for {repo_id}")
-            return [], None
-        
-        files = json.loads(result.stdout)
-    except subprocess.TimeoutExpired:
-        print(f"Warning: Timeout fetching files from HuggingFace API for {repo_id}")
-        return [], None
-    except json.JSONDecodeError:
-        print(f"Warning: Failed to parse HuggingFace API response for {repo_id}")
-        return [], None
-    except Exception as e:
-        print(f"Warning: Error fetching files from HuggingFace API for {repo_id}: {e}")
-        return [], None
-    
-    # Filter for safetensors files and index file
-    safetensors_files = [f["path"] for f in files if f.get("type") == "file" and f.get("path", "").endswith(".safetensors")]
-    index_file = next((f["path"] for f in files if f.get("type") == "file" and f.get("path", "") == "model.safetensors.index.json"), None)
-    
-    return safetensors_files, index_file
+def find_quant_in_repo(repo_id: str, quant: str) -> str | None:
+    """Search a HuggingFace repo for a GGUF file matching the requested quantization.
 
+    Matching is case-insensitive and requires the quant string to appear as a
+    word boundary segment in the filename (e.g. "Q4_K_M" matches
+    "Model-Q4_K_M.gguf" but not "SomeQ4_K_Mfoo.gguf").
 
-def download_safetensors(repo_id: str, output_dir: str) -> str:
-    """Download safetensors files from a HuggingFace repo and return the directory path.
-    
+    When multiple matches exist, the largest file is returned (most complete shard).
+
     Args:
-        repo_id: HuggingFace repository ID (e.g., "Jackrong/Qwopus3.6-35B-A3B-v1")
-        output_dir: Output directory for the safetensors files
-        
+        repo_id: HuggingFace repository ID (e.g. "unsloth/Qwen3.5-27B-GGUF")
+        quant: Quantization string to search for (e.g. "Q4_K_M", "fp16", "TQ2_0")
+
     Returns:
-        Path to the output directory containing safetensors files, or None on failure
+        Filename (path within repo) of the best match, or None if not found.
     """
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    
-    safetensors_files, index_file = get_safetensors_files(repo_id)
-    
-    if not safetensors_files:
-        print(f"Warning: No safetensors files found in {repo_id}")
+    files = _fetch_repo_files(repo_id)
+    quant_lower = quant.lower()
+
+    matches = []
+    for entry in files:
+        if entry.get("type") != "file":
+            continue
+        path = entry.get("path", "")
+        if not path.endswith(".gguf"):
+            continue
+        name_lower = path.lower()
+        # Require quant to appear surrounded by non-alphanumeric chars or at
+        # string boundaries so "Q4_K_M" doesn't match inside a longer token.
+        # A simple check: the quant string must appear preceded/followed by
+        # '-', '_', '.', '/', or the start/end of the filename stem.
+        if quant_lower in name_lower:
+            idx = name_lower.find(quant_lower)
+            before_ok = idx == 0 or name_lower[idx - 1] in "-_./\\"
+            after_idx = idx + len(quant_lower)
+            after_ok = after_idx >= len(name_lower) or name_lower[after_idx] in "-_./\\."
+            if before_ok and after_ok:
+                matches.append((path, entry.get("size", 0)))
+
+    if not matches:
         return None
-    
-    print(f"Found {len(safetensors_files)} safetensors files in {repo_id}")
-    
-    # Download all safetensors files using huggingface_hub
+
+    # Prefer the largest file (handles sharded models — pick biggest shard,
+    # but for single-file models this is just the one file).
+    matches.sort(key=lambda f: -f[1])
+    return matches[0][0]
+
+
+def find_best_source_in_repo(repo_id: str) -> str | None:
+    """Find the highest-quality GGUF in a repo suitable as a quantization source.
+
+    Walks QUANT_PRIORITY in order, skipping NON_REQUANTIZABLE types, and
+    returns the first match.  Falls back to NON_REQUANTIZABLE types only if
+    nothing better is available.
+
+    Args:
+        repo_id: HuggingFace repository ID
+
+    Returns:
+        Filename of the best source GGUF, or None if no GGUF exists.
+    """
+    # First pass: prefer quants that can be re-quantized
+    for quant in QUANT_PRIORITY:
+        if quant.upper() in NON_REQUANTIZABLE:
+            continue
+        match = find_quant_in_repo(repo_id, quant)
+        if match:
+            return match
+
+    # Second pass: accept non-requantizable as last resort
+    for quant in NON_REQUANTIZABLE:
+        match = find_quant_in_repo(repo_id, quant)
+        if match:
+            return match
+
+    return None
+
+
+def _fmt_bytes(n: int) -> str:
+    """Format a byte count as a human-readable string (e.g. 18.9 GB)."""
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(n) < 1024:
+            return f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} PB"
+
+
+def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
+    """Download a single file from a HuggingFace repo using the huggingface_hub API.
+
+    Uses the Python API (not the CLI) so that progress bars display correctly
+    even in non-TTY environments such as Docker detached mode.
+
+    Returns:
+        Path to the downloaded file (always a flat path inside local_dir).
+    """
+    output_path = Path(local_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Normalize to a flat filename — HF paths may include repo subdirectories.
+    dest = output_path / Path(filename).name
+    if dest.exists():
+        size_str = _fmt_bytes(dest.stat().st_size)
+        print(f"  Already cached: {dest.name} ({size_str})")
+        return dest
+
     try:
-        from huggingface_hub import hf_hub_download
-        
-        # Download the index file first
-        if index_file:
-            print(f"Downloading index file: {index_file}")
-            hf_hub_download(repo_id, index_file, local_dir=str(output_path))
-        
-        # Download each safetensors file
-        for safetensors_file in safetensors_files:
-            file_path = output_path / safetensors_file
-            if not file_path.exists():
-                print(f"Downloading: {safetensors_file}")
-                hf_hub_download(repo_id, safetensors_file, local_dir=str(output_path))
-            else:
-                print(f"Already exists: {safetensors_file}")
-        
-        return str(output_path)
+        from huggingface_hub import hf_hub_download, enable_progress_bars
     except ImportError:
-        print("huggingface_hub not available. Please install with: pip install huggingface_hub")
-        return None
+        print("Error: huggingface_hub not installed. Run: pip install huggingface_hub")
+        sys.exit(1)
+
+    # Force progress bars on even without a TTY (Docker -d mode, log output, etc.)
+    enable_progress_bars()
+
+    _section(f"Downloading: {Path(filename).name}")
+    print(f"  Repository  : {repo_id}")
+    print(f"  Destination : {dest}")
+
+    try:
+        downloaded = Path(
+            hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                local_dir=str(output_path),
+            )
+        )
+        # hf_hub_download may place the file at a sub-path; flatten it.
+        if downloaded.resolve() != dest.resolve() and downloaded.exists():
+            shutil.move(str(downloaded), str(dest))
+        size_str = _fmt_bytes(dest.stat().st_size)
+        print(f"\n  Done: {dest.name} ({size_str})")
+        return dest
     except Exception as e:
-        print(f"Error downloading safetensors: {e}")
-        return None
+        print(f"Error: Download failed: {e}")
+        sys.exit(1)
 
 
-def convert_safetensors_to_gguf(safetensors_dir: str, output_dir: str, quantization: str = "Q8_0") -> str:
-    """Convert safetensors to GGUF format using llama-convert and llama-quantize.
-    
-    Args:
-        safetensors_dir: Directory containing the safetensors files and config.json
-        output_dir: Output directory for the GGUF file
-        quantization: Quantization method for the output GGUF file
-        
-    Returns:
-        Path to the output GGUF file, or None on failure
+def _quantize(source: Path, dest: Path, quant: str) -> None:
+    """Run llama-quantize to produce dest from source with the given quant type.
+
+    Streams llama-quantize output directly to the console and exits on failure.
     """
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    
-    # Find the config.json file to get model info
-    config_file = Path(safetensors_dir) / "config.json"
-    if not config_file.exists():
-        print(f"Error: config.json not found in {safetensors_dir}")
-        return None
-    
-    try:
-        with open(config_file, "r") as f:
-            config = json.load(f)
-    except Exception as e:
-        print(f"Error reading config.json: {e}")
-        return None
-    
-    # Get model name from config
-    model_name = config.get("name", config.get("model_type", "model"))
-    
-    # Step 1: Convert safetensors to FP16 GGUF using llama-convert
-    fp16_file = f"{model_name}-fp16.gguf"
-    fp16_file_path = output_path / fp16_file
-    
-    print(f"Converting safetensors to FP16 GGUF...")
-    print(f"Source: {safetensors_dir}")
-    print(f"Output: {fp16_file_path}")
-    
+    source_size = _fmt_bytes(source.stat().st_size) if source.exists() else "unknown"
+    _section(f"Quantizing to {quant}")
+    print(f"  Source : {source.name} ({source_size})")
+    print(f"  Output : {dest.name}")
+
+    t0 = time.monotonic()
     try:
         result = subprocess.run(
-            [
-                "llama-convert",
-                "--input", safetensors_dir,
-                "--output", str(fp16_file_path),
-            ],
-            capture_output=True,
-            text=True,
+            ["llama-quantize", str(source), str(dest), quant],
+            stdout=None,
+            stderr=None,
         )
         if result.returncode != 0:
-            print(f"Error converting safetensors to FP16 GGUF:")
-            print(result.stderr)
-            return None
-        print(f"FP16 GGUF created: {fp16_file_path}")
+            print(f"\nError: llama-quantize failed (exit {result.returncode})")
+            sys.exit(1)
     except FileNotFoundError:
-        print("llama-convert not found. Ensure llama.cpp is installed.")
-        return None
-    
-    # Step 2: Quantize FP16 GGUF to desired quantization using llama-quantize
-    output_file = f"{model_name}-{quantization}.gguf"
-    output_file_path = output_path / output_file
-    
-    print(f"Quantizing FP16 GGUF to {quantization}...")
-    print(f"Output: {output_file_path}")
-    
-    try:
-        result = subprocess.run(
-            [
-                "llama-quantize",
-                str(fp16_file_path),
-                str(output_file_path),
-                quantization,
-            ],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            print(f"Error quantizing GGUF to {quantization}:")
-            print(result.stderr)
-            return None
-        print(f"Model converted to GGUF ({quantization}): {output_file_path}")
-        return str(output_file_path)
-    except FileNotFoundError:
-        print("llama-quantize not found. Ensure llama.cpp is installed.")
-        return None
+        print("Error: llama-quantize not found. Ensure llama.cpp is installed.")
+        sys.exit(1)
+
+    elapsed = time.monotonic() - t0
+    dest_size = _fmt_bytes(dest.stat().st_size) if dest.exists() else "unknown"
+    mins, secs = divmod(int(elapsed), 60)
+    elapsed_str = f"{mins}m {secs}s" if mins else f"{secs}s"
+    print(f"\n  Done: {dest.name} ({dest_size}) in {elapsed_str}")
 
 
-def download_model(model_name: str, output_dir: str, force_fp16: bool = False) -> None:
-    """Download a model from HuggingFace.
-    
+def _section(title: str) -> None:
+    """Print a visible section header."""
+    bar = "─" * 60
+    print(f"\n  {bar}")
+    print(f"  {title}")
+    print(f"  {bar}")
+
+
+def _done(path: Path) -> None:
+    """Print a final 'model ready' line with file size."""
+    size_str = _fmt_bytes(path.stat().st_size) if path.exists() else "unknown"
+    print(f"\n  ✓ Model ready: {path.name} ({size_str})")
+
+
+def download_model(model_name: str, quant: str, output_dir: str) -> None:
+    """Download (and if necessary locally quantize) a model.
+
+    Algorithm
+    ---------
+    1. If the canonical output file already exists on disk → done.
+    2. If the requested quant is available as a pre-built GGUF on HuggingFace
+       → download it and rename to the canonical path.
+    3. Otherwise → download the best available source GGUF (fp16 / bf16 / …),
+       run llama-quantize to produce the canonical file, then delete the source.
+
+    TurboQuant types (TQ1_0, TQ2_0) are never available pre-built on HF, so
+    they always go through the local quantization path.
+
+    The canonical filename is:  {output_dir}/{model_name}-{QUANT}.gguf
+    This predictable name allows the entrypoint to locate the model without
+    scanning the directory.
+
     Args:
-        model_name: Model name from MODELS dict
-        output_dir: Output directory for the model
-        force_fp16: If True, download FP16 version from fp16_repo instead of GGUF repo
+        model_name: Key from the MODELS dict (e.g. "qwen3.5-27b")
+        quant: Quantization type (e.g. "Q4_K_M", "TQ2_0")
+        output_dir: Directory where the model file should be placed
     """
     if model_name not in MODELS:
-        print(f"Unknown model: {model_name}")
-        print(f"Available models: {', '.join(MODELS.keys())}")
+        print(f"Error: Unknown model '{model_name}'")
+        print("Run 'manage_models.py list' to see available models.")
         sys.exit(1)
-    
+
     model_info = MODELS[model_name]
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    
-    # Determine which repo to use
-    if force_fp16 and "fp16_repo" in model_info:
-        repo_id = model_info["fp16_repo"]
-        print(f"Using FP16 repo: {repo_id}")
+
+    canonical = output_path / f"{model_name}-{quant}.gguf"
+
+    _section(f"Model: {model_name}  |  Quant: {quant}")
+    print(f"  Repository : {model_info['hf_repo']}")
+    print(f"  Output     : {canonical}")
+
+    # ------------------------------------------------------------------ #
+    # 1. Already on disk?
+    # ------------------------------------------------------------------ #
+    if canonical.exists():
+        size_str = _fmt_bytes(canonical.stat().st_size)
+        print(f"\n  ✓ Already on disk: {canonical.name} ({size_str}) — skipping download.")
+        _maybe_download_mmproj(model_info, output_path)
+        return
+
+    hf_repo = model_info["hf_repo"]
+    is_turboquant = quant in TQ_QUANT_OPTIONS
+
+    # ------------------------------------------------------------------ #
+    # 2. Pre-built GGUF available on HuggingFace?
+    # ------------------------------------------------------------------ #
+    hf_file = None
+    if not is_turboquant:
+        print(f"  Checking HuggingFace for pre-built {quant} in {hf_repo} ...")
+        hf_file = find_quant_in_repo(hf_repo, quant)
+
+    if hf_file:
+        print(f"  Found pre-built {quant}: {Path(hf_file).name}")
+        downloaded = _hf_download_file(hf_repo, hf_file, str(output_path))
+        if downloaded.resolve() != canonical.resolve():
+            shutil.move(str(downloaded), str(canonical))
+        _done(canonical)
+        _maybe_download_mmproj(model_info, output_path)
+        return
+
+    # ------------------------------------------------------------------ #
+    # 3. Local quantization path
+    # ------------------------------------------------------------------ #
+    if is_turboquant:
+        print(f"  {quant} is a TurboQuant type — no pre-built GGUF exists on HuggingFace.")
     else:
-        repo_id = model_info["hf_repo"]
-    
-    # Fetch the largest quantized file from HuggingFace
-    file_name = get_largest_quantized_file(repo_id)
-    
-    # If no GGUF files found and we're forcing FP16, try safetensors
-    if not file_name and force_fp16:
-        print(f"No GGUF files found in {repo_id}, checking for safetensors...")
-        safetensors_files, index_file = get_safetensors_files(repo_id)
-        if safetensors_files:
-            print(f"Found {len(safetensors_files)} safetensors files, downloading...")
-            safetensors_dir = download_safetensors(repo_id, output_dir)
-            if safetensors_dir:
-                # Convert safetensors to GGUF (Q8_0 as default for TurboQuant compatibility)
-                gguf_file = convert_safetensors_to_gguf(safetensors_dir, output_dir, "Q8_0")
-                if gguf_file:
-                    print(f"Successfully converted to GGUF: {gguf_file}")
-                    return
-                else:
-                    print(f"Error: Failed to convert safetensors to GGUF")
-                    sys.exit(1)
-            else:
-                print(f"Error: Failed to download safetensors")
-                sys.exit(1)
-        else:
-            print(f"Error: Could not determine largest quantized file for {repo_id}")
-            sys.exit(1)
-    
-    if not file_name:
-        print(f"Error: Could not determine largest quantized file for {repo_id}")
+        print(f"  No pre-built {quant} found on HuggingFace.")
+    print("  Will download the best available source and quantize locally.")
+
+    source_file = find_best_source_in_repo(hf_repo)
+
+    if source_file is None and "fp16_repo" in model_info:
+        print(
+            f"Error: No suitable GGUF source found in {hf_repo} and "
+            f"{model_info['fp16_repo']} is a safetensors repo which requires "
+            f"llama-convert (not available in this image).\n"
+            "Please add a GGUF variant for this model or build with llama-convert support."
+        )
         sys.exit(1)
-    
-    file_path = output_path / file_name
-    
-    if file_path.exists():
-        print(f"Model already exists: {file_path}")
+
+    if source_file is None:
+        print(f"Error: No suitable GGUF source found in {hf_repo} for local quantization.")
+        sys.exit(1)
+
+    print(f"  Best available source: {Path(source_file).name}")
+
+    actual_source = _hf_download_file(hf_repo, source_file, str(output_path))
+
+    _quantize(actual_source, canonical, quant)
+
+    print(f"\n  Removing source file: {actual_source.name}")
+    actual_source.unlink(missing_ok=True)
+
+    _done(canonical)
+    _maybe_download_mmproj(model_info, output_path)
+
+
+def _find_mmproj_in_repo(repo_id: str) -> str | None:
+    """Search a HuggingFace repo for an mmproj GGUF file.
+
+    Returns the filename of the first file whose name contains "mmproj", or None.
+    """
+    files = _fetch_repo_files(repo_id)
+    for entry in files:
+        if entry.get("type") != "file":
+            continue
+        path = entry.get("path", "")
+        if path.endswith(".gguf") and "mmproj" in path.lower():
+            return path
+    return None
+
+
+def _maybe_download_mmproj(model_info: dict, output_path: Path) -> None:
+    """Download the multimodal projector file if this model requires one.
+
+    The ``mmproj`` field in the model entry can be:
+    - A specific filename string → download that exact file.
+    - ``True`` → auto-detect the mmproj filename by searching the GGUF repo.
+    - Absent / falsy → model has no mmproj, skip.
+    """
+    mmproj_value = model_info.get("mmproj")
+    if not mmproj_value:
+        return
+
+    repo_id = model_info["hf_repo"]
+
+    if mmproj_value is True:
+        print("\nSearching for mmproj file in repo ...")
+        mmproj_filename = _find_mmproj_in_repo(repo_id)
+        if not mmproj_filename:
+            print(f"Warning: No mmproj file found in {repo_id} — vision will not be available.")
+            return
+        print(f"  Found: {mmproj_filename}")
     else:
-        print(f"Downloading {model_info['description']}...")
-        print(f"Source: {model_info['hf_repo']}/{file_name}")
-        print(f"Destination: {file_path}")
-        
-        # Use hf CLI to download
-        import subprocess
-        
-        try:
-            # Stream output to console so progress bar is visible
-            result = subprocess.run(
-                [
-                    "hf",
-                    "download",
-                    model_info["hf_repo"],
-                    file_name,
-                    "--local-dir", str(output_path),
-                ],
-                stdout=None,  # Stream to console
-                stderr=None,  # Stream to console
-            )
-            if result.returncode != 0:
-                print(f"\nError downloading model")
-                sys.exit(1)
-            print(f"\nModel downloaded to: {file_path}")
-        except FileNotFoundError:
-            print("hf CLI not found. Install with: pip install huggingface_hub")
-            sys.exit(1)
-    
-    # Download mmproj.gguf if this is a multimodal model
-    if "mmproj" in model_info:
-        mmproj_file = model_info["mmproj"]
-        mmproj_path = output_path / mmproj_file
-        if not mmproj_path.exists():
-            print(f"\nDownloading multimodal projector: {mmproj_file}...")
-            print(f"Source: {model_info['hf_repo']}/{mmproj_file}")
-            print(f"Destination: {mmproj_path}")
-            try:
-                # Stream output to console so progress bar is visible
-                result = subprocess.run(
-                    [
-                        "hf",
-                        "download",
-                        model_info["hf_repo"],
-                        mmproj_file,
-                        "--local-dir", str(output_path),
-                    ],
-                    stdout=None,  # Stream to console
-                    stderr=None,  # Stream to console
-                )
-                if result.returncode != 0:
-                    print(f"\nError downloading mmproj")
-                else:
-                    print(f"\nMultimodal projector downloaded to: {mmproj_path}")
-            except FileNotFoundError:
-                print("hf CLI not found. Please download mmproj.gguf manually.")
-        else:
-            print(f"Multimodal projector already exists: {mmproj_path}")
+        mmproj_filename = mmproj_value
+
+    mmproj_path = output_path / Path(mmproj_filename).name
+    if mmproj_path.exists():
+        print(f"Multimodal projector already exists: {mmproj_path}")
+        return
+
+    print(f"\nDownloading multimodal projector: {mmproj_filename} ...")
+    _hf_download_file(repo_id, mmproj_filename, str(output_path))
+    print(f"Multimodal projector ready: {mmproj_path}")
 
 
 def convert_model(
     model_path: str,
     quant_method: str = "Q4_K_M",
-    output_dir: str = "./models",
+    output_dir: str = DEFAULT_MODELS_DIR,
 ) -> None:
-    """Convert a model to GGUF format using llama-quantize."""
+    """Re-quantize an existing GGUF to a different quantization using llama-quantize."""
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    
-    # Get the model name from the file
+
     model_name = Path(model_path).stem
-    
-    # Generate output filename
     parts = model_name.rsplit("-", 1)
     if len(parts) > 1 and parts[1][0].isdigit():
         base_name = parts[0]
-        quant_suffix = parts[1]
-        # Replace quantization suffix
         output_file = f"{base_name}-{quant_method}.gguf"
     else:
         output_file = f"{model_name}-{quant_method}.gguf"
-    
+
     output_file_path = output_path / output_file
-    
     print(f"Converting {model_path} to {quant_method} quantization...")
     print(f"Output: {output_file_path}")
-    
-    # Use llama-quantize to convert
-    import subprocess
-    
-    try:
-        result = subprocess.run(
-            [
-                "llama-quantize",
-                model_path,
-                str(output_file_path),
-                quant_method,
-            ],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            print(f"Error converting model:")
-            print(result.stderr)
-            sys.exit(1)
-        print(f"Model converted to: {output_file_path}")
-    except FileNotFoundError:
-        print("llama-quantize not found. Ensure llama.cpp is installed.")
-        sys.exit(1)
+    _quantize(Path(model_path), output_file_path, quant_method)
+    print(f"Model converted to: {output_file_path}")
 
 
 def turboquant_model(
     model_path: str,
     quant_method: str = "TQ2_0",
-    output_dir: str = "./models",
+    output_dir: str = DEFAULT_MODELS_DIR,
 ) -> None:
     """Convert a GGUF model to TurboQuant format using llama-quantize."""
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    
-    # Get the model name from the file
+
     model_name = Path(model_path).stem
-    
-    # Generate output filename with TurboQuant suffix
     output_file = f"{model_name}-{quant_method}.gguf"
     output_file_path = output_path / output_file
-    
+
     print(f"Converting {model_path} to TurboQuant {quant_method}...")
     print(f"Output: {output_file_path}")
-    print(f"Note: TurboQuant models are ~2-bit or ~1-bit per weight for extreme compression")
-    print(f"Important: For best quality, convert from FP16 if available, or Q8_0")
-    
-    # Use llama-quantize to convert to TurboQuant
-    import subprocess
-    
-    try:
-        result = subprocess.run(
-            [
-                "llama-quantize",
-                model_path,
-                str(output_file_path),
-                quant_method,
-            ],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            print(f"Error converting model to TurboQuant:")
-            print(result.stderr)
-            sys.exit(1)
-        print(f"Model converted to TurboQuant: {output_file_path}")
-    except FileNotFoundError:
-        print("llama-quantize not found. Ensure llama.cpp is installed.")
-        sys.exit(1)
+    print("Note: TurboQuant models are ~2-bit or ~1-bit per weight for extreme compression")
+    print("Important: For best quality, convert from FP16 if available, or Q8_0")
+    _quantize(Path(model_path), output_file_path, quant_method)
+    print(f"Model converted to TurboQuant: {output_file_path}")
 
 
 def list_models() -> None:
@@ -590,55 +572,31 @@ def list_models() -> None:
     print("Available models:")
     print("=" * 70)
     print()
-    print("SMALL MODELS (<4GB at Q4_K_M) - Best for 24GB GPU with large context:")
-    print("-" * 70)
-    for key, info in MODELS.items():
-        size_gb = info.get("size_gb", 0)
-        if size_gb < 4:
+    tiers = [
+        ("SMALL MODELS (<4GB at Q4_K_M) - Best for 24GB GPU with large context:", lambda s: s < 4),
+        ("MEDIUM MODELS (4-12GB at Q4_K_M) - Fits with moderate context:", lambda s: 4 <= s <= 12),
+        ("LARGE MODELS (12-18GB at Q4_K_M) - Fits with small context:", lambda s: s > 12),
+    ]
+    for title, size_filter in tiers:
+        print(title)
+        print("-" * 70)
+        for key, info in MODELS.items():
+            if not size_filter(info.get("size_gb", 0)):
+                continue
+            tags = []
             if info.get("turboquant"):
-                print(f"  {key:25s} - {info['description']} [TurboQuant]")
-            elif "mmproj" in info:
-                print(f"  {key:25s} - {info['description']} [Multimodal]")
-            else:
-                print(f"  {key:25s} - {info['description']}")
+                tags.append("TurboQuant")
+            if "mmproj" in info:
+                tags.append("Multimodal")
+            tag_str = f" [{', '.join(tags)}]" if tags else ""
+            print(f"  {key:25s} - {info['description']}{tag_str}")
+        print()
+
+    print("Supported quantizations (pass to --quant):")
+    print("  Standard:", ", ".join(QUANT_PRIORITY[:8]), "...")
+    print("  TurboQuant:", ", ".join(TQ_QUANT_OPTIONS))
     print()
-    print("MEDIUM MODELS (4-12GB at Q4_K_M) - Fits with moderate context:")
-    print("-" * 70)
-    for key, info in MODELS.items():
-        size_gb = info.get("size_gb", 0)
-        if 4 <= size_gb <= 12:
-            if info.get("turboquant"):
-                print(f"  {key:25s} - {info['description']} [TurboQuant]")
-            elif "mmproj" in info:
-                print(f"  {key:25s} - {info['description']} [Multimodal]")
-            else:
-                print(f"  {key:25s} - {info['description']}")
-    print()
-    print("LARGE MODELS (12-18GB at Q4_K_M) - Fits with small context:")
-    print("-" * 70)
-    for key, info in MODELS.items():
-        size_gb = info.get("size_gb", 0)
-        if size_gb > 12:
-            if info.get("turboquant"):
-                print(f"  {key:25s} - {info['description']} [TurboQuant]")
-            elif "mmproj" in info:
-                print(f"  {key:25s} - {info['description']} [Multimodal]")
-            else:
-                print(f"  {key:25s} - {info['description']}")
-    print()
-    print("Quantization priority (largest first):")
-    for q in QUANT_PRIORITY:
-        print(f"  {q}")
-    print()
-    print("TurboQuant quantization options:")
-    for q in TQ_QUANT_OPTIONS:
-        print(f"  {q}")
-    print()
-    print("  TQ1_0: ~1-bit per weight - extreme compression")
-    print("  TQ2_0: ~2-bit per weight - better quality while still highly compressed")
-    print()
-    print("Multimodal models require mmproj.gguf file for vision/image support.")
-    print("See README.md for instructions on enabling image input.")
+    print("Multimodal models automatically download mmproj.gguf for vision support.")
 
 
 def main():
@@ -646,48 +604,56 @@ def main():
         description="Manage LLM models for llama.cpp server"
     )
     subparsers = parser.add_subparsers(dest="command", help="Command to execute")
-    
+
     # List models
     subparsers.add_parser("list", help="List available models")
-    
+
     # Download model
     download_parser = subparsers.add_parser("download", help="Download a model")
     download_parser.add_argument(
-        "model", help="Model name (e.g., llama3.2-8b)"
+        "model", help="Model name (e.g. qwen3.5-27b)"
+    )
+    download_parser.add_argument(
+        "-q",
+        "--quant",
+        default="Q4_K_M",
+        help=(
+            "Quantization type (default: Q4_K_M). "
+            "If the requested quant is not available on HuggingFace, the script "
+            "will download the best available source (FP16/BF16) and quantize locally, "
+            "then clean up the source file. "
+            f"Standard options: {', '.join(QUANT_PRIORITY[:8])} ... "
+            f"TurboQuant options: {', '.join(TQ_QUANT_OPTIONS)}"
+        ),
     )
     download_parser.add_argument(
         "-o",
         "--output-dir",
-        default="./models",
-        help="Output directory (default: ./models)",
+        default=DEFAULT_MODELS_DIR,
+        help=DEFAULT_OUTPUT_DIR_HELP,
     )
-    download_parser.add_argument(
-        "--force-fp16",
-        action="store_true",
-        help="Force download FP16 version from fp16_repo (for TurboQuant conversion)",
-    )
-    
-    # Convert model
-    convert_parser = subparsers.add_parser("convert", help="Convert a model to GGUF")
+
+    # Convert model (re-quantize an existing GGUF)
+    convert_parser = subparsers.add_parser("convert", help="Re-quantize an existing GGUF")
     convert_parser.add_argument(
-        "model_path", help="Path to the model to convert"
+        "model_path", help="Path to the GGUF model to convert"
     )
     convert_parser.add_argument(
         "-q",
         "--quant",
         default="Q4_K_M",
-        choices=QUANT_PRIORITY[:10],  # Only allow common quantization options
+        choices=QUANT_PRIORITY[:10],
         help="Quantization method (default: Q4_K_M)",
     )
     convert_parser.add_argument(
         "-o",
         "--output-dir",
-        default="./models",
-        help="Output directory (default: ./models)",
+        default=DEFAULT_MODELS_DIR,
+        help=DEFAULT_OUTPUT_DIR_HELP,
     )
-    
+
     # TurboQuant model
-    tq_parser = subparsers.add_parser("turboquant", help="Convert a model to TurboQuant format")
+    tq_parser = subparsers.add_parser("turboquant", help="Convert a GGUF to TurboQuant format")
     tq_parser.add_argument(
         "model_path", help="Path to the GGUF model to convert"
     )
@@ -701,16 +667,16 @@ def main():
     tq_parser.add_argument(
         "-o",
         "--output-dir",
-        default="./models",
-        help="Output directory (default: ./models)",
+        default=DEFAULT_MODELS_DIR,
+        help=DEFAULT_OUTPUT_DIR_HELP,
     )
-    
+
     args = parser.parse_args()
-    
+
     if args.command == "list":
         list_models()
     elif args.command == "download":
-        download_model(args.model, args.output_dir, args.force_fp16)
+        download_model(args.model, args.quant, args.output_dir)
     elif args.command == "convert":
         convert_model(args.model_path, args.quant, args.output_dir)
     elif args.command == "turboquant":

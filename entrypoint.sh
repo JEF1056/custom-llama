@@ -4,10 +4,13 @@ set -e
 # Default values
 HOST=${LLAMA_HOST:-0.0.0.0}
 PORT=${LLAMA_PORT:-8080}
-THREADS=${LLAMA_THREADS:-8}
-CTX_SIZE=${LLAMA_CTX_SIZE:-4096}
+THREADS=${LLAMA_THREADS:-6}
+THREADS_BATCH=${LLAMA_THREADS_BATCH:-12}
+CTX_SIZE=${LLAMA_CTX_SIZE:-200000}
+BATCH_SIZE=${LLAMA_BATCH_SIZE:-4096}
+UBATCH_SIZE=${LLAMA_UBATCH_SIZE:-1024}
 GPU_LAYERS=${LLAMA_GPU_LAYERS:-99}
-MAX_TOKENS=${LLAMA_MAX_TOKENS:-512}
+MAX_TOKENS=${LLAMA_MAX_TOKENS:--1}
 TOP_P=${LLAMA_TOP_P:-0.95}
 TEMP=${LLAMA_TEMP:-0.7}
 STOP=${LLAMA_STOP:-}
@@ -34,14 +37,15 @@ NO_MMAP=${LLAMA_NO_MMAP:-off}
 REASONING=${LLAMA_REASONING:-on}
 
 # Prompt caching capacity (in tokens)
-CACHE_CAPACITY=${LLAMA_CACHE_CAPACITY:-4096}
+CACHE_CAPACITY=${LLAMA_CACHE_CAPACITY:-200000}
 
 # Multimodal optimizations
 # Multi-KV attention: reduces KV cache size for multimodal models by sharing KV heads across image tokens
 MUL_KV=${LLAMA_MUL_KV:-on}
 # Cache chunk size for multimodal: controls how KV cache chunks are allocated for image tokens
 CACHE_CHUNK_SIZE=${LLAMA_CACHE_CHUNK_SIZE:-0}
-# No KV offload: keeps KV cache on GPU for multimodal (faster access for image tokens)
+# KV offload: off = allow llama.cpp to spill KV to CPU if VRAM runs low (safe default).
+#             on  = pass --no-kv-offload, forcing KV cache to stay on GPU at all times.
 NO_KV_OFFLOAD=${LLAMA_NO_KV_OFFLOAD:-off}
 
 # Tensor split for multi-GPU (e.g., "13,14" splits model across GPU 0 and GPU 1)
@@ -64,106 +68,25 @@ else
     MODEL=/models/model.gguf
 fi
 
-# Download model at runtime if MODEL_NAME is set
+# Download (and if necessary locally quantize) model at runtime if MODEL_NAME is set.
+# QUANT takes any standard or TurboQuant value; TQ_QUANT is honoured as a legacy alias.
 if [ -n "$MODEL_NAME" ]; then
+    QUANT="${QUANT:-${TQ_QUANT:-Q4_K_M}}"
+
     echo "========================================"
-    echo "  Model Download"
+    echo "  Model Preparation"
     echo "========================================"
-    echo "Model: $MODEL_NAME"
-    echo "TurboQuant: ${TQ_QUANT:-none}"
+    echo "  Model : $MODEL_NAME"
+    echo "  Quant : $QUANT"
     echo ""
-    
-    # Download the model (automatically fetches largest quantized version)
-    echo "Downloading model..."
+
     python3 /scripts/manage_models.py download "$MODEL_NAME" \
+        --quant "$QUANT" \
         -o /models
-    
-    # Determine the downloaded model file by scanning the models directory
-    MODEL_FILE=""
-    for f in /models/*.gguf; do
-        if [ -f "$f" ]; then
-            MODEL_FILE="$f"
-            break
-        fi
-    done
-    if [ -z "$MODEL_FILE" ]; then
-        echo "ERROR: No model file found in /models/ after download"
-        exit 1
-    fi
-    
-    # Convert to TurboQuant if requested
-    if [ -n "$TQ_QUANT" ]; then
-        echo ""
-        echo "Converting to TurboQuant ($TQ_QUANT)..."
-        
-        # Check if the downloaded model is Q8_0 - llama-quantize doesn't allow requantizing from q8_0
-        # If so, delete it and download the FP16 version from the base HuggingFace repo
-        if echo "$MODEL_FILE" | grep -q "Q8_0"; then
-            echo "WARNING: Downloaded model is Q8_0 quantization."
-            echo "llama-quantize does not allow requantizing from q8_0."
-            echo "Deleting Q8_0 model and downloading FP16 version..."
-            rm -f "$MODEL_FILE"
-            
-            # Determine the model name for the base repo download
-            # Extract model name from the Q8_0 filename (e.g., Qwopus3.6-35B-A3B-v1-Q8_0 -> Qwopus3.6-35B-A3B-v1)
-            MODEL_BASE_NAME=$(basename "$MODEL_FILE" .gguf | sed 's/-Q8_0$//')
-            
-            # Download FP16 version from the base HuggingFace repo (not the GGUF repo)
-            echo "Downloading FP16 version from base repo..."
-            python3 /scripts/manage_models.py download "$MODEL_NAME" \
-                -o /models \
-                --force-fp16
-            
-            # Find the FP16 model file
-            FP16_MODEL=""
-            for f in /models/*.gguf; do
-                if [ -f "$f" ] && echo "$f" | grep -q "fp16\|bf16"; then
-                    FP16_MODEL="$f"
-                    break
-                fi
-            done
-            
-            if [ -z "$FP16_MODEL" ]; then
-                echo "ERROR: Could not find FP16/BF16 model for TurboQuant conversion."
-                echo "Please download the FP16 version manually from the base HuggingFace repo."
-                exit 1
-            fi
-            
-            MODEL_FILE="$FP16_MODEL"
-            echo "Using FP16 model: $MODEL_FILE"
-        fi
-        
-        # Get the base model name without quantization suffix for the output filename
-        MODEL_BASE=$(basename "$MODEL_FILE" .gguf)
-        TQ_MODEL="/models/${MODEL_BASE}-${TQ_QUANT}.gguf"
-        llama-quantize "$MODEL_FILE" "$TQ_MODEL" "$TQ_QUANT"
-        MODEL="$TQ_MODEL"
-        echo "TurboQuant model: $TQ_MODEL"
-    else
-        MODEL="$MODEL_FILE"
-        echo "Base model: $MODEL_FILE"
-    fi
-    
-    # Download mmproj if requested
-    if [ -n "$MMPROJ" ]; then
-        echo ""
-        echo "Downloading multimodal projector..."
-        python3 /scripts/manage_models.py download "$MODEL_NAME" \
-            -o /models
-        # Find the mmproj file by scanning the models directory
-        MMPROJ_FILE=""
-        for f in /models/*-mmproj.gguf; do
-            if [ -f "$f" ]; then
-                MMPROJ_FILE="$f"
-                break
-            fi
-        done
-        MMPROJ="$MMPROJ_FILE"
-        echo "Multimodal projector: $MMPROJ"
-    fi
-    
+
+    MODEL="/models/${MODEL_NAME}-${QUANT}.gguf"
     echo ""
-    echo "Model download complete!"
+    echo "Model ready: $MODEL"
     echo ""
 fi
 
@@ -193,8 +116,10 @@ echo "Starting llama-server with configuration:"
 echo "  Host: $HOST"
 echo "  Port: $PORT"
 echo "  Model: $MODEL"
-echo "  Threads: $THREADS"
+echo "  Threads (decode): $THREADS"
+echo "  Threads (batch):  $THREADS_BATCH"
 echo "  Context Size: $CTX_SIZE"
+echo "  Batch Size: $BATCH_SIZE  (ubatch: $UBATCH_SIZE)"
 echo "  GPU Layers: $GPU_LAYERS"
 echo "  Max Tokens: $MAX_TOKENS"
 echo "  Top P: $TOP_P"
@@ -240,22 +165,25 @@ exec llama-server \
     --port "$PORT" \
     --model "$MODEL" \
     --threads "$THREADS" \
+    --threads-batch "$THREADS_BATCH" \
     --ctx-size "$CTX_SIZE" \
+    --batch-size "$BATCH_SIZE" \
+    --ubatch-size "$UBATCH_SIZE" \
     --n-gpu-layers "$GPU_LAYERS" \
     --max-tokens "$MAX_TOKENS" \
     --top-p "$TOP_P" \
     --temp "$TEMP" \
     -ctk "$CACHE_TYPE_K" \
     -ctv "$CACHE_TYPE_V" \
-    -fa "$FLASH_ATTN" \
+    $([ "$FLASH_ATTN" = "on" ] && echo "--flash-attn") \
     ${STOP:+--stop "$STOP"} \
     ${PARALLEL:+--parallel "$PARALLEL"} \
-    ${NO_MMAP:+--no-mmap} \
+    $([ "$NO_MMAP" = "on" ] && echo "--no-mmap") \
     ${REASONING:+--reasoning "$REASONING"} \
     --cache-capacity "$CACHE_CAPACITY" \
-    ${MUL_KV:+--mul-kv} \
+    $([ "$MUL_KV" = "on" ] && echo "--mul-kv") \
     ${CACHE_CHUNK_SIZE:+--cache-chunk-size "$CACHE_CHUNK_SIZE"} \
-    ${NO_KV_OFFLOAD:+--no-kv-offload} \
+    $([ "$NO_KV_OFFLOAD" = "on" ] && echo "--no-kv-offload") \
     ${TS:+-ts "$TS"} \
     ${NCMOE:+-ncmoe "$NCMOE"} \
     $MMFLAGS \

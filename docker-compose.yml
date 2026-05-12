@@ -9,7 +9,7 @@ services:
     container_name: llama-server
 
     ports:
-      - "8080:8080"
+      - "${LLAMA_PORT:-8080}:${LLAMA_PORT:-8080}"
 
     volumes:
       - ./models:/models:rw
@@ -20,12 +20,19 @@ services:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
 
-      LLAMA_THREADS: ${LLAMA_THREADS:-8}
-      LLAMA_CTX_SIZE: ${LLAMA_CTX_SIZE:-4096}
+      LLAMA_HOST: ${LLAMA_HOST:-0.0.0.0}
+      LLAMA_PORT: ${LLAMA_PORT:-8080}
+
+      LLAMA_THREADS: ${LLAMA_THREADS:-6}
+      LLAMA_THREADS_BATCH: ${LLAMA_THREADS_BATCH:-12}
+      LLAMA_CTX_SIZE: ${LLAMA_CTX_SIZE:-200000}
+      LLAMA_BATCH_SIZE: ${LLAMA_BATCH_SIZE:-4096}
+      LLAMA_UBATCH_SIZE: ${LLAMA_UBATCH_SIZE:-1024}
       LLAMA_GPU_LAYERS: ${LLAMA_GPU_LAYERS:-99}
-      LLAMA_MAX_TOKENS: ${LLAMA_MAX_TOKENS:-512}
+      LLAMA_MAX_TOKENS: ${LLAMA_MAX_TOKENS:--1}
       LLAMA_TOP_P: ${LLAMA_TOP_P:-0.95}
       LLAMA_TEMP: ${LLAMA_TEMP:-0.7}
+      LLAMA_STOP: ${LLAMA_STOP:-}
 
       LLAMA_MODEL: ${LLAMA_MODEL:-}
       LLAMA_MMPROJ: ${LLAMA_MMPROJ:-}
@@ -33,6 +40,7 @@ services:
 
       HF_TOKEN: ${HF_TOKEN:-}
       MODEL_NAME: ${MODEL_NAME:-}
+      QUANT: ${QUANT:-}
       TQ_QUANT: ${TQ_QUANT:-}
       MMPROJ: ${MMPROJ:-}
 
@@ -46,7 +54,7 @@ services:
 
       LLAMA_TS: ${LLAMA_TS:-}
       LLAMA_NCMOE: ${LLAMA_NCMOE:-}
-      LLAMA_CACHE_CAPACITY: ${LLAMA_CACHE_CAPACITY:-4096}
+      LLAMA_CACHE_CAPACITY: ${LLAMA_CACHE_CAPACITY:-200000}
 
       LLAMA_MUL_KV: ${LLAMA_MUL_KV:-on}
       LLAMA_CACHE_CHUNK_SIZE: ${LLAMA_CACHE_CHUNK_SIZE:-0}
@@ -55,8 +63,8 @@ services:
     restart: unless-stopped
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:${LLAMA_PORT:-8080}/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 1800s  # allow up to 30 min for first-run model download + quantization
