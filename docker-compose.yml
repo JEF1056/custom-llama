@@ -1,5 +1,16 @@
 version: "3.8"
 
+networks:
+  # Internal network: llama-server, kv-cache-proxy, tailscale, pipelines.
+  # No host port mappings on services here — access via tailnet or pipelines only.
+  llama-net:
+  # Semi-public network: open-webui, cloudflared, pipelines (bridges both nets).
+  webui-net:
+
+volumes:
+  tailscale-state:    # Tailscale node state (identity key, node certs)
+  open-webui-data:    # Open WebUI SQLite DB, uploads, config
+
 services:
   # ---------------------------------------------------------------------------
   # Model preparation (download / quantize / convert) — run before the server.
@@ -54,6 +65,38 @@ services:
 
     # No GPU needed — conversion and quantization run on CPU.
 
+  # ---------------------------------------------------------------------------
+  # Tailscale sidecar — joins the tailnet and exposes llama-server and
+  # kv-cache-proxy on the tailnet via TCP forwarding defined in serve.json.
+  # Tailnet users access:
+  #   http://<TS_HOSTNAME>.<tailnet>.ts.net:8080  → llama-server (raw API)
+  #   http://<TS_HOSTNAME>.<tailnet>.ts.net:8181  → kv-cache-proxy (Roo Code)
+  # ---------------------------------------------------------------------------
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tailscale-llama
+    hostname: ${TS_HOSTNAME:-llama-api}
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./tailscale:/config:ro
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    networks:
+      - llama-net
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # llama.cpp inference server (TurboQuant fork)
+  # No host port mapping — reachable only via llama-net (pipelines, proxy)
+  # or via the Tailscale sidecar on the tailnet.
+  # ---------------------------------------------------------------------------
   llama-server:
     build:
       context: .
@@ -62,8 +105,7 @@ services:
     image: llama-server:latest
     container_name: llama-server
 
-    ports:
-      - "${LLAMA_PORT:-8080}:${LLAMA_PORT:-8080}"
+    # No ports: — port 8080 is accessible only within llama-net and via tailnet.
 
     volumes:
       - ./models:/models:rw
@@ -107,12 +149,19 @@ services:
 
       LLAMA_TS: ${LLAMA_TS:-}
       LLAMA_NCMOE: ${LLAMA_NCMOE:-}
-      LLAMA_CACHE_CAPACITY: ${LLAMA_CACHE_CAPACITY:-200000}
 
-      LLAMA_MUL_KV: ${LLAMA_MUL_KV:-on}
-      LLAMA_CACHE_CHUNK_SIZE: ${LLAMA_CACHE_CHUNK_SIZE:-0}
       LLAMA_NO_KV_OFFLOAD: ${LLAMA_NO_KV_OFFLOAD:-off}
 
+      # KV cache slot persistence — saves/restores slot state to disk so
+      # per-conversation KV caches survive server restarts.
+      LLAMA_SLOT_SAVE_PATH: ${LLAMA_SLOT_SAVE_PATH:-/models/slots}
+
+      # Optional API key — set to restrict direct tailnet API access.
+      # Leave empty to allow unauthenticated access on the tailnet.
+      LLAMA_API_KEY: ${LLAMA_API_KEY:-}
+
+    networks:
+      - llama-net
     restart: unless-stopped
 
     healthcheck:
@@ -121,3 +170,100 @@ services:
       timeout: 10s
       retries: 3
       start_period: 300s  # allow up to 5 min for large model to load from disk
+
+  # ---------------------------------------------------------------------------
+  # KV cache proxy — OpenAI-compatible proxy for Roo Code (tailnet only).
+  # Binds sessions to llama.cpp slots via X-Session-ID request header and
+  # manages save/restore transparently around each completion request.
+  # Roo Code config: base URL = http://<TS_HOSTNAME>.<tailnet>.ts.net:8181/v1
+  # ---------------------------------------------------------------------------
+  kv-cache-proxy:
+    build:
+      context: ./kv-cache-proxy
+    container_name: kv-cache-proxy
+    environment:
+      LLAMA_BASE_URL: http://llama-server:${LLAMA_PORT:-8080}
+      NUM_SLOTS: ${LLAMA_PARALLEL:-2}
+      PORT: ${KV_PROXY_PORT:-8181}
+      SLOT_SAVE_ENABLED: "true"
+    networks:
+      - llama-net
+    restart: unless-stopped
+    depends_on:
+      - llama-server
+
+  # ---------------------------------------------------------------------------
+  # Open WebUI Pipelines — intercepts requests between Open WebUI and
+  # llama-server to inject id_slot / cache_prompt and handle KV save/restore.
+  # Pipeline files in ./pipelines/ are auto-loaded at startup.
+  # Sits on both networks: receives requests from webui-net, calls llama-net.
+  # ---------------------------------------------------------------------------
+  open-webui-pipelines:
+    image: ghcr.io/open-webui/pipelines:main
+    container_name: open-webui-pipelines
+    volumes:
+      - ./pipelines:/app/pipelines
+    environment:
+      LLAMA_BASE_URL: http://llama-server:${LLAMA_PORT:-8080}
+      PIPELINES_API_KEY: ${PIPELINES_API_KEY:-0p3n-w3bu!}
+    networks:
+      - llama-net
+      - webui-net
+    restart: unless-stopped
+    depends_on:
+      - llama-server
+
+  # ---------------------------------------------------------------------------
+  # Open WebUI — chat UI gated by Google OAuth (OIDC via Firebase credentials).
+  # Connects exclusively to open-webui-pipelines; never directly to llama-server.
+  # Public access via Cloudflare Tunnel at https://chat.jessfan.com
+  # ---------------------------------------------------------------------------
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    volumes:
+      - open-webui-data:/app/backend/data
+    environment:
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-}
+      WEBUI_URL: ${WEBUI_URL:-https://chat.jessfan.com}
+
+      # Google OAuth — credentials from Firebase Console or Google Cloud Console.
+      # Firebase Console → Authentication → Sign-in method → Google → Web SDK config.
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      OPENID_PROVIDER_URL: ${OPENID_PROVIDER_URL:-https://accounts.google.com/.well-known/openid-configuration}
+      ENABLE_OAUTH_SIGNUP: ${ENABLE_OAUTH_SIGNUP:-true}
+
+      # Route all completions through the pipelines server (KV cache management).
+      OPENAI_API_BASE_URL: http://open-webui-pipelines:9099
+      OPENAI_API_KEY: ${PIPELINES_API_KEY:-0p3n-w3bu!}
+
+      # Disable Ollama integration (not used in this setup).
+      ENABLE_OLLAMA_API: "false"
+
+    networks:
+      - webui-net
+    restart: unless-stopped
+    depends_on:
+      - open-webui-pipelines
+
+  # ---------------------------------------------------------------------------
+  # Cloudflare Tunnel — exposes Open WebUI publicly at chat.jessfan.com with
+  # zero inbound firewall ports. Makes an outbound connection to Cloudflare.
+  #
+  # One-time setup in Cloudflare Zero Trust → Networks → Tunnels:
+  #   1. Create tunnel → Docker → copy token to CF_TUNNEL_TOKEN in .env
+  #   2. Add Public Hostname: chat.jessfan.com → http://open-webui:8080
+  #   (Cloudflare creates the CNAME DNS record automatically.)
+  # ---------------------------------------------------------------------------
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN:-}
+    networks:
+      - webui-net
+    restart: unless-stopped
+    depends_on:
+      - open-webui

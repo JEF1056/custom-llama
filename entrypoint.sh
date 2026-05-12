@@ -40,14 +40,7 @@ REASONING=${LLAMA_REASONING:-on}
 # Qwopus3.6 / Qwen3.6 chat templates support this kwarg natively via preserve_thinking=true.
 PRESERVE_THINKING=${LLAMA_PRESERVE_THINKING:-on}
 
-# Prompt caching capacity (in tokens)
-CACHE_CAPACITY=${LLAMA_CACHE_CAPACITY:-200000}
 
-# Multimodal optimizations
-# Multi-KV attention: reduces KV cache size for multimodal models by sharing KV heads across image tokens
-MUL_KV=${LLAMA_MUL_KV:-on}
-# Cache chunk size for multimodal: controls how KV cache chunks are allocated for image tokens
-CACHE_CHUNK_SIZE=${LLAMA_CACHE_CHUNK_SIZE:-0}
 # KV offload: off = allow llama.cpp to spill KV to CPU if VRAM runs low (safe default).
 #             on  = pass --no-kv-offload, forcing KV cache to stay on GPU at all times.
 NO_KV_OFFLOAD=${LLAMA_NO_KV_OFFLOAD:-off}
@@ -59,6 +52,17 @@ TS=${LLAMA_TS:-}
 # MoE CPU offload (number of experts to offload to CPU)
 # For Mixture-of-Experts models like Mixtral — controls which experts run on CPU vs GPU
 NCMOE=${LLAMA_NCMOE:-}
+
+# KV cache slot save path — directory where slot state is written to disk via
+# POST /slots/{id}?action=save and read back via ?action=restore.
+# Enables per-conversation KV cache persistence across server restarts.
+# Requires llama.cpp >= b3000 (upstream) or equivalent TurboQuant build.
+SLOT_SAVE_PATH=${LLAMA_SLOT_SAVE_PATH:-}
+
+# API key — when set, all requests to the server must include
+# Authorization: Bearer <key>. Leave empty for unauthenticated access
+# (appropriate when protected by Tailscale ACLs).
+API_KEY=${LLAMA_API_KEY:-}
 
 # Multimodal settings
 MMPROJ=${LLAMA_MMPROJ:-}  # Multimodal projector file (.mmproj)
@@ -81,6 +85,11 @@ fi
 
 # Verify the model file exists — models must be prepared in advance using the
 # convert image (docker compose run --rm llama-convert download/convert-st …).
+# Create slot save directory if a path is configured.
+if [ -n "$SLOT_SAVE_PATH" ]; then
+    mkdir -p "$SLOT_SAVE_PATH"
+fi
+
 if [ ! -f "$MODEL" ]; then
     echo "ERROR: Model file not found: $MODEL"
     echo ""
@@ -130,15 +139,18 @@ echo "  Parallel Slots: $PARALLEL"
 echo "  Memory Mapping: $([ "$NO_MMAP" = "on" ] && echo "disabled (no-mmap)" || echo "enabled (mmap)")"
 echo "  Reasoning Mode: $REASONING"
 echo "  Preserve Thinking: $PRESERVE_THINKING"
-echo "  Cache Capacity: $CACHE_CAPACITY"
-echo "  Multi-KV Attention: $MUL_KV"
-echo "  Cache Chunk Size: $CACHE_CHUNK_SIZE"
 echo "  No KV Offload: $([ "$NO_KV_OFFLOAD" = "on" ] && echo "enabled" || echo "disabled")"
 if [ -n "$TS" ]; then
     echo "  Tensor Split: $TS"
 fi
 if [ -n "$NCMOE" ]; then
     echo "  MoE CPU Offload: $NCMOE"
+fi
+if [ -n "$SLOT_SAVE_PATH" ]; then
+    echo "  Slot Save Path: $SLOT_SAVE_PATH"
+fi
+if [ -n "$API_KEY" ]; then
+    echo "  API Key: (set)"
 fi
 
 # Build multimodal flags
@@ -166,17 +178,16 @@ exec llama-server \
     --temp "$TEMP" \
     -ctk "$CACHE_TYPE_K" \
     -ctv "$CACHE_TYPE_V" \
-    $([ "$FLASH_ATTN" = "on" ] && echo "--flash-attn 1") \
+    --flash-attn "$FLASH_ATTN" \
     ${STOP:+--stop "$STOP"} \
     ${PARALLEL:+--parallel "$PARALLEL"} \
-    $([ "$NO_MMAP" = "on" ] && echo "--no-mmap 1") \
-    ${REASONING:+--reasoning "$REASONING"} \
+    $([ "$NO_MMAP" = "on" ] && echo "--no-mmap") \
+    --reasoning "$REASONING" \
     $([ "$PRESERVE_THINKING" = "on" ] && echo '--chat-template-kwargs {"preserve_thinking":true}') \
-    --cache-capacity "$CACHE_CAPACITY" \
-    $([ "$MUL_KV" = "on" ] && echo "--mul-kv 1") \
-    ${CACHE_CHUNK_SIZE:+--cache-chunk-size "$CACHE_CHUNK_SIZE"} \
-    $([ "$NO_KV_OFFLOAD" = "on" ] && echo "--no-kv-offload 1") \
-    ${TS:+-ts "$TS"} \
+    $([ "$NO_KV_OFFLOAD" = "on" ] && echo "--no-kv-offload") \
+    ${TS:+--tensor-split "$TS"} \
     ${NCMOE:+-ncmoe "$NCMOE"} \
+    ${SLOT_SAVE_PATH:+--slot-save-path "$SLOT_SAVE_PATH"} \
+    ${API_KEY:+--api-key "$API_KEY"} \
     $MMFLAGS \
     "$@"
