@@ -412,13 +412,8 @@ def _keepalive(interval: int = 30, label: str = ""):
     prefix = f"  [{label}] " if label else "  "
 
     def _loop():
-        count = 0
         while not stop.wait(interval):
-            count += 1
-            elapsed = count * interval
-            mins, secs = divmod(elapsed, 60)
-            elapsed_str = f"{mins}m {secs}s" if mins else f"{secs}s"
-            print(f"{prefix}still running... ({elapsed_str} elapsed)", flush=True)
+            pass
 
     t = threading.Thread(target=_loop, daemon=True)
     t.start()
