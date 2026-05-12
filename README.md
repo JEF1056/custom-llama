@@ -108,7 +108,7 @@ docker compose build llama-convert
 docker compose run --rm llama-convert download qwen3.5-27b --quant Q4_K_M
 
 # Safetensors-only repos (convert → fp16 → quantize)
-docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant TQ2_0
+docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant Q3_K_M
 ```
 
 > **Gated models:** set `HF_TOKEN=your_token` in `.env`
@@ -164,7 +164,7 @@ In Roo Code settings → **API Provider** → **OpenAI Compatible**:
 |---|---|
 | Base URL | `http://<ts-host>:8181/v1` |
 | API Key | `none` |
-| Model ID | `qwopus3.6-35b-TQ2_0` |
+| Model ID | `qwopus3.6-35b-Q3_K_M` |
 
 Add a custom header to pin the workspace to a persistent KV cache slot:
 
@@ -208,7 +208,7 @@ All `LLAMA_*` defaults are tuned for RTX 3090 (24 GB VRAM).
 | Variable | Default | Description |
 |---|---|---|
 | `MODEL_NAME` | `qwopus3.6-35b` | Model key |
-| `QUANT` | `TQ2_0` | Quantization |
+| `QUANT` | `Q3_K_M` | Quantization |
 | `LLAMA_MODEL` | — | Override: explicit `.gguf` path in `/models` |
 
 ### Server
@@ -220,13 +220,14 @@ All `LLAMA_*` defaults are tuned for RTX 3090 (24 GB VRAM).
 | `LLAMA_CTX_SIZE` | `200000` | Total context pool across all slots |
 | `LLAMA_PARALLEL` | `2` | Concurrent inference slots |
 | `LLAMA_THREADS` | `6` | CPU decode threads |
-| `LLAMA_THREADS_BATCH` | `12` | CPU prefill threads |
+| `LLAMA_THREADS_BATCH` | `4` | CPU prefill threads — dispatches GPU kernels, not math; 4 is enough with full GPU offload |
 | `LLAMA_BATCH_SIZE` | `4096` | Logical batch size |
-| `LLAMA_UBATCH_SIZE` | `1024` | Physical micro-batch per CUDA kernel |
+| `LLAMA_UBATCH_SIZE` | `2048` | Physical micro-batch per CUDA kernel; larger = fewer GPU round-trips per prompt |
 | `LLAMA_MAX_TOKENS` | `-1` | Max tokens per response |
 | `LLAMA_TEMP` | `0.7` | Temperature |
 | `LLAMA_TOP_P` | `0.95` | Top-p |
-| `LLAMA_NO_MMAP` | `off` | `on` = load model into RAM |
+| `LLAMA_NO_MMAP` | `off` | `on` = load model into RAM upfront |
+|| `LLAMA_DIRECT_IO` | `on` | Bypass OS page cache on model load — saves ~15 GB RAM when all layers are on GPU |
 
 ### KV cache
 
@@ -292,13 +293,14 @@ Run `docker compose run --rm llama-convert list` for the full list with sizes.
 
 | Quant | Bits | Notes |
 |---|---|---|
-| `Q4_K_M` | ~4 | Recommended default |
-| `Q5_K_M` | ~5 | Higher quality |
+| `Q3_K_M` | ~3.35 | **Minimum for coherent output** — default for qwopus3.6-35b |
+| `Q4_K_M` | ~4.5 | Higher quality; requires ~20 GB for 35B, limits KV cache headroom |
+| `Q5_K_M` | ~5.5 | Best quality that still fits smaller models in 24 GB |
 | `Q8_0` | ~8 | Near-lossless; good source for re-quantization |
-| `TQ2_0` | ~2 | TurboQuant — requires fp16/bf16 source |
-| `TQ1_0` | ~1 | TurboQuant maximum compression |
+| `TQ2_0` | ~2 | TurboQuant — **not recommended**: 2-bit causes incoherent outputs on most models |
+| `TQ1_0` | ~1.58 | TurboQuant ternary — only for models specifically trained with ternary objectives |
 
-TurboQuant needs an fp16/bf16 GGUF as source. If the HuggingFace repo is safetensors-only, use `convert-st` instead of `download`.
+TurboQuant quants need an fp16/bf16 GGUF as source. If the HuggingFace repo is safetensors-only, use `convert-st` instead of `download`.
 
 ## Model management
 
@@ -338,7 +340,7 @@ docker compose restart llama-server openclaw-gateway  # after changing MODEL_NAM
 
 **Model file not found** — run the prepare step first:
 ```bash
-docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant TQ2_0
+docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant Q3_K_M
 ```
 
 **TurboQuant: no fp16/bf16 source** — use `convert-st` instead of `download`.
