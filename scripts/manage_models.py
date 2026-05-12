@@ -430,7 +430,9 @@ def _curl_download_file(
     else:
         auth_url = download_url
 
-    cmd = ["curl", "-#", "-L", "-f", "-o", str(dest)]
+    # Default curl progress meter shows % done, speed, and time-left (ETA).
+    # -# (hash bar) is intentionally omitted — it hides the ETA column.
+    cmd = ["curl", "-L", "-f", "-o", str(dest)]
     if limit_rate:
         cmd += ["--limit-rate", limit_rate]
     cmd.append(auth_url)
