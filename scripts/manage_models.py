@@ -491,7 +491,9 @@ def _curl_download_file(
 
     # Default curl progress meter shows % done, speed, and time-left (ETA).
     # -# (hash bar) is intentionally omitted — it hides the ETA column.
-    cmd = ["curl", "-L", "-f", "-o", str(dest)]
+    # -C - resumes an interrupted download using HTTP range requests;
+    # HuggingFace supports range requests so this is always safe to pass.
+    cmd = ["curl", "-L", "-f", "-C", "-", "-o", str(dest)]
     if limit_rate:
         cmd += ["--limit-rate", limit_rate]
     cmd.append(auth_url)
