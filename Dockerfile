@@ -50,7 +50,7 @@ RUN set -e; \
 
 # Stage .so files into a flat dir — avoids glob issues with COPY --from
 RUN mkdir -p /staging/lib && \
-  find /llama.cpp/build -name "libllama*.so*" -o -name "libggml*.so*" | \
+  find /llama.cpp/build \( -name "libllama*.so*" -o -name "libggml*.so*" -o -name "libmtmd*.so*" \) | \
   xargs -I{} cp {} /staging/lib/
 
 
