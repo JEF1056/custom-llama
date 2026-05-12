@@ -1,5 +1,3 @@
-version: "3.8"
-
 networks:
   # Internal network: llama-server, kv-cache-proxy, tailscale, pipelines.
   # No host port mappings on services here — access via tailnet or pipelines only.
