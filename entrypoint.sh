@@ -5,10 +5,10 @@ set -e
 HOST=${LLAMA_HOST:-0.0.0.0}
 PORT=${LLAMA_PORT:-8080}
 THREADS=${LLAMA_THREADS:-6}
-THREADS_BATCH=${LLAMA_THREADS_BATCH:-12}
-CTX_SIZE=${LLAMA_CTX_SIZE:-200000}
+THREADS_BATCH=${LLAMA_THREADS_BATCH:-4}
+CTX_SIZE=${LLAMA_CTX_SIZE:-65536}
 BATCH_SIZE=${LLAMA_BATCH_SIZE:-4096}
-UBATCH_SIZE=${LLAMA_UBATCH_SIZE:-1024}
+UBATCH_SIZE=${LLAMA_UBATCH_SIZE:-2048}
 GPU_LAYERS=${LLAMA_GPU_LAYERS:-99}
 MAX_TOKENS=${LLAMA_MAX_TOKENS:--1}
 TOP_P=${LLAMA_TOP_P:-0.95}
@@ -31,6 +31,11 @@ PARALLEL=${LLAMA_PARALLEL:-2}
 # Memory mapping (off = mmap enabled, which is efficient for large models)
 # Set to "on" to disable mmap (loads entire model into RAM first — faster but requires more RAM)
 NO_MMAP=${LLAMA_NO_MMAP:-off}
+
+# Direct I/O: bypass OS page cache when loading the model file.
+# Recommended when all layers are GPU-offloaded — avoids caching ~9 GB of model
+# weights in RAM that are already resident in VRAM.
+DIRECT_IO=${LLAMA_DIRECT_IO:-off}
 
 # Reasoning mode (on = chain-of-thought output for reasoning models)
 # Per-model setting; enable for models trained with reasoning capabilities (e.g., DeepSeek-R1, QwQ)
@@ -137,6 +142,7 @@ echo "  KV Cache V: $CACHE_TYPE_V"
 echo "  Flash Attention: $FLASH_ATTN"
 echo "  Parallel Slots: $PARALLEL"
 echo "  Memory Mapping: $([ "$NO_MMAP" = "on" ] && echo "disabled (no-mmap)" || echo "enabled (mmap)")"
+echo "  Direct I/O: $([ "$DIRECT_IO" = "on" ] && echo "enabled" || echo "disabled")"
 echo "  Reasoning Mode: $REASONING"
 echo "  Preserve Thinking: $PRESERVE_THINKING"
 echo "  No KV Offload: $([ "$NO_KV_OFFLOAD" = "on" ] && echo "enabled" || echo "disabled")"
@@ -182,6 +188,7 @@ exec llama-server \
     ${STOP:+--stop "$STOP"} \
     ${PARALLEL:+--parallel "$PARALLEL"} \
     $([ "$NO_MMAP" = "on" ] && echo "--no-mmap") \
+    $([ "$DIRECT_IO" = "on" ] && echo "--direct-io") \
     --reasoning "$REASONING" \
     $([ "$PRESERVE_THINKING" = "on" ] && echo '--chat-template-kwargs {"preserve_thinking":true}') \
     $([ "$NO_KV_OFFLOAD" = "on" ] && echo "--no-kv-offload") \
