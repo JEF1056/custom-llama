@@ -669,6 +669,94 @@ curl http://llama-api.<tailnet>.ts.net:8080/v1/chat/completions \
   }'
 ```
 
+## Security
+
+### Threat model
+
+| Attacker | Capability | Mitigation |
+|---|---|---|
+| Public internet user | Can reach `chat.jessfan.com` | Must complete Google OAuth; rejected if no account exists |
+| Google account holder (not allowed) | Can attempt OAuth | `ENABLE_OAUTH_SIGNUP=false` (default) prevents account creation; existing-account check rejects unknowns |
+| Tailnet outsider | Cannot reach ports 8080 / 8181 / 18789 | All three are TCP-forwarded by the Tailscale sidecar — no host port mappings, no public exposure |
+| Tailnet member | Can reach llama.cpp API directly | Intentional; Tailscale ACLs restrict *which* tailnet devices can reach `tag:llama` |
+| Compromised `open-webui` container | On `webui-net` only | Cannot reach `llama-net` services directly — `llama-net: internal: true` and no cross-network route |
+| Compromised `open-webui-pipelines` | Bridges both networks | Only callable with a strong `PIPELINES_API_KEY`; can reach llama-server but not the internet (llama-net is internal) |
+
+### Network isolation
+
+```
+Internet ──► cloudflared ──► open-webui ──► open-webui-pipelines ──► llama-server
+                                                                  └──► kv-cache-proxy
+
+ts-net (internet ✓): tailscale only
+webui-net (internet ✓): cloudflared, open-webui, open-webui-pipelines (webui side)
+llama-net (internal ✗): tailscale, llama-server, kv-cache-proxy, openclaw-gateway,
+                         open-webui-pipelines (llama side)
+```
+
+Services on `llama-net` have no route to the public internet. The Tailscale sidecar
+is the only container that bridges `llama-net` and the internet (via `ts-net`), which
+it needs to reach the Tailscale coordination server.
+
+### Tailscale ACLs
+
+Configure your Tailscale ACL policy (admin console → Access controls) to restrict
+which devices can reach the inference ports. Example policy:
+
+```json
+{
+  "tagOwners": {
+    "tag:llama": ["autogroup:admin"]
+  },
+  "acls": [
+    {
+      "action": "accept",
+      "src":    ["autogroup:admin"],
+      "dst":    ["tag:llama:8080", "tag:llama:8181", "tag:llama:18789"]
+    }
+  ]
+}
+```
+
+Then tag the Tailscale auth key with `tag:llama` when generating it in
+`TS_EXTRA_ARGS=--advertise-tags=tag:llama`. Devices not in `autogroup:admin`
+will be denied even if they are on the tailnet.
+
+### First-run account creation
+
+`ENABLE_OAUTH_SIGNUP` defaults to `false`. Open WebUI special-cases the
+very first sign-in: when no accounts exist in the database, the first Google
+OAuth login creates an admin account **regardless of this setting**. After that,
+new signups are blocked.
+
+To add another allowed account:
+1. Set `ENABLE_OAUTH_SIGNUP=true` in `.env` and `docker compose restart open-webui`
+2. Have the user sign in once (account is created)
+3. Set it back to `false` and restart again
+
+### Secret checklist
+
+All five secrets must be set in `.env` before running `docker compose up`. The
+compose file will refuse to start with a clear error if any are missing.
+
+```bash
+# Generate all secrets at once
+echo "WEBUI_SECRET_KEY=$(openssl rand -hex 32)"
+echo "OPENCLAW_GATEWAY_TOKEN=$(openssl rand -hex 32)"
+echo "PIPELINES_API_KEY=$(openssl rand -hex 16)"
+```
+
+| Variable | Purpose | Generation |
+|---|---|---|
+| `WEBUI_SECRET_KEY` | Signs Open WebUI session cookies | `openssl rand -hex 32` |
+| `PIPELINES_API_KEY` | Authenticates Open WebUI → pipelines | `openssl rand -hex 16` |
+| `OPENCLAW_GATEWAY_TOKEN` | Authenticates CLI → OpenClaw Gateway | `openssl rand -hex 32` |
+| `TS_AUTHKEY` | Joins Tailscale tailnet | Tailscale admin console |
+| `CF_TUNNEL_TOKEN` | Authenticates Cloudflare Tunnel | Cloudflare Zero Trust |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google OAuth | Firebase / Google Cloud Console |
+
+---
+
 ## Troubleshooting
 
 ### Model file not found at startup

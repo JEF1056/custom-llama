@@ -1,8 +1,16 @@
 networks:
-  # Internal network: llama-server, kv-cache-proxy, tailscale, pipelines.
-  # No host port mappings on services here — access via tailnet or pipelines only.
+  # Internal-only network. Services here have NO route to the public internet.
+  # llama-server, kv-cache-proxy, openclaw-gateway, pipelines (llama side).
   llama-net:
-  # Semi-public network: open-webui, cloudflared, pipelines (bridges both nets).
+    internal: true
+
+  # Tailscale egress network. Only the tailscale sidecar is on this network so
+  # it can reach the Tailscale coordination server while keeping all other
+  # inference services air-gapped on llama-net.
+  ts-net:
+
+  # Outbound network for cloudflared and open-webui.
+  # The pipelines container also bridges here to receive requests from Open WebUI.
   webui-net:
 
 volumes:
@@ -76,7 +84,7 @@ services:
     container_name: tailscale-llama
     hostname: ${TS_HOSTNAME:-llama-api}
     environment:
-      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_AUTHKEY: ${TS_AUTHKEY:?TS_AUTHKEY must be set in .env (Tailscale admin → Settings → Keys)}
       TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
       TS_STATE_DIR: /var/lib/tailscale
       TS_SERVE_CONFIG: /config/serve.json
@@ -88,7 +96,8 @@ services:
       - NET_ADMIN
       - SYS_MODULE
     networks:
-      - llama-net
+      - llama-net   # TCP-forwards to llama-server, kv-cache-proxy, openclaw-gateway
+      - ts-net      # egress to Tailscale coordination server
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
@@ -149,7 +158,10 @@ services:
       LLAMA_TS: ${LLAMA_TS:-}
       LLAMA_NCMOE: ${LLAMA_NCMOE:-}
 
+      LLAMA_MUL_KV: ${LLAMA_MUL_KV:-on}
+      LLAMA_CACHE_CHUNK_SIZE: ${LLAMA_CACHE_CHUNK_SIZE:-0}
       LLAMA_NO_KV_OFFLOAD: ${LLAMA_NO_KV_OFFLOAD:-off}
+      LLAMA_CACHE_CAPACITY: ${LLAMA_CACHE_CAPACITY:-200000}
 
       # KV cache slot persistence — saves/restores slot state to disk so
       # per-conversation KV caches survive server restarts.
@@ -204,7 +216,7 @@ services:
       - ./pipelines:/app/pipelines
     environment:
       LLAMA_BASE_URL: http://llama-server:${LLAMA_PORT:-8080}
-      PIPELINES_API_KEY: ${PIPELINES_API_KEY:-0p3n-w3bu!}
+      PIPELINES_API_KEY: ${PIPELINES_API_KEY:?PIPELINES_API_KEY must be set in .env (generate with: openssl rand -hex 16)}
     networks:
       - llama-net
       - webui-net
@@ -223,19 +235,22 @@ services:
     volumes:
       - open-webui-data:/app/backend/data
     environment:
-      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-}
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:?WEBUI_SECRET_KEY must be set in .env (generate with: openssl rand -hex 32)}
       WEBUI_URL: ${WEBUI_URL:-https://chat.jessfan.com}
 
       # Google OAuth — credentials from Firebase Console or Google Cloud Console.
       # Firebase Console → Authentication → Sign-in method → Google → Web SDK config.
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?GOOGLE_CLIENT_ID must be set in .env}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?GOOGLE_CLIENT_SECRET must be set in .env}
       OPENID_PROVIDER_URL: ${OPENID_PROVIDER_URL:-https://accounts.google.com/.well-known/openid-configuration}
-      ENABLE_OAUTH_SIGNUP: ${ENABLE_OAUTH_SIGNUP:-true}
+
+      # false = only pre-existing accounts can sign in (set to true temporarily
+      # to create your first account, then set back to false and restart).
+      ENABLE_OAUTH_SIGNUP: ${ENABLE_OAUTH_SIGNUP:-false}
 
       # Route all completions through the pipelines server (KV cache management).
       OPENAI_API_BASE_URL: http://open-webui-pipelines:9099
-      OPENAI_API_KEY: ${PIPELINES_API_KEY:-0p3n-w3bu!}
+      OPENAI_API_KEY: ${PIPELINES_API_KEY:?PIPELINES_API_KEY must be set in .env}
 
       # Disable Ollama integration (not used in this setup).
       ENABLE_OLLAMA_API: "false"
@@ -266,7 +281,7 @@ services:
       - openclaw-data:/root/.openclaw
       - ./openclaw/openclaw.json:/root/.openclaw/openclaw.json:ro
     environment:
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:?OPENCLAW_GATEWAY_TOKEN must be set in .env (generate with: openssl rand -hex 32)}
     networks:
       - llama-net
     restart: unless-stopped
@@ -287,7 +302,7 @@ services:
     container_name: cloudflared
     command: tunnel --no-autoupdate run
     environment:
-      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN:-}
+      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN:?CF_TUNNEL_TOKEN must be set in .env (Cloudflare Zero Trust → Networks → Tunnels)}
     networks:
       - webui-net
     restart: unless-stopped
