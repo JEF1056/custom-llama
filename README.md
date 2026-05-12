@@ -49,10 +49,67 @@ A self-hosted LLM stack built around [llama.cpp (TurboQuant fork)](https://githu
 
 | Interface | URL / Command | Auth |
 |---|---|---|
+| **Local (host machine)** | `http://localhost:8080/v1` | None |
 | **Web UI** | `https://chat.jessfan.com` | Google OAuth (Firebase credentials) |
 | **CLI** | `openclaw --gateway http://<ts-host>:18789 agent --message "..."` | Gateway token (tailnet only) |
 | **Roo Code** | `http://<ts-host>:8181/v1` + `X-Session-ID` header | Tailnet only, no auth |
 | **Direct API** | `http://<ts-host>:8080/v1` | Tailnet only, no auth |
+
+## Local-only quick start (no Tailscale / Cloudflare needed)
+
+If you just want to run the inference server on the machine you're sitting at
+and call it from `localhost`, you don't need Tailscale, Cloudflare, or any of
+the web-UI secrets. Skip the external setup entirely.
+
+**1. Configure**
+
+```bash
+cp .env.default .env
+# Only required: MODEL_NAME, QUANT (and HF_TOKEN for gated models)
+# Leave TS_AUTHKEY, CF_TUNNEL_TOKEN, WEBUI_SECRET_KEY, etc. blank for now
+```
+
+**2. Expose the port locally**
+
+Add a `ports:` mapping to `llama-server` in `docker-compose.yml`, or create a
+`docker-compose.override.yml` (not committed) so the change doesn't touch the
+main file:
+
+```yaml
+# docker-compose.override.yml
+services:
+  llama-server:
+    ports:
+      - "8080:8080"
+```
+
+**3. Prepare a model and start**
+
+```bash
+docker compose build
+docker compose build llama-convert
+docker compose run --rm llama-convert download qwen3.5-9b --quant Q4_K_M
+
+# Start only the inference server (skips Tailscale, Cloudflare, Open WebUI, etc.)
+docker compose up -d llama-server
+docker compose logs -f llama-server   # wait until "llama server listening"
+```
+
+**4. Call it**
+
+```bash
+curl http://localhost:8080/health
+
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "custom",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+Any OpenAI-compatible client (LM Studio, Cursor, Roo Code, Continue, etc.) can
+point at `http://localhost:8080/v1` with any non-empty API key string.
 
 ## Prerequisites
 

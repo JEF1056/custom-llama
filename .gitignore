@@ -9,6 +9,7 @@ __pycache__/
 
 # Docker
 .docker/
+docker-compose.override.yml
 
 # OS files
 .DS_Store
