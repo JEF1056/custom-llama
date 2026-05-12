@@ -279,6 +279,8 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
     Uses the Python API (not the CLI) so that progress bars display correctly
     even in non-TTY environments such as Docker detached mode.
 
+    Falls back to curl-based download when huggingface_hub is not available.
+
     Returns:
         Path to the downloaded file (always a flat path inside local_dir).
     """
@@ -292,18 +294,19 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
         print(f"  Already cached: {dest.name} ({size_str})")
         return dest
 
-    try:
-        from huggingface_hub import hf_hub_download, enable_progress_bars
-    except ImportError:
-        print("Error: huggingface_hub not installed. Run: pip install huggingface_hub")
-        sys.exit(1)
-
-    # Force progress bars on even without a TTY (Docker -d mode, log output, etc.)
-    enable_progress_bars()
-
     _section(f"Downloading: {Path(filename).name}")
     print(f"  Repository  : {repo_id}")
     print(f"  Destination : {dest}")
+
+    # Try huggingface_hub first; fall back to curl if not installed.
+    try:
+        from huggingface_hub import hf_hub_download, enable_progress_bars
+    except ImportError:
+        print("  huggingface_hub not available — using curl fallback.")
+        return _curl_download_file(repo_id, filename, dest)
+
+    # Force progress bars on even without a TTY (Docker -d mode, log output, etc.)
+    enable_progress_bars()
 
     try:
         downloaded = Path(
@@ -322,6 +325,41 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
     except Exception as e:
         print(f"Error: Download failed: {e}")
         sys.exit(1)
+
+
+def _curl_download_file(repo_id: str, filename: str, dest: Path) -> Path:
+    """Download a file from HuggingFace using curl as a fallback when huggingface_hub is unavailable."""
+    # Build the download URL — raw content endpoint.
+    download_url = f"https://huggingface.co/{repo_id}/resolve/main/{filename}"
+
+    print(f"  Download URL  : {download_url}")
+
+    # Check if HF_TOKEN is set for gated/private repos.
+    hf_token = os.environ.get("HF_TOKEN", "")
+    if hf_token:
+        download_url = f"https://huggingface.co/{repo_id}/resolve/main/{filename}?token={hf_token}"
+
+    # Download with curl, showing progress (-#) and following redirects (-L).
+    print("  Using curl to download ...")
+    try:
+        result = subprocess.run(
+            ["curl", "-#", "-L", "-f", "-o", str(dest), download_url],
+            capture_output=False,
+            timeout=3600,
+        )
+        if result.returncode != 0:
+            print(f"\nError: curl download failed (exit {result.returncode})")
+            sys.exit(1)
+    except subprocess.TimeoutExpired:
+        print("\nError: curl download timed out after 1 hour")
+        sys.exit(1)
+    except FileNotFoundError:
+        print("Error: curl not found. Please install curl or huggingface_hub.")
+        sys.exit(1)
+
+    size_str = _fmt_bytes(dest.stat().st_size) if dest.exists() else "unknown"
+    print(f"\n  Done: {dest.name} ({size_str})")
+    return dest
 
 
 def _quantize(source: Path, dest: Path, quant: str) -> None:
