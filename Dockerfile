@@ -1,7 +1,7 @@
 # =============================================================================
 # Stage 1: Builder (CUDA)
 # =============================================================================
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS builder
+FROM nvidia/cuda:12.8.0-devel-ubuntu22.04 AS builder
 
 RUN apt-get update && \
   apt-get install -y --no-install-recommends \
@@ -57,7 +57,7 @@ RUN mkdir -p /staging/lib && \
 # =============================================================================
 # Stage 2: Runtime
 # =============================================================================
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
 
 RUN apt-get update && \
   apt-get install -y --no-install-recommends \
