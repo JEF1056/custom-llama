@@ -79,11 +79,9 @@ services:
       LLAMA_MMPROJ: ${LLAMA_MMPROJ:-}
       LLAMA_IMAGE: ${LLAMA_IMAGE:-}
 
-      HF_TOKEN: ${HF_TOKEN:-}
       MODEL_NAME: ${MODEL_NAME:-}
       QUANT: ${QUANT:-}
       TQ_QUANT: ${TQ_QUANT:-}
-      MMPROJ: ${MMPROJ:-}
 
       LLAMA_CACHE_TYPE_K: ${LLAMA_CACHE_TYPE_K:-f16}
       LLAMA_CACHE_TYPE_V: ${LLAMA_CACHE_TYPE_V:-f16}
@@ -109,4 +107,4 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 1800s  # allow up to 30 min for first-run model download + quantization
+      start_period: 300s  # allow up to 5 min for large model to load from disk

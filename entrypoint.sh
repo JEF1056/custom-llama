@@ -79,20 +79,21 @@ else
     MODEL=/models/model.gguf
 fi
 
-# Wait for model file to exist (handles model-manager download race condition)
-echo "Waiting for model file: $MODEL"
-MAX_WAIT=600  # 10 minutes max wait
-WAIT_COUNT=0
-while [ ! -f "$MODEL" ]; do
-    if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
-        echo "ERROR: Model file not found after ${MAX_WAIT}s. Aborting."
-        echo "Please ensure your model is in /models/ or set LLAMA_MODEL environment variable"
-        exit 1
+# Verify the model file exists — models must be prepared in advance using the
+# convert image (docker compose run --rm llama-convert download/convert-st …).
+if [ ! -f "$MODEL" ]; then
+    echo "ERROR: Model file not found: $MODEL"
+    echo ""
+    echo "Prepare the model first using the convert image, for example:"
+    if [ -n "$MODEL_NAME" ]; then
+        echo "  docker compose run --rm llama-convert download $MODEL_NAME --quant ${QUANT:-Q4_K_M}"
+        echo "  # or for safetensors-only models:"
+        echo "  docker compose run --rm llama-convert convert-st $MODEL_NAME --quant ${QUANT:-TQ2_0}"
+    else
+        echo "  docker compose run --rm llama-convert download <model-name> --quant <quant>"
     fi
-    echo "  Waiting for model file... (${WAIT_COUNT}s/${MAX_WAIT}s)"
-    sleep 5
-    WAIT_COUNT=$((WAIT_COUNT + 5))
-done
+    exit 1
+fi
 echo "Model file found: $MODEL"
 
 # Check if multimodal projector exists (if specified)
