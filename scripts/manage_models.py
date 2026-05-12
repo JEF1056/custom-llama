@@ -114,9 +114,8 @@ MODELS = {
         "fp16_repo": "unsloth/MiniMax-M2.7",
         "description": "MiniMax M2.7 (~18GB)",
         "size_gb": 18,
-        "notes": "Mixture-of-Experts model. Use Q8_0 quantization for best quality.",
+        "notes": "Mixture-of-Experts model. TurboQuant requires fp16 source from fp16_repo.",
         "turboquant": True,
-        "turboquant_source": "Q8_0",
     },
 }
 
@@ -128,6 +127,10 @@ TQ_QUANT_OPTIONS = [
     "TQ2_0",  # 2-bit per weight - better quality while still highly compressed
     "TQ1_0",  # 1-bit per weight - extreme compression
 ]
+
+# llama-quantize only accepts fp16 or bf16 as input when producing TurboQuant.
+# Lower quants (Q8_0, Q6_K, …) cannot be re-quantized to TQ targets.
+TQ_SOURCE_QUANTS = ["fp16", "bf16"]
 
 # Ordered list of quantization types from highest to lowest quality.
 # Used when selecting the best available source file for local quantization.
@@ -157,10 +160,9 @@ QUANT_PRIORITY = [
     "Q1_K",
 ]
 
-# Quantizations that are acceptable as re-quantization sources.
-# All standard quants including Q8_0 are valid inputs to llama-quantize.
-# (The historical concern about Q8_0 only applied to certain older llama.cpp builds
-# and does not affect TurboQuant targets.)
+# Quantizations that cannot be re-quantized to standard (non-TQ) targets.
+# For standard quants (Q4_K_M, Q6_K, …) llama-quantize accepts Q8_0 and higher
+# as sources.  TurboQuant is handled separately — see TQ_SOURCE_QUANTS above.
 NON_REQUANTIZABLE: set = set()
 
 
@@ -234,26 +236,36 @@ def find_quant_in_repo(repo_id: str, quant: str) -> str | None:
     return matches[0][0]
 
 
-def find_best_source_in_repo(repo_id: str) -> str | None:
+def find_best_source_in_repo(repo_id: str, allowed_quants: list | None = None) -> str | None:
     """Find the highest-quality GGUF in a repo suitable as a quantization source.
 
-    Walks QUANT_PRIORITY in order, skipping NON_REQUANTIZABLE types, and
-    returns the first match.  Falls back to NON_REQUANTIZABLE types only if
-    nothing better is available.
+    Walks QUANT_PRIORITY in order (or ``allowed_quants`` if provided), skipping
+    NON_REQUANTIZABLE types, and returns the first match.  Falls back to
+    NON_REQUANTIZABLE types only if nothing better is available (and no
+    ``allowed_quants`` restriction is in effect).
 
     Args:
         repo_id: HuggingFace repository ID
+        allowed_quants: Optional explicit list of quant strings to consider,
+            in priority order.  When provided, only these quants are tried and
+            the NON_REQUANTIZABLE fallback is skipped.  Use this to restrict
+            the source to fp16/bf16 for TurboQuant targets.
 
     Returns:
         Filename of the best source GGUF, or None if no GGUF exists.
     """
-    # First pass: prefer quants that can be re-quantized
-    for quant in QUANT_PRIORITY:
+    priority = allowed_quants if allowed_quants is not None else QUANT_PRIORITY
+
+    for quant in priority:
         if quant.upper() in NON_REQUANTIZABLE:
             continue
         match = find_quant_in_repo(repo_id, quant)
         if match:
             return match
+
+    if allowed_quants is not None:
+        # Strict list requested — do not fall back to other quants.
+        return None
 
     # Second pass: accept non-requantizable as last resort
     for quant in NON_REQUANTIZABLE:
@@ -479,11 +491,27 @@ def download_model(model_name: str, quant: str, output_dir: str) -> None:
     # ------------------------------------------------------------------ #
     if is_turboquant:
         print(f"  {quant} is a TurboQuant type — no pre-built GGUF exists on HuggingFace.")
+        print(f"  TurboQuant requires fp16 or bf16 source; searching {hf_repo} ...")
     else:
         print(f"  No pre-built {quant} found on HuggingFace.")
     print("  Will download the best available source and quantize locally.")
 
-    source_file = find_best_source_in_repo(hf_repo)
+    # TurboQuant (TQ1_0, TQ2_0) can only be produced from fp16 or bf16 input.
+    # Lower quants such as Q8_0 are not accepted by llama-quantize for TQ targets.
+    source_allowed = TQ_SOURCE_QUANTS if is_turboquant else None
+    source_file = find_best_source_in_repo(hf_repo, allowed_quants=source_allowed)
+
+    if source_file is None and is_turboquant:
+        fp16_repo = model_info.get("fp16_repo", hf_repo)
+        print(
+            f"Error: No fp16 or bf16 GGUF found in {hf_repo}.\n"
+            "TurboQuant (TQ1_0 / TQ2_0) can only be quantized from fp16 or bf16 GGUF.\n"
+            "The source weights may be available as safetensors and need converting first.\n"
+            "Use the convert image:\n"
+            f"  docker compose run --rm llama-convert convert-st {model_name} --quant {quant}\n"
+            f"  (downloads from {fp16_repo}, converts to fp16 GGUF, then quantizes)"
+        )
+        sys.exit(1)
 
     if source_file is None and "fp16_repo" in model_info:
         print(
@@ -558,6 +586,121 @@ def _maybe_download_mmproj(model_info: dict, output_path: Path) -> None:
     print(f"\nDownloading multimodal projector: {mmproj_filename} ...")
     _hf_download_file(repo_id, mmproj_filename, str(output_path))
     print(f"Multimodal projector ready: {mmproj_path}")
+
+
+def convert_safetensors(model_name: str, quant: str, output_dir: str) -> None:
+    """Convert a safetensors model to a quantized GGUF via fp16 GGUF intermediate.
+
+    Pipeline
+    --------
+    1. Download the safetensors repo (fp16_repo, or hf_repo if fp16_repo absent).
+    2. Run convert_hf_to_gguf.py → fp16 GGUF.
+    3. Run llama-quantize → target quant GGUF.
+    4. Clean up the safetensors download and the fp16 intermediate.
+
+    This command is only available in the ``convert`` Docker image, which ships
+    convert_hf_to_gguf.py and its Python dependencies (torch, transformers, …).
+
+    Args:
+        model_name: Key from the MODELS dict (e.g. "qwopus3.6-35b")
+        quant: Target quantization (e.g. "TQ2_0", "Q4_K_M")
+        output_dir: Directory where the final GGUF should be placed
+    """
+    # Locate convert_hf_to_gguf.py — expected in the same directory as this script
+    # when running inside the convert Docker image.
+    script_dir = Path(__file__).parent
+    convert_script = script_dir / "convert_hf_to_gguf.py"
+    if not convert_script.exists():
+        print(
+            "Error: convert_hf_to_gguf.py not found.\n"
+            "The 'convert-st' command requires the convert Docker image.\n"
+            "Build it with:  docker compose build llama-convert\n"
+            "Then run:       docker compose run --rm llama-convert convert-st "
+            f"{model_name} --quant {quant}"
+        )
+        sys.exit(1)
+
+    if model_name not in MODELS:
+        print(f"Error: Unknown model '{model_name}'")
+        print("Run 'manage_models.py list' to see available models.")
+        sys.exit(1)
+
+    model_info = MODELS[model_name]
+    source_repo = model_info.get("fp16_repo") or model_info["hf_repo"]
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    canonical = output_path / f"{model_name}-{quant}.gguf"
+
+    _section(f"Model: {model_name}  |  Quant: {quant}  |  Source: {source_repo}")
+    print(f"  Output : {canonical}")
+
+    if canonical.exists():
+        size_str = _fmt_bytes(canonical.stat().st_size)
+        print(f"\n  ✓ Already on disk: {canonical.name} ({size_str}) — skipping.")
+        _maybe_download_mmproj(model_info, output_path)
+        return
+
+    # ------------------------------------------------------------------ #
+    # 1. Download safetensors
+    # ------------------------------------------------------------------ #
+    _section(f"Downloading safetensors: {source_repo}")
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError:
+        print("Error: huggingface_hub is not installed.")
+        sys.exit(1)
+
+    hf_token = os.environ.get("HF_TOKEN") or None
+    st_dir = output_path / f".{model_name}-safetensors"
+
+    snapshot_download(
+        repo_id=source_repo,
+        local_dir=str(st_dir),
+        token=hf_token,
+        ignore_patterns=["*.md", "*.txt", "*.json.lock", "*.gguf"],
+    )
+
+    # ------------------------------------------------------------------ #
+    # 2. Convert safetensors → fp16 GGUF
+    # ------------------------------------------------------------------ #
+    fp16_gguf = output_path / f"{model_name}-fp16.gguf"
+    _section("Converting safetensors → fp16 GGUF")
+    print(f"  Source : {st_dir}")
+    print(f"  Output : {fp16_gguf.name}")
+
+    result = subprocess.run(
+        [
+            "python3", str(convert_script),
+            str(st_dir),
+            "--outtype", "f16",
+            "--outfile", str(fp16_gguf),
+        ],
+        stdout=None,
+        stderr=None,
+    )
+    if result.returncode != 0:
+        print(f"\nError: convert_hf_to_gguf.py failed (exit {result.returncode})")
+        sys.exit(1)
+
+    fp16_size = _fmt_bytes(fp16_gguf.stat().st_size) if fp16_gguf.exists() else "unknown"
+    print(f"\n  Done: {fp16_gguf.name} ({fp16_size})")
+
+    # ------------------------------------------------------------------ #
+    # 3. Quantize fp16 GGUF → target quant
+    # ------------------------------------------------------------------ #
+    _quantize(fp16_gguf, canonical, quant)
+
+    # ------------------------------------------------------------------ #
+    # 4. Clean up intermediate files
+    # ------------------------------------------------------------------ #
+    print(f"\n  Removing fp16 GGUF : {fp16_gguf.name}")
+    fp16_gguf.unlink(missing_ok=True)
+    print(f"  Removing safetensors cache : {st_dir}")
+    shutil.rmtree(st_dir, ignore_errors=True)
+
+    _done(canonical)
+    _maybe_download_mmproj(model_info, output_path)
 
 
 def convert_model(
@@ -709,6 +852,35 @@ def main():
         help=DEFAULT_OUTPUT_DIR_HELP,
     )
 
+    # Convert safetensors → fp16 GGUF → quantized GGUF (convert image only)
+    cst_parser = subparsers.add_parser(
+        "convert-st",
+        help=(
+            "Download safetensors weights, convert to fp16 GGUF via "
+            "convert_hf_to_gguf.py, then quantize. "
+            "Requires the convert Docker image (docker compose build llama-convert)."
+        ),
+    )
+    cst_parser.add_argument(
+        "model", help="Model name (e.g. qwopus3.6-35b)"
+    )
+    cst_parser.add_argument(
+        "-q",
+        "--quant",
+        default="TQ2_0",
+        help=(
+            "Target quantization (default: TQ2_0). "
+            f"TurboQuant: {', '.join(TQ_QUANT_OPTIONS)}. "
+            f"Standard: {', '.join(QUANT_PRIORITY[:8])} ..."
+        ),
+    )
+    cst_parser.add_argument(
+        "-o",
+        "--output-dir",
+        default=DEFAULT_MODELS_DIR,
+        help=DEFAULT_OUTPUT_DIR_HELP,
+    )
+
     args = parser.parse_args()
 
     if args.command == "list":
@@ -719,6 +891,8 @@ def main():
         convert_model(args.model_path, args.quant, args.output_dir)
     elif args.command == "turboquant":
         turboquant_model(args.model_path, args.quant, args.output_dir)
+    elif args.command == "convert-st":
+        convert_safetensors(args.model, args.quant, args.output_dir)
     else:
         parser.print_help()
 

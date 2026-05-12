@@ -1,6 +1,35 @@
 version: "3.8"
 
 services:
+  # ---------------------------------------------------------------------------
+  # One-off conversion helper: safetensors → fp16 GGUF → quantized GGUF
+  #
+  # Build the convert image once:
+  #   docker compose build llama-convert
+  #
+  # Then run a conversion (outputs land in ./models via the shared volume):
+  #   docker compose run --rm llama-convert convert-st <model> --quant TQ2_0
+  #
+  # After conversion completes, start the server as normal.
+  # ---------------------------------------------------------------------------
+  llama-convert:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: convert
+    image: llama-convert:latest
+    container_name: llama-convert
+    profiles: ["convert"]
+
+    volumes:
+      - ./models:/models:rw
+
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+
+    # No GPU needed for safetensors→GGUF conversion (CPU torch).
+    # llama-quantize (step 2) is CPU-only in the convert image as well.
+
   llama-server:
     build:
       context: .

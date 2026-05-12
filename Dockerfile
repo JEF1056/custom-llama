@@ -55,9 +55,9 @@ RUN mkdir -p /staging/lib && \
 
 
 # =============================================================================
-# Stage 2: Runtime
+# Stage 2: Runtime (lean server image — no torch, no conversion tooling)
 # =============================================================================
-FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04 AS runtime
 
 RUN apt-get update && \
   apt-get install -y --no-install-recommends \
@@ -109,3 +109,33 @@ HEALTHCHECK --interval=60s --timeout=15s --retries=3 --start-period=120s \
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["--host", "0.0.0.0", "--port", "8080"]
+
+
+# =============================================================================
+# Stage 3: Convert (one-off safetensors → fp16 GGUF → quantized GGUF)
+#
+# Build:  docker build --target convert -t llama-convert .
+# Usage:  docker run --rm -v ./models:/models llama-convert \
+#           convert-st <model-name> --quant TQ2_0
+#
+# CPU-only torch keeps the image ~3 GB lighter than CUDA torch.
+# Conversion is memory-bound, not compute-bound — CPU is sufficient.
+# =============================================================================
+FROM runtime AS convert
+
+# Pull the HF→GGUF conversion script and its support package from the builder.
+COPY --from=builder /llama.cpp/convert_hf_to_gguf.py /scripts/convert_hf_to_gguf.py
+COPY --from=builder /llama.cpp/gguf-py/ /scripts/gguf-py/
+
+RUN python3 -m pip install --no-cache-dir \
+  torch --index-url https://download.pytorch.org/whl/cpu && \
+  python3 -m pip install --no-cache-dir \
+  transformers \
+  safetensors \
+  sentencepiece \
+  accelerate \
+  /scripts/gguf-py/
+
+# Override entrypoint: this image is a CLI tool, not a long-running server.
+ENTRYPOINT ["python3", "/scripts/manage_models.py"]
+CMD ["--help"]
