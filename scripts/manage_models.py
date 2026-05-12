@@ -4,12 +4,14 @@ Model management script for downloading and converting LLM models.
 Supports downloading models from HuggingFace and converting to GGUF format.
 """
 
+import contextlib
 import os
 import sys
 import argparse
 import json
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -291,6 +293,11 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
     Uses the Python API (not the CLI) so that progress bars display correctly
     even in non-TTY environments such as Docker detached mode.
 
+    When CONVERT_DOWNLOAD_RATE is set (e.g. "300M"), routes through curl with
+    --limit-rate instead.  Throttling write throughput reduces the disk-write
+    interrupt storm that causes WSL2's vmmem to balloon and can trigger a
+    CLOCK_WATCHDOG_TIMEOUT BSOD on Windows before quantization even starts.
+
     Falls back to curl-based download when huggingface_hub is not available.
 
     Returns:
@@ -309,6 +316,13 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
     _section(f"Downloading: {Path(filename).name}")
     print(f"  Repository  : {repo_id}")
     print(f"  Destination : {dest}")
+
+    # When CONVERT_DOWNLOAD_RATE is set, use curl with --limit-rate to cap
+    # write throughput and prevent WSL2 memory balloon / BSOD on Windows.
+    download_rate = os.environ.get("CONVERT_DOWNLOAD_RATE", "").strip()
+    if download_rate:
+        print(f"  Rate limit  : {download_rate} (CONVERT_DOWNLOAD_RATE)")
+        return _curl_download_file(repo_id, filename, dest, limit_rate=download_rate)
 
     # Try huggingface_hub first; fall back to curl if not installed.
     try:
@@ -339,26 +353,36 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
         sys.exit(1)
 
 
-def _curl_download_file(repo_id: str, filename: str, dest: Path) -> Path:
-    """Download a file from HuggingFace using curl as a fallback when huggingface_hub is unavailable."""
-    # Build the download URL — raw content endpoint.
+def _curl_download_file(
+    repo_id: str, filename: str, dest: Path, limit_rate: str = ""
+) -> Path:
+    """Download a file from HuggingFace using curl.
+
+    Used as the fallback when huggingface_hub is unavailable, and also as the
+    primary downloader when CONVERT_DOWNLOAD_RATE is set — curl's --limit-rate
+    caps write throughput which prevents the WSL2 vmmem balloon that can cause
+    CLOCK_WATCHDOG_TIMEOUT BSODs on Windows during large file downloads.
+
+    Args:
+        limit_rate: Optional curl --limit-rate value (e.g. "300M").  When empty,
+            curl downloads at full speed.
+    """
     download_url = f"https://huggingface.co/{repo_id}/resolve/main/{filename}"
 
     print(f"  Download URL  : {download_url}")
 
-    # Check if HF_TOKEN is set for gated/private repos.
     hf_token = os.environ.get("HF_TOKEN", "")
     if hf_token:
         download_url = f"https://huggingface.co/{repo_id}/resolve/main/{filename}?token={hf_token}"
 
-    # Download with curl, showing progress (-#) and following redirects (-L).
+    cmd = ["curl", "-#", "-L", "-f", "-o", str(dest)]
+    if limit_rate:
+        cmd += ["--limit-rate", limit_rate]
+    cmd.append(download_url)
+
     print("  Using curl to download ...")
     try:
-        result = subprocess.run(
-            ["curl", "-#", "-L", "-f", "-o", str(dest), download_url],
-            capture_output=False,
-            timeout=3600,
-        )
+        result = subprocess.run(cmd, capture_output=False, timeout=3600)
         if result.returncode != 0:
             print(f"\nError: curl download failed (exit {result.returncode})")
             sys.exit(1)
@@ -374,23 +398,88 @@ def _curl_download_file(repo_id: str, filename: str, dest: Path) -> Path:
     return dest
 
 
-def _quantize(source: Path, dest: Path, quant: str) -> None:
+@contextlib.contextmanager
+def _keepalive(interval: int = 30, label: str = ""):
+    """Print periodic heartbeat lines to prevent Docker watchdog timeouts on Windows.
+
+    Docker Desktop on Windows (Hyper-V / WSL2) kills containers that produce no
+    stdout/stderr for an extended period. Long operations like llama-quantize or
+    convert_hf_to_gguf.py can run silently for many minutes, triggering the watchdog.
+    This context manager starts a daemon thread that prints a timestamped line every
+    ``interval`` seconds so the watchdog sees continuous activity.
+    """
+    stop = threading.Event()
+    prefix = f"  [{label}] " if label else "  "
+
+    def _loop():
+        count = 0
+        while not stop.wait(interval):
+            count += 1
+            elapsed = count * interval
+            mins, secs = divmod(elapsed, 60)
+            elapsed_str = f"{mins}m {secs}s" if mins else f"{secs}s"
+            print(f"{prefix}still running... ({elapsed_str} elapsed)", flush=True)
+
+    t = threading.Thread(target=_loop, daemon=True)
+    t.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        t.join(timeout=1)
+
+
+def _resolve_nthreads(nthreads: int | None) -> int:
+    """Return the thread count to pass to llama-quantize.
+
+    Resolution order:
+    1. Explicit ``nthreads`` argument (from --threads CLI flag).
+    2. ``CONVERT_THREADS`` environment variable.
+    3. Half the logical CPU count (leaves the other half for the host OS).
+
+    Capping quantization threads is critical on Windows (Docker Desktop / WSL2):
+    saturating every logical CPU starves the host kernel's watchdog timer and
+    can trigger a CLOCK_WATCHDOG_TIMEOUT BSOD.
+    """
+    if nthreads is not None and nthreads > 0:
+        return nthreads
+
+    env_val = os.environ.get("CONVERT_THREADS", "").strip()
+    if env_val.isdigit() and int(env_val) > 0:
+        return int(env_val)
+
+    cpu_count = os.cpu_count() or 4
+    return max(1, cpu_count // 2)
+
+
+def _quantize(source: Path, dest: Path, quant: str, nthreads: int | None = None) -> None:
     """Run llama-quantize to produce dest from source with the given quant type.
 
     Streams llama-quantize output directly to the console and exits on failure.
+
+    Args:
+        source: Input GGUF file (fp16, bf16, Q8_0, or any supported source quant).
+        dest: Output GGUF path.
+        quant: Target quantization string (e.g. "Q4_K_M", "TQ2_0").
+        nthreads: Number of CPU threads to use. Falls back to CONVERT_THREADS env
+            var, then cpu_count//2. Limiting threads prevents CLOCK_WATCHDOG_TIMEOUT
+            BSODs on Windows when Docker saturates all host CPU cores.
     """
+    threads = _resolve_nthreads(nthreads)
     source_size = _fmt_bytes(source.stat().st_size) if source.exists() else "unknown"
     _section(f"Quantizing to {quant}")
-    print(f"  Source : {source.name} ({source_size})")
-    print(f"  Output : {dest.name}")
+    print(f"  Source  : {source.name} ({source_size})")
+    print(f"  Output  : {dest.name}")
+    print(f"  Threads : {threads}")
 
     t0 = time.monotonic()
     try:
-        result = subprocess.run(
-            ["llama-quantize", str(source), str(dest), quant],
-            stdout=None,
-            stderr=None,
-        )
+        with _keepalive(30, "quantize"):
+            result = subprocess.run(
+                ["llama-quantize", str(source), str(dest), quant, str(threads)],
+                stdout=None,
+                stderr=None,
+            )
         if result.returncode != 0:
             print(f"\nError: llama-quantize failed (exit {result.returncode})")
             sys.exit(1)
@@ -419,7 +508,7 @@ def _done(path: Path) -> None:
     print(f"\n  ✓ Model ready: {path.name} ({size_str})")
 
 
-def download_model(model_name: str, quant: str, output_dir: str) -> None:
+def download_model(model_name: str, quant: str, output_dir: str, nthreads: int | None = None) -> None:
     """Download (and if necessary locally quantize) a model.
 
     Algorithm
@@ -530,9 +619,9 @@ def download_model(model_name: str, quant: str, output_dir: str) -> None:
 
     actual_source = _hf_download_file(hf_repo, source_file, str(output_path))
 
-    _quantize(actual_source, canonical, quant)
+    _quantize(actual_source, canonical, quant, nthreads=nthreads)
 
-    print(f"\n  Removing source file: {actual_source.name}")
+    print(f"\n  Removing source GGUF : {actual_source.name}")
     actual_source.unlink(missing_ok=True)
 
     _done(canonical)
@@ -588,7 +677,7 @@ def _maybe_download_mmproj(model_info: dict, output_path: Path) -> None:
     print(f"Multimodal projector ready: {mmproj_path}")
 
 
-def convert_safetensors(model_name: str, quant: str, output_dir: str) -> None:
+def convert_safetensors(model_name: str, quant: str, output_dir: str, nthreads: int | None = None) -> None:
     """Convert a safetensors model to a quantized GGUF via fp16 GGUF intermediate.
 
     Pipeline
@@ -654,11 +743,14 @@ def convert_safetensors(model_name: str, quant: str, output_dir: str) -> None:
     hf_token = os.environ.get("HF_TOKEN") or None
     st_dir = output_path / f".{model_name}-safetensors"
 
+    # max_workers=1 serializes shard downloads to avoid the simultaneous disk-
+    # write pressure that causes WSL2's vmmem to balloon on Windows.
     snapshot_download(
         repo_id=source_repo,
         local_dir=str(st_dir),
         token=hf_token,
         ignore_patterns=["*.md", "*.txt", "*.json.lock", "*.gguf"],
+        max_workers=1,
     )
 
     # ------------------------------------------------------------------ #
@@ -669,16 +761,17 @@ def convert_safetensors(model_name: str, quant: str, output_dir: str) -> None:
     print(f"  Source : {st_dir}")
     print(f"  Output : {fp16_gguf.name}")
 
-    result = subprocess.run(
-        [
-            "python3", str(convert_script),
-            str(st_dir),
-            "--outtype", "f16",
-            "--outfile", str(fp16_gguf),
-        ],
-        stdout=None,
-        stderr=None,
-    )
+    with _keepalive(30, "convert"):
+        result = subprocess.run(
+            [
+                "python3", str(convert_script),
+                str(st_dir),
+                "--outtype", "f16",
+                "--outfile", str(fp16_gguf),
+            ],
+            stdout=None,
+            stderr=None,
+        )
     if result.returncode != 0:
         print(f"\nError: convert_hf_to_gguf.py failed (exit {result.returncode})")
         sys.exit(1)
@@ -689,14 +782,14 @@ def convert_safetensors(model_name: str, quant: str, output_dir: str) -> None:
     # ------------------------------------------------------------------ #
     # 3. Quantize fp16 GGUF → target quant
     # ------------------------------------------------------------------ #
-    _quantize(fp16_gguf, canonical, quant)
+    _quantize(fp16_gguf, canonical, quant, nthreads=nthreads)
 
     # ------------------------------------------------------------------ #
-    # 4. Clean up intermediate files
+    # 4. Clean up intermediate files (only on success — preserves resumability)
     # ------------------------------------------------------------------ #
     print(f"\n  Removing fp16 GGUF : {fp16_gguf.name}")
     fp16_gguf.unlink(missing_ok=True)
-    print(f"  Removing safetensors cache : {st_dir}")
+    print(f"  Removing safetensors cache : {st_dir.name}")
     shutil.rmtree(st_dir, ignore_errors=True)
 
     _done(canonical)
@@ -707,6 +800,7 @@ def convert_model(
     model_path: str,
     quant_method: str = "Q4_K_M",
     output_dir: str = DEFAULT_MODELS_DIR,
+    nthreads: int | None = None,
 ) -> None:
     """Re-quantize an existing GGUF to a different quantization using llama-quantize."""
     output_path = Path(output_dir)
@@ -723,7 +817,7 @@ def convert_model(
     output_file_path = output_path / output_file
     print(f"Converting {model_path} to {quant_method} quantization...")
     print(f"Output: {output_file_path}")
-    _quantize(Path(model_path), output_file_path, quant_method)
+    _quantize(Path(model_path), output_file_path, quant_method, nthreads=nthreads)
     print(f"Model converted to: {output_file_path}")
 
 
@@ -731,6 +825,7 @@ def turboquant_model(
     model_path: str,
     quant_method: str = "TQ2_0",
     output_dir: str = DEFAULT_MODELS_DIR,
+    nthreads: int | None = None,
 ) -> None:
     """Convert a GGUF model to TurboQuant format using llama-quantize."""
     output_path = Path(output_dir)
@@ -744,7 +839,7 @@ def turboquant_model(
     print(f"Output: {output_file_path}")
     print("Note: TurboQuant models are ~2-bit or ~1-bit per weight for extreme compression")
     print("Important: For best quality, convert from FP16 if available, or Q8_0")
-    _quantize(Path(model_path), output_file_path, quant_method)
+    _quantize(Path(model_path), output_file_path, quant_method, nthreads=nthreads)
     print(f"Model converted to TurboQuant: {output_file_path}")
 
 
@@ -789,6 +884,12 @@ def main():
     # List models
     subparsers.add_parser("list", help="List available models")
 
+    _threads_help = (
+        "Number of CPU threads for llama-quantize (default: CONVERT_THREADS env var, "
+        "or cpu_count//2). Limiting threads prevents CLOCK_WATCHDOG_TIMEOUT BSODs "
+        "on Windows when Docker Desktop saturates all host CPU cores."
+    )
+
     # Download model
     download_parser = subparsers.add_parser("download", help="Download a model")
     download_parser.add_argument(
@@ -813,6 +914,9 @@ def main():
         default=DEFAULT_MODELS_DIR,
         help=DEFAULT_OUTPUT_DIR_HELP,
     )
+    download_parser.add_argument(
+        "-t", "--threads", type=int, default=None, metavar="N", help=_threads_help
+    )
 
     # Convert model (re-quantize an existing GGUF)
     convert_parser = subparsers.add_parser("convert", help="Re-quantize an existing GGUF")
@@ -832,6 +936,9 @@ def main():
         default=DEFAULT_MODELS_DIR,
         help=DEFAULT_OUTPUT_DIR_HELP,
     )
+    convert_parser.add_argument(
+        "-t", "--threads", type=int, default=None, metavar="N", help=_threads_help
+    )
 
     # TurboQuant model
     tq_parser = subparsers.add_parser("turboquant", help="Convert a GGUF to TurboQuant format")
@@ -850,6 +957,9 @@ def main():
         "--output-dir",
         default=DEFAULT_MODELS_DIR,
         help=DEFAULT_OUTPUT_DIR_HELP,
+    )
+    tq_parser.add_argument(
+        "-t", "--threads", type=int, default=None, metavar="N", help=_threads_help
     )
 
     # Convert safetensors → fp16 GGUF → quantized GGUF (convert image only)
@@ -880,19 +990,22 @@ def main():
         default=DEFAULT_MODELS_DIR,
         help=DEFAULT_OUTPUT_DIR_HELP,
     )
+    cst_parser.add_argument(
+        "-t", "--threads", type=int, default=None, metavar="N", help=_threads_help
+    )
 
     args = parser.parse_args()
 
     if args.command == "list":
         list_models()
     elif args.command == "download":
-        download_model(args.model, args.quant, args.output_dir)
+        download_model(args.model, args.quant, args.output_dir, nthreads=args.threads)
     elif args.command == "convert":
-        convert_model(args.model_path, args.quant, args.output_dir)
+        convert_model(args.model_path, args.quant, args.output_dir, nthreads=args.threads)
     elif args.command == "turboquant":
-        turboquant_model(args.model_path, args.quant, args.output_dir)
+        turboquant_model(args.model_path, args.quant, args.output_dir, nthreads=args.threads)
     elif args.command == "convert-st":
-        convert_safetensors(args.model, args.quant, args.output_dir)
+        convert_safetensors(args.model, args.quant, args.output_dir, nthreads=args.threads)
     else:
         parser.print_help()
 

@@ -40,6 +40,18 @@ services:
     environment:
       HF_TOKEN: ${HF_TOKEN:-}
 
+      # Throttle download write speed to prevent WSL2 vmmem balloon / BSOD.
+      # Uses curl --limit-rate when set (e.g. CONVERT_DOWNLOAD_RATE=300M).
+      # Leave unset to download at full speed.
+      CONVERT_DOWNLOAD_RATE: ${CONVERT_DOWNLOAD_RATE:-}
+
+      # Limit CPU threads used by llama-quantize during local quantization.
+      # Leaving this unset defaults to cpu_count//2, which reserves half the
+      # logical cores for the Windows host and prevents CLOCK_WATCHDOG_TIMEOUT
+      # BSODs caused by Docker saturating every CPU core.
+      # Override in .env: CONVERT_THREADS=4
+      CONVERT_THREADS: ${CONVERT_THREADS:-}
+
     # No GPU needed — conversion and quantization run on CPU.
 
   llama-server:

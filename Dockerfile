@@ -124,6 +124,15 @@ CMD ["--host", "0.0.0.0", "--port", "8080"]
 # =============================================================================
 FROM runtime AS convert
 
+# llama-quantize is linked against libcuda.so.1, which is normally injected by
+# the NVIDIA container runtime from the host driver.  llama-convert runs without
+# GPU access, so the injection never happens and the binary fails to start.
+# Copying the build-time stub satisfies the dynamic linker; quantization itself
+# is purely CPU-bound so nothing ever calls into the real driver.
+COPY --from=builder /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so
+RUN ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH}
+
 # Model management tools not present in the runtime image
 COPY --from=builder /llama.cpp/build/bin/llama-quantize /usr/local/bin/llama-quantize
 
