@@ -64,34 +64,19 @@ NCMOE=${LLAMA_NCMOE:-}
 MMPROJ=${LLAMA_MMPROJ:-}  # Multimodal projector file (.mmproj)
 IMAGE=${LLAMA_IMAGE:-}     # Image file for multimodal input (base64 or path)
 
-# Determine model path
-# Priority: 1) LLAMA_MODEL env var, 2) default model.gguf
+# Determine model path.
+# Priority:
+#   1) LLAMA_MODEL — explicit path to a .gguf already in /models
+#   2) MODEL_NAME + QUANT — constructs /models/{MODEL_NAME}-{QUANT}.gguf
+#      (model must have been prepared beforehand by the convert image)
+#   3) fallback to /models/model.gguf
 if [ -n "$LLAMA_MODEL" ]; then
     MODEL="$LLAMA_MODEL"
+elif [ -n "$MODEL_NAME" ]; then
+    QUANT="${QUANT:-${TQ_QUANT:-Q4_K_M}}"
+    MODEL="/models/${MODEL_NAME}-${QUANT}.gguf"
 else
     MODEL=/models/model.gguf
-fi
-
-# Download (and if necessary locally quantize) model at runtime if MODEL_NAME is set.
-# QUANT takes any standard or TurboQuant value; TQ_QUANT is honoured as a legacy alias.
-if [ -n "$MODEL_NAME" ]; then
-    QUANT="${QUANT:-${TQ_QUANT:-Q4_K_M}}"
-
-    echo "========================================"
-    echo "  Model Preparation"
-    echo "========================================"
-    echo "  Model : $MODEL_NAME"
-    echo "  Quant : $QUANT"
-    echo ""
-
-    python3 /scripts/manage_models.py download "$MODEL_NAME" \
-        --quant "$QUANT" \
-        -o /models
-
-    MODEL="/models/${MODEL_NAME}-${QUANT}.gguf"
-    echo ""
-    echo "Model ready: $MODEL"
-    echo ""
 fi
 
 # Wait for model file to exist (handles model-manager download race condition)

@@ -55,7 +55,10 @@ RUN mkdir -p /staging/lib && \
 
 
 # =============================================================================
-# Stage 2: Runtime (lean server image — no torch, no conversion tooling)
+# Stage 2: Runtime (server only — assumes models are already in /models volume)
+#
+# Model preparation is handled entirely by the convert image (stage 3).
+# This image contains only llama-server and its runtime dependencies.
 # =============================================================================
 FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04 AS runtime
 
@@ -63,9 +66,6 @@ RUN apt-get update && \
   apt-get install -y --no-install-recommends \
   bash \
   curl \
-  wget \
-  python3 \
-  python3-pip \
   libopenblas0-pthread \
   libssl3 \
   libcublas-12-4 \
@@ -75,8 +75,8 @@ RUN apt-get update && \
 ENV MODEL_DIR=/models
 RUN mkdir -p /models
 
-# Copy binaries (real files, not symlinks)
-COPY --from=builder /llama.cpp/build/bin/ /usr/local/bin/
+# llama-server only — quantize and model-management tools live in the convert image
+COPY --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
 
 # Copy .so files from staging dir
 RUN mkdir -p /opt/llama/lib
@@ -89,18 +89,11 @@ RUN --mount=from=builder,target=/builder \
 ENV LD_LIBRARY_PATH=/opt/llama/lib:/usr/local/cuda/lib64:/usr/local/nvidia/lib64:/usr/lib:$LD_LIBRARY_PATH
 ENV PATH=/usr/local/bin:$PATH
 
-RUN python3 -m pip install --no-cache-dir huggingface_hub
-
-COPY scripts/manage_models.py /scripts/manage_models.py
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh && sed -i 's/\r$//' /entrypoint.sh
-
-# Fail fast at build time if critical binaries are missing
-RUN for bin in llama-server llama-quantize; do \
-  if [ ! -x "/usr/local/bin/$bin" ]; then \
-  echo "ERROR: /usr/local/bin/$bin is missing or not executable" && exit 1; \
-  fi; \
-  done
+RUN chmod +x /entrypoint.sh && sed -i 's/\r$//' /entrypoint.sh && \
+  if [ ! -x "/usr/local/bin/llama-server" ]; then \
+  echo "ERROR: /usr/local/bin/llama-server is missing or not executable" && exit 1; \
+  fi
 
 EXPOSE 8080
 
@@ -112,24 +105,42 @@ CMD ["--host", "0.0.0.0", "--port", "8080"]
 
 
 # =============================================================================
-# Stage 3: Convert (one-off safetensors → fp16 GGUF → quantized GGUF)
+# Stage 3: Convert (model preparation — download, quantize, convert safetensors)
 #
-# Build:  docker build --target convert -t llama-convert .
-# Usage:  docker run --rm -v ./models:/models llama-convert \
-#           convert-st <model-name> --quant TQ2_0
+# Run before starting the server to prepare models in the shared /models volume.
+#
+# Examples:
+#   # Download a pre-built quant:
+#   docker compose run --rm llama-convert download qwen3.5-27b --quant Q4_K_M
+#
+#   # Download + quantize (fp16 GGUF source on HF):
+#   docker compose run --rm llama-convert download qwen3.6-27b --quant TQ2_0
+#
+#   # Convert safetensors → fp16 GGUF → quant (no pre-built GGUF exists):
+#   docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant TQ2_0
 #
 # CPU-only torch keeps the image ~3 GB lighter than CUDA torch.
-# Conversion is memory-bound, not compute-bound — CPU is sufficient.
+# Conversion is memory-bound, not compute-bound — CPU is fine.
 # =============================================================================
 FROM runtime AS convert
+
+# Model management tools not present in the runtime image
+COPY --from=builder /llama.cpp/build/bin/llama-quantize /usr/local/bin/llama-quantize
+
+# Python stack for model download and HF→GGUF conversion
+RUN apt-get update && \
+  apt-get install -y --no-install-recommends python3 python3-pip && \
+  rm -rf /var/lib/apt/lists/*
 
 # Pull the HF→GGUF conversion script and its support package from the builder.
 COPY --from=builder /llama.cpp/convert_hf_to_gguf.py /scripts/convert_hf_to_gguf.py
 COPY --from=builder /llama.cpp/gguf-py/ /scripts/gguf-py/
+COPY scripts/manage_models.py /scripts/manage_models.py
 
 RUN python3 -m pip install --no-cache-dir \
   torch --index-url https://download.pytorch.org/whl/cpu && \
   python3 -m pip install --no-cache-dir \
+  huggingface_hub \
   transformers \
   safetensors \
   sentencepiece \

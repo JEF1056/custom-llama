@@ -2,15 +2,28 @@ version: "3.8"
 
 services:
   # ---------------------------------------------------------------------------
-  # One-off conversion helper: safetensors → fp16 GGUF → quantized GGUF
+  # Model preparation (download / quantize / convert) — run before the server.
+  # All model prep is handled here; the runtime image only serves /models.
   #
-  # Build the convert image once:
+  # Build once:
   #   docker compose build llama-convert
   #
-  # Then run a conversion (outputs land in ./models via the shared volume):
-  #   docker compose run --rm llama-convert convert-st <model> --quant TQ2_0
+  # Then prepare a model (output lands in ./models via the shared volume):
   #
-  # After conversion completes, start the server as normal.
+  #   Pre-built GGUF on HuggingFace:
+  #     docker compose run --rm llama-convert download qwen3.5-27b --quant Q4_K_M
+  #
+  #   No pre-built quant but fp16 GGUF exists (quantized locally):
+  #     docker compose run --rm llama-convert download qwen3.6-27b --quant TQ2_0
+  #
+  #   Safetensors-only repo (convert → fp16 GGUF → quantize):
+  #     docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant TQ2_0
+  #
+  #   Re-quantize an existing GGUF already in ./models:
+  #     docker compose run --rm llama-convert convert /models/model-Q8_0.gguf --quant Q4_K_M
+  #
+  # After preparation, start the server as normal:
+  #   docker compose up llama-server
   # ---------------------------------------------------------------------------
   llama-convert:
     build:
@@ -27,8 +40,7 @@ services:
     environment:
       HF_TOKEN: ${HF_TOKEN:-}
 
-    # No GPU needed for safetensors→GGUF conversion (CPU torch).
-    # llama-quantize (step 2) is CPU-only in the convert image as well.
+    # No GPU needed — conversion and quantization run on CPU.
 
   llama-server:
     build:
