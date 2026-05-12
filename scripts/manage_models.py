@@ -299,7 +299,12 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
     interrupt storm that causes WSL2's vmmem to balloon and can trigger a
     CLOCK_WATCHDOG_TIMEOUT BSOD on Windows before quantization even starts.
 
-    Falls back to curl-based download when huggingface_hub is not available.
+    When hf_transfer is installed (pip install hf-transfer) and
+    HF_HUB_ENABLE_HF_TRANSFER=1 is set, huggingface_hub routes all downloads
+    through a Rust-based multi-connection engine for a significant speedup.
+
+    Falls back to aria2c (16 parallel connections) or curl when
+    huggingface_hub is not available.
 
     Returns:
         Path to the downloaded file (always a flat path inside local_dir).
@@ -325,19 +330,34 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
         print(f"  Rate limit  : {download_rate} (CONVERT_DOWNLOAD_RATE)")
         return _curl_download_file(repo_id, filename, dest, limit_rate=download_rate)
 
-    # Try huggingface_hub first; fall back to curl if not installed.
+    # Import huggingface_hub module first; guard hf_hub_download separately from
+    # enable_progress_bars so a missing/renamed helper doesn't prevent downloads.
     try:
-        from huggingface_hub import hf_hub_download, enable_progress_bars
-    except ImportError:
-        print("  huggingface_hub not available — using curl fallback.")
+        import huggingface_hub as _hfh
+        _hf_hub_download = _hfh.hf_hub_download
+    except (ImportError, AttributeError):
+        print("  huggingface_hub not available — using aria2c/curl fallback.")
         return _curl_download_file(repo_id, filename, dest)
 
-    # Force progress bars on even without a TTY (Docker -d mode, log output, etc.)
-    enable_progress_bars()
+    # enable_progress_bars: present since 0.14.0; silently skip if absent.
+    try:
+        _hfh.enable_progress_bars()
+    except AttributeError:
+        pass
+
+    # hf_transfer: Rust parallel downloader (pip install hf-transfer).
+    # Auto-enable when the package is present and the env var isn't already set.
+    if os.environ.get("HF_HUB_ENABLE_HF_TRANSFER", "0") != "1":
+        try:
+            import hf_transfer  # noqa: F401 — presence check only
+            os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+            print("  hf_transfer detected — enabling fast parallel download.")
+        except ImportError:
+            pass
 
     try:
         downloaded = Path(
-            hf_hub_download(
+            _hf_hub_download(
                 repo_id=repo_id,
                 filename=filename,
                 local_dir=str(output_path),
@@ -357,38 +377,72 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
 def _curl_download_file(
     repo_id: str, filename: str, dest: Path, limit_rate: str = ""
 ) -> Path:
-    """Download a file from HuggingFace using curl.
+    """Download a file from HuggingFace.
 
-    Used as the fallback when huggingface_hub is unavailable, and also as the
-    primary downloader when CONVERT_DOWNLOAD_RATE is set — curl's --limit-rate
-    caps write throughput which prevents the WSL2 vmmem balloon that can cause
-    CLOCK_WATCHDOG_TIMEOUT BSODs on Windows during large file downloads.
+    When *limit_rate* is empty and aria2c is available, downloads via
+    aria2c with 16 parallel connections — this saturates typical network
+    links far better than a single TCP stream.
+
+    When *limit_rate* is set (WSL2 BSOD throttle path), or when aria2c is
+    absent, falls back to curl.  curl's --limit-rate caps write throughput
+    which prevents the WSL2 vmmem balloon that causes CLOCK_WATCHDOG_TIMEOUT
+    BSODs on Windows during large file downloads.
 
     Args:
-        limit_rate: Optional curl --limit-rate value (e.g. "300M").  When empty,
-            curl downloads at full speed.
+        limit_rate: Optional curl --limit-rate value (e.g. "300M").  When
+            empty, aria2c is tried first.
     """
     download_url = f"https://huggingface.co/{repo_id}/resolve/main/{filename}"
-
     print(f"  Download URL  : {download_url}")
 
     hf_token = os.environ.get("HF_TOKEN", "")
+
+    # ── aria2c path (multi-connection, no rate limit) ─────────────────────
+    if not limit_rate and shutil.which("aria2c"):
+        cmd = [
+            "aria2c",
+            "--max-connection-per-server=16",
+            "--split=16",
+            "--min-split-size=50M",
+            "--continue=true",
+            "--dir", str(dest.parent),
+            "--out", dest.name,
+        ]
+        if hf_token:
+            cmd += ["--header", f"Authorization: Bearer {hf_token}"]
+        cmd.append(download_url)
+        print("  Using aria2c (16 parallel connections) ...")
+        try:
+            result = subprocess.run(cmd, capture_output=False, timeout=7200)
+            if result.returncode == 0 and dest.exists():
+                size_str = _fmt_bytes(dest.stat().st_size)
+                print(f"\n  Done: {dest.name} ({size_str})")
+                return dest
+            print(f"\nWarning: aria2c failed (exit {result.returncode}), falling back to curl ...")
+        except subprocess.TimeoutExpired:
+            print("\nWarning: aria2c timed out, falling back to curl ...")
+        except FileNotFoundError:
+            pass  # shutil.which lied somehow; continue to curl
+
+    # ── curl path (rate-limited or aria2c unavailable) ────────────────────
     if hf_token:
-        download_url = f"https://huggingface.co/{repo_id}/resolve/main/{filename}?token={hf_token}"
+        auth_url = f"{download_url}?token={hf_token}"
+    else:
+        auth_url = download_url
 
     cmd = ["curl", "-#", "-L", "-f", "-o", str(dest)]
     if limit_rate:
         cmd += ["--limit-rate", limit_rate]
-    cmd.append(download_url)
+    cmd.append(auth_url)
 
     print("  Using curl to download ...")
     try:
-        result = subprocess.run(cmd, capture_output=False, timeout=3600)
+        result = subprocess.run(cmd, capture_output=False, timeout=7200)
         if result.returncode != 0:
             print(f"\nError: curl download failed (exit {result.returncode})")
             sys.exit(1)
     except subprocess.TimeoutExpired:
-        print("\nError: curl download timed out after 1 hour")
+        print("\nError: curl download timed out after 2 hours")
         sys.exit(1)
     except FileNotFoundError:
         print("Error: curl not found. Please install curl or huggingface_hub.")

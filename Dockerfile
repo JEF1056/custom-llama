@@ -138,7 +138,8 @@ COPY --from=builder /llama.cpp/build/bin/llama-quantize /usr/local/bin/llama-qua
 
 # Python stack for model download and HF→GGUF conversion
 RUN apt-get update && \
-  apt-get install -y --no-install-recommends python3 python3-pip && \
+  apt-get install -y --no-install-recommends python3 python3-pip \
+  aria2 && \
   rm -rf /var/lib/apt/lists/*
 
 # Pull the HF→GGUF conversion script and its support package from the builder.
@@ -150,11 +151,17 @@ RUN python3 -m pip install --no-cache-dir \
   torch --index-url https://download.pytorch.org/whl/cpu && \
   python3 -m pip install --no-cache-dir \
   huggingface_hub \
+  hf_transfer \
   transformers \
   safetensors \
   sentencepiece \
   accelerate \
   /scripts/gguf-py/
+
+# Enable hf_transfer: Rust-based parallel downloader that ships with
+# huggingface_hub.  Provides multi-connection HTTP range downloads for
+# substantially higher throughput than the default single-stream requests path.
+ENV HF_HUB_ENABLE_HF_TRANSFER=1
 
 # Override entrypoint: this image is a CLI tool, not a long-running server.
 ENTRYPOINT ["python3", "/scripts/manage_models.py"]
