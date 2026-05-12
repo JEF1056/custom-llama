@@ -93,7 +93,7 @@ RUN pip install --no-cache-dir huggingface_hub
 
 COPY scripts/manage_models.py /scripts/manage_models.py
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /entrypoint.sh && sed -i 's/\r$//' /entrypoint.sh
 
 # Fail fast at build time if critical binaries are missing
 RUN for bin in llama-server llama-quantize; do \
