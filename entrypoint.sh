@@ -14,6 +14,13 @@ MAX_TOKENS=${LLAMA_MAX_TOKENS:--1}
 TOP_P=${LLAMA_TOP_P:-0.95}
 TEMP=${LLAMA_TEMP:-0.7}
 STOP=${LLAMA_STOP:-}
+REPEAT_PENALTY=${LLAMA_REPEAT_PENALTY:-1.0}
+REPEAT_LAST_N=${LLAMA_REPEAT_LAST_N:-64}
+DRY_MULTIPLIER=${LLAMA_DRY_MULTIPLIER:-0}
+DRY_BASE=${LLAMA_DRY_BASE:-1.75}
+DRY_ALLOWED_LENGTH=${LLAMA_DRY_ALLOWED_LENGTH:-2}
+DRY_PENALTY_LAST_N=${LLAMA_DRY_PENALTY_LAST_N:-512}
+THINKING_BUDGET=${LLAMA_THINKING_BUDGET:-0}
 
 # TurboQuant KV-cache settings
 # K cache type: f16 (default), turbo3 (TurboQuant 3-bit), turbo4 (TurboQuant 4-bit)
@@ -193,6 +200,13 @@ exec llama-server \
     -n "$MAX_TOKENS" \
     --top-p "$TOP_P" \
     --temp "$TEMP" \
+    --repeat-penalty "$REPEAT_PENALTY" \
+    --repeat-last-n "$REPEAT_LAST_N" \
+    --dry-multiplier "$DRY_MULTIPLIER" \
+    --dry-base "$DRY_BASE" \
+    --dry-allowed-length "$DRY_ALLOWED_LENGTH" \
+    --dry-penalty-last-n "$DRY_PENALTY_LAST_N" \
+    $([ "$THINKING_BUDGET" -gt 0 ] 2>/dev/null && echo "--thinking-budget $THINKING_BUDGET") \
     -ctk "$CACHE_TYPE_K" \
     -ctv "$CACHE_TYPE_V" \
     --flash-attn "$FLASH_ATTN" \
