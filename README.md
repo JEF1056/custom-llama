@@ -2,14 +2,19 @@
 
 A self-hosted LLM inference server built around [llama.cpp (TurboQuant + MTP fork)](https://github.com/JEF1056/llama-cpp-turboquant/tree/llama-next). Exposed publicly via Cloudflare Tunnel with Cloudflare Access authentication.
 
+**Default model:** [Qwopus3.6-27B](https://huggingface.co/Jackrong/Qwopus3.6-27B-v1-preview) — a reasoning + vision fine-tune of Qwen3.6-27B. Hybrid architecture (DeltaNet linear attention + Gated Attention), trained with MTP, 262K native context.
+
+---
+
 ## Local quick start
 
-No Cloudflare, or secrets needed — just the inference server on this machine.
+No Cloudflare or secrets needed — just the inference server on this machine.
 
 ```bash
-cp .env.default .env   # set MODEL_NAME + QUANT (default: Q4_K_M); leave everything else blank
-docker compose build mcp-search-server llama-server llama-convert
-docker compose run --rm llama-convert download qwopus3.6-27b --quant Q4_K_M
+cp .env.default .env
+docker compose build llama-server llama-convert mcp-search-server
+docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS --mtp
+
 docker compose up -d llama-server
 ```
 
@@ -32,6 +37,35 @@ networks:
 Then `docker compose up -d llama-server` (not `restart` — that won't re-read the config). Test with `curl http://localhost:8080/health`.
 
 Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http://localhost:8080/v1`.
+
+> **Without MTP:** if you want a faster first run (skip the safetensors download), use the prebuilt GGUF instead.
+> Comment out `LLAMA_MODEL` and `LLAMA_SPEC_TYPE` in `.env`, then run:
+> `docker compose run --rm llama-convert download qwopus3.6-27b --quant IQ4_XS`
+
+---
+
+## Model
+
+| Property | Value |
+|---|---|
+| Model | Qwopus3.6-27B-v1-preview |
+| Base | Qwen3.6-27B |
+| Quant | IQ4_XS (~14 GB) |
+| Architecture | Hybrid: 48× DeltaNet + 16× Gated Attention (64 layers total) |
+| KV cache layers | 16 of 64 (only Attention layers; DeltaNet uses fixed 898 MiB recurrent state) |
+| Context | 150K (native 262K; limited for VRAM) |
+| Capabilities | Reasoning, vision, tool use, MTP speculative decoding |
+| MTP speedup | ~2–2.5× tok/s vs. baseline (requires MTP-capable GGUF) |
+
+**VRAM budget (RTX 3090, 24 GB):**
+
+| Component | Size |
+|---|---|
+| Model (IQ4_XS) + mmproj | ~14.9 GB |
+| DeltaNet recurrent state | ~0.9 GB |
+| KV cache (turbo3, 150K ctx) | ~0.9 GB |
+| CUDA context + compute | ~0.6 GB |
+| **Total** | **~17.3 GB** (~6.7 GB headroom) |
 
 ---
 
@@ -56,6 +90,8 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
 |---|---|---|
 | **Local** | `http://localhost:8080/v1` | None (requires `docker-compose.override.yml`) |
 | **API (Cloudflare Access)** | `https://api.jessfan.com/v1` | Google OAuth / Email (see below) |
+
+---
 
 ## Step-by-step setup guide
 
@@ -108,19 +144,22 @@ CF_ACCESS_GOOGLE_CLIENT_SECRET=your-client-secret
 LLAMA_API_KEY=$(openssl rand -hex 32)
 ```
 
-### Step 4: Build and prepare a model
+### Step 4: Build and prepare the model
 
 ```bash
 # Build the containers
 docker compose build
 docker compose build llama-convert
 
-# Download and quantize a model (choose one):
-# Pre-built GGUF on HuggingFace
-docker compose run --rm llama-convert download qwopus3.6-27b --quant Q4_K_M
+# Option A (recommended): MTP-capable GGUF from safetensors — ~2–2.5× faster generation
+# Downloads ~28 GB safetensors, converts to fp16 GGUF, quantizes, cleans up.
+docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS --mtp
+# Output: ./models/qwopus3.6-27b-IQ4_XS-mtp.gguf (~14 GB)
+# .env.default already points LLAMA_MODEL at this file and sets LLAMA_SPEC_TYPE=mtp.
 
-# OR Safetensors-only repos (convert → fp16 → quantize)
-docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant IQ4_XS
+# Option B (faster setup, no MTP): prebuilt GGUF from HuggingFace
+# Comment out LLAMA_MODEL and LLAMA_SPEC_TYPE in .env first.
+docker compose run --rm llama-convert download qwopus3.6-27b --quant IQ4_XS
 ```
 
 > **Gated models:** set `HF_TOKEN=your_token` in `.env`
@@ -148,7 +187,7 @@ curl -H "CF-Access-Client-Id: <id>" \
      -H "CF-Access-Client-Secret: <secret>" \
      https://api.jessfan.com/v1/chat/completions \
      -H "Content-Type: application/json" \
-     -d '{"model": "qwopus3.6-27b-Q4_K_M", "messages": [{"role": "user", "content": "Hello"}]}'
+     -d '{"model": "qwopus3.6-27b", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
 ### Step 7: Connect an OpenAI-compatible client
@@ -166,10 +205,30 @@ client = openai.OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="qwopus3.6-27b-Q4_K_M",
+    model="qwopus3.6-27b",
     messages=[{"role": "user", "content": "Hello"}],
 )
 ```
+
+---
+
+## Model management
+
+```bash
+# List all supported models
+docker compose run --rm llama-convert list
+
+# MTP-capable GGUF (recommended — from safetensors, includes nextn heads)
+docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS --mtp
+
+# Standard prebuilt GGUF (faster setup, no MTP)
+docker compose run --rm llama-convert download qwopus3.6-27b --quant IQ4_XS
+
+# Re-quantize an existing GGUF already in ./models
+docker compose run --rm llama-convert convert /models/qwopus3.6-27b-fp16.gguf --quant Q4_K_M
+```
+
+---
 
 ## Docker Compose services
 
@@ -178,10 +237,16 @@ response = client.chat.completions.create(
 | `llama-server` | llama.cpp inference server (port 8080) |
 | `cloudflared` | Cloudflare Tunnel — exposes llama-server publicly |
 | `llama-convert` | Model conversion tool (download, convert, quantize) |
+| `mcp-search-server` | Web search MCP tool (port 3100) |
+
+---
 
 ## Troubleshooting
 
-- **Model not loading:** Check `docker compose logs llama-server` for errors. Common issues: model path mismatch, insufficient VRAM.
+- **Model not loading:** Check `docker compose logs llama-server`. Common causes: model file missing (`LLAMA_MODEL` path mismatch), insufficient VRAM.
+- **MTP not working:** Confirm the GGUF was built with `--mtp`. Prebuilt GGUFs strip MTP heads. Verify `LLAMA_SPEC_TYPE=mtp` and `LLAMA_MODEL` point to the `-mtp.gguf` file.
+- **Slow generation (11 vs 20 tok/s):** Context may be filling up within a long conversation. MTP requires `LLAMA_PARALLEL=1` and a `-mtp.gguf` file.
 - **Cloudflare Tunnel not connecting:** Verify `CF_TUNNEL_TOKEN` is correct. Check `docker compose logs cloudflared`.
 - **Cloudflare Access authentication failing:** Ensure the Access Application is configured for the correct domain and authentication method.
-- **GPU not detected:** Verify NVIDIA Container Toolkit is installed and working. Check `docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi`.
+- **GPU not detected:** Verify NVIDIA Container Toolkit is installed. Check `docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi`.
+- **WSL2 BSOD during download/quantize:** Set `CONVERT_DOWNLOAD_RATE=300M` and `CONVERT_THREADS=4` in `.env`.

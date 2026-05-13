@@ -179,6 +179,8 @@ services:
     restart: unless-stopped
     depends_on:
       - llama-server
+    profiles:
+      - cloudflare
 
   # ---------------------------------------------------------------------------
   # MCP Search Server — semantic web search with browser automation
