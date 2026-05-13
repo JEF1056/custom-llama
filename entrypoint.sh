@@ -190,6 +190,7 @@ fi
 
 # Execute llama-server with arguments
 exec llama-server \
+    --webui-mcp-proxy \
     --host "$HOST" \
     --port "$PORT" \
     --model "$MODEL" \
