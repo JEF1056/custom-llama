@@ -5,7 +5,6 @@ import logging
 
 from mcp.server import FastMCP
 from starlette.applications import Starlette
-from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Route
@@ -148,13 +147,13 @@ def healthcheck(request: Request) -> Response:
 
 
 def create_app(server: FastMCP) -> Starlette:
-    """Create a Starlette app with SSE transport and CORS middleware.
+    """Create a Starlette app with SSE transport.
 
     Args:
         server: The MCP server instance.
 
     Returns:
-        Starlette app with SSE transport and CORS middleware.
+        Starlette app with SSE transport.
     """
     # Get the SSE app (for SSE transport: GET /sse and POST /mcp)
     sse_app = server.sse_app()
@@ -170,17 +169,6 @@ def create_app(server: FastMCP) -> Starlette:
     app = Starlette(
         debug=server.settings.debug,
         routes=all_routes,
-    )
-
-    # Add CORS middleware to allow cross-origin requests from MCP clients
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.effective_cors_origins,
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "Accept", "Cache-Control"],
-        expose_headers=["Content-Type", "Cache-Control"],
-        max_age=3600,  # Cache preflight response for 1 hour
     )
 
     return app
@@ -199,7 +187,6 @@ async def run_server(server: FastMCP) -> None:
     logger.info("SSE endpoint: GET /sse")
     logger.info("MCP endpoint: POST /mcp")
     logger.info("Healthcheck: GET /health")
-    logger.info("CORS origins: %s", settings.effective_cors_origins)
 
     # Start the Starlette app directly with uvicorn so that the CORS middleware is applied
     import uvicorn

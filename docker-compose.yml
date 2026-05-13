@@ -141,6 +141,11 @@ services:
       # layer of API-level authentication.
       LLAMA_API_KEY: ${LLAMA_API_KEY:-}
 
+      # URL of the MCP server to proxy tool calls to.
+      # When set, llama-server will expose an MCP endpoint at /mcp that
+      # forwards tool calls to this URL.
+      LLAMA_MCP_PROXY_URL: ${LLAMA_MCP_PROXY_URL:-}
+
     networks:
       - llama-net
     restart: unless-stopped
@@ -182,18 +187,13 @@ services:
 
   # ---------------------------------------------------------------------------
   # MCP Search Server — semantic web search with browser automation
-  # Uses SSE (Server-Sent Events) transport for MCP clients
+  # Used by llama-server's --webui-mcp-proxy to proxy MCP tool calls
   # ---------------------------------------------------------------------------
   mcp-search-server:
     build:
       context: ./mcp-search-server
       dockerfile: Dockerfile
     container_name: mcp-search-server
-
-    # MCP server uses SSE transport — expose the HTTP port for MCP clients.
-    # MCP clients connect via SSE at http://mcp-search-server:3100/sse
-    ports:
-      - "${MCP_SERVER_PORT:-3100}:${MCP_SERVER_PORT:-3100}"
 
     volumes:
       # Only mount Python cache directory, not the entire .cache directory.
@@ -211,10 +211,6 @@ services:
       MAX_RESULTS: ${MAX_RESULTS:-10}
       CACHE_ENABLED: ${CACHE_ENABLED:-true}
       CACHE_TTL: ${CACHE_TTL:-3600}
-      # CORS configuration for MCP clients
-      CORS_ALLOW_ALL: ${CORS_ALLOW_ALL:-false}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://localhost:3000,http://localhost:2280}
-
     deploy:
       resources:
         limits:

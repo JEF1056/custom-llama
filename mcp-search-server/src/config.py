@@ -15,17 +15,6 @@ class Settings(BaseModel):
     MCP_SERVER_HOST: str = Field(default="0.0.0.0", description="Host address for the MCP server")
     MCP_SERVER_PORT: int = Field(default=3100, description="Port for the MCP server")
 
-    # CORS settings
-    CORS_ALLOW_ALL: bool = Field(default=False, description="Allow all CORS origins (use '*' for development)")
-    CORS_ORIGINS: list[str] = Field(
-        default_factory=lambda: [
-            "http://localhost:8080",  # llama.cpp Server Web UI
-            "http://localhost:3000",  # Roo
-            "http://localhost:2280",  # OpenCode
-        ],
-        description="List of allowed CORS origins for MCP clients",
-    )
-
     # Search settings
     SEARCH_ENGINE: Literal["duckduckgo", "bing", "google"] = Field(
         default="duckduckgo", description="Search engine to use"
@@ -57,14 +46,6 @@ class Settings(BaseModel):
         if self.REDIS_PASSWORD:
             return f"redis://:{self.REDIS_PASSWORD}@{self.REDIS_HOST}:{self.REDIS_PORT}"
         return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}"
-
-    @property
-    def effective_cors_origins(self) -> list[str]:
-        """Get the effective CORS origins list based on CORS_ALLOW_ALL setting."""
-        if self.CORS_ALLOW_ALL:
-            return ["*"]
-        return self.CORS_ORIGINS
-
 
 # Global settings instance
 settings = Settings()

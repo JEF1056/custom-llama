@@ -226,5 +226,6 @@ exec llama-server \
     ${NCMOE:+-ncmoe "$NCMOE"} \
     ${SLOT_SAVE_PATH:+--slot-save-path "$SLOT_SAVE_PATH"} \
     ${API_KEY:+--api-key "$API_KEY"} \
+    ${LLAMA_MCP_PROXY_URL:+--mcp-proxy-url "$LLAMA_MCP_PROXY_URL"} \
     $MMFLAGS \
     "$@"
