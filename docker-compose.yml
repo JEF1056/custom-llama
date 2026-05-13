@@ -141,11 +141,6 @@ services:
       # layer of API-level authentication.
       LLAMA_API_KEY: ${LLAMA_API_KEY:-}
 
-      # URL of the MCP server to proxy tool calls to.
-      # When set, llama-server will expose an MCP endpoint at /mcp that
-      # forwards tool calls to this URL.
-      LLAMA_MCP_PROXY_URL: ${LLAMA_MCP_PROXY_URL:-}
-
     networks:
       - llama-net
     restart: unless-stopped
