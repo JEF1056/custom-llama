@@ -7,7 +7,7 @@ A self-hosted LLM inference server built around [llama.cpp (TurboQuant fork)](ht
 No Cloudflare, or secrets needed — just the inference server on this machine.
 
 ```bash
-cp .env.default .env   # set MODEL_NAME + QUANT; leave everything else blank
+cp .env.default .env   # set MODEL_NAME + QUANT (default: IQ4_XS); leave everything else blank
 docker compose build && docker compose build llama-convert
 docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant Q3_K_L
 docker compose up -d llama-server
@@ -120,7 +120,7 @@ docker compose build llama-convert
 docker compose run --rm llama-convert download qwen3.5-27b --quant Q4_K_M
 
 # OR Safetensors-only repos (convert → fp16 → quantize)
-docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant Q3_K_L
+docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant IQ4_XS
 ```
 
 > **Gated models:** set `HF_TOKEN=your_token` in `.env`
