@@ -32,6 +32,7 @@ def create_server() -> FastMCP:
         host=settings.MCP_SERVER_HOST,
         port=settings.MCP_SERVER_PORT,
         streamable_http_path="/mcp",
+        stateless_http=True,
         instructions=(
             "A search server that can perform web searches, extract content from web pages, "
             "and automate browser interactions.\n\n"
