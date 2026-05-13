@@ -116,10 +116,7 @@ services:
       LLAMA_TS: ${LLAMA_TS:-}
       LLAMA_NCMOE: ${LLAMA_NCMOE:-}
 
-      LLAMA_MUL_KV: ${LLAMA_MUL_KV:-on}
-      LLAMA_CACHE_CHUNK_SIZE: ${LLAMA_CACHE_CHUNK_SIZE:-0}
       LLAMA_NO_KV_OFFLOAD: ${LLAMA_NO_KV_OFFLOAD:-off}
-      LLAMA_CACHE_CAPACITY: ${LLAMA_CACHE_CAPACITY:-200000}
 
       # KV cache slot persistence — saves/restores slot state to disk so
       # per-conversation KV caches survive server restarts.
