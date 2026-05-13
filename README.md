@@ -1,6 +1,6 @@
 # custom-llama
 
-A self-hosted LLM inference server built around [llama.cpp (TurboQuant fork)](https://github.com/TheTom/llama-cpp-turboquant). Exposed publicly via Cloudflare Tunnel with Cloudflare Access authentication.
+A self-hosted LLM inference server built around [llama.cpp (TurboQuant + MTP fork)](https://github.com/JEF1056/llama-cpp-turboquant/tree/llama-next). Exposed publicly via Cloudflare Tunnel with Cloudflare Access authentication.
 
 ## Local quick start
 

@@ -75,6 +75,10 @@ Cloudflare Edge (api.jessfan.com)
 - **`LLAMA_CACHE_TYPE_K=V=turbo3`** requires `LLAMA_FLASH_ATTN=on` — setting turbo3 without flash attention will fail.
 - **`LLAMA_CLEAR_IDLE=on`** requires `LLAMA_CACHE_RAM` to be set and non-zero — otherwise the flag is silently omitted by `entrypoint.sh`.
 - **`LLAMA_DIRECT_IO=on`** is recommended when `LLAMA_GPU_LAYERS=99` — it prevents the ~18 GB model from being cached in the OS page cache after it's already in VRAM.
+- **MTP requires an MTP-capable GGUF** — the model must have `nextn`/MTP head layers baked in (e.g. `*-mtp.gguf` from HuggingFace). Standard Q4_K_M files don't contain MTP heads.
+- **`LLAMA_SPEC_TYPE=mtp` requires `LLAMA_PARALLEL=1`** — the server hard-errors on `n_parallel > 1` with MTP. `entrypoint.sh` auto-forces this with a warning.
+- **MTP + vision = crash** — `--spec-type mtp` with `--mmproj` is a confirmed upstream bug. `entrypoint.sh` auto-disables MTP when `LLAMA_MMPROJ` is set.
+- **llama-cpp source** is now `JEF1056/llama-cpp-turboquant` (`llama-next` branch) — TurboQuant KV + upstream sync + MTP speculative decoding + HIP/FATTN fixes on top.
 
 ## Environment variables (key ones)
 
@@ -93,6 +97,8 @@ Cloudflare Edge (api.jessfan.com)
 | `LLAMA_KV_UNIFIED` | `on` | Share full context pool across all slots (`--kv-unified`) |
 | `LLAMA_CACHE_RAM` | — | Host-RAM prompt cache in MiB (`--cache-ram`); `-1` = unlimited, `0` = off |
 | `LLAMA_CLEAR_IDLE` | `on` | Save idle slots to `--cache-ram` on each new task (`--clear-idle`); requires `LLAMA_CACHE_RAM` |
+| `LLAMA_SPEC_TYPE` | — | Speculative decoding type: `mtp` for ~2x speed; requires MTP-capable GGUF and `LLAMA_PARALLEL=1` |
+| `LLAMA_SPEC_DRAFT_N_MAX` | `3` | Draft tokens per MTP step (3 → 86.7% acceptance on RTX 3090 at 164K ctx) |
 
 ## opencode.json
 

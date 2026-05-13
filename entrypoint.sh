@@ -85,6 +85,14 @@ NCMOE=${LLAMA_NCMOE:-}
 # Requires llama.cpp >= b3000 (upstream) or equivalent TurboQuant build.
 SLOT_SAVE_PATH=${LLAMA_SLOT_SAVE_PATH:-}
 
+# MTP (Multi-Token Prediction) speculative decoding.
+# --spec-type mtp: predict multiple tokens per step using the MTP head embedded in the GGUF.
+# Requires: MTP-capable GGUF (model must include nextn/MTP layers).
+# Incompatible with: MMPROJ/vision (known bug), n_parallel > 1.
+# RTX 3090 benchmark: ~47-55 TPS vs ~22-25 TPS without MTP (Qwen3.6-27B Q4_K_M, 164K ctx).
+SPEC_TYPE=${LLAMA_SPEC_TYPE:-}
+SPEC_DRAFT_N_MAX=${LLAMA_SPEC_DRAFT_N_MAX:-}
+
 # API key — when set, all requests to the server must include
 # Authorization: Bearer <key>. Leave empty for unauthenticated access
 # (appropriate when protected by Tailscale ACLs).
@@ -197,6 +205,21 @@ fi
 if [ -n "$API_KEY" ]; then
     echo "  API Key: (set)"
 fi
+if [ -n "$SPEC_TYPE" ] && [ "$SPEC_TYPE" != "none" ]; then
+    echo "  Spec Type: $SPEC_TYPE"
+    if [ -n "$SPEC_DRAFT_N_MAX" ]; then
+        echo "  Spec Draft N Max: $SPEC_DRAFT_N_MAX"
+    fi
+    if [ "$SPEC_TYPE" = "mtp" ]; then
+        if [ -n "$MMPROJ" ]; then
+            echo "WARNING: --spec-type mtp is incompatible with --mmproj (vision). Disabling MTP."
+            SPEC_TYPE=""
+        elif [ "${PARALLEL:-1}" != "1" ]; then
+            echo "WARNING: --spec-type mtp requires --parallel 1. Forcing PARALLEL=1."
+            PARALLEL=1
+        fi
+    fi
+fi
 
 # Build multimodal flags
 MMFLAGS=""
@@ -249,5 +272,7 @@ exec llama-server \
     ${NCMOE:+-ncmoe "$NCMOE"} \
     ${SLOT_SAVE_PATH:+--slot-save-path "$SLOT_SAVE_PATH"} \
     ${API_KEY:+--api-key "$API_KEY"} \
+    ${SPEC_TYPE:+--spec-type "$SPEC_TYPE"} \
+    ${SPEC_DRAFT_N_MAX:+--spec-draft-n-max "$SPEC_DRAFT_N_MAX"} \
     $MMFLAGS \
     "$@"
