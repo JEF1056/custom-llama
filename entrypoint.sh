@@ -24,13 +24,13 @@ DRY_ALLOWED_LENGTH=${LLAMA_DRY_ALLOWED_LENGTH:-2}
 DRY_PENALTY_LAST_N=${LLAMA_DRY_PENALTY_LAST_N:-512}
 REASONING_BUDGET=${LLAMA_REASONING_BUDGET:-0}
 
-# TurboQuant KV-cache settings
-# K cache type: f16 (default), turbo3 (TurboQuant 3-bit), turbo4 (TurboQuant 4-bit)
-# V cache type: f16 (default), turbo3 (TurboQuant 3-bit), turbo4 (TurboQuant 4-bit)
+# KV cache quantization settings
+# K cache type: f16 (default), q8_0, q4_0, q4_1, q5_0, q5_1, iq4_nl
+# V cache type: f16 (default), q8_0, q4_0, q4_1, q5_0, q5_1, iq4_nl
 CACHE_TYPE_K=${LLAMA_CACHE_TYPE_K:-f16}
 CACHE_TYPE_V=${LLAMA_CACHE_TYPE_V:-f16}
 
-# Flash Attention: required for TurboQuant KV cache (auto-enabled by server, but explicit is better)
+# Flash Attention: boolean flag (-fa). Reduces KV memory 20-50% on CUDA.
 FLASH_ATTN=${LLAMA_FLASH_ATTN:-on}
 
 # Parallel inference slots (concurrent requests)
@@ -88,7 +88,7 @@ SLOT_SAVE_PATH=${LLAMA_SLOT_SAVE_PATH:-}
 # MTP (Multi-Token Prediction) speculative decoding.
 # --spec-type mtp: predict multiple tokens per step using the MTP head embedded in the GGUF.
 # Requires: MTP-capable GGUF (model must include nextn/MTP layers).
-# Incompatible with: MMPROJ/vision (known bug), n_parallel > 1.
+# Compatible with MMPROJ/vision (MTP pauses during image processing, resumes for text).
 # RTX 3090 benchmark: ~47-55 TPS vs ~22-25 TPS without MTP (Qwen3.6-27B Q4_K_M, 164K ctx).
 SPEC_TYPE=${LLAMA_SPEC_TYPE:-}
 SPEC_DRAFT_N_MAX=${LLAMA_SPEC_DRAFT_N_MAX:-}
@@ -212,9 +212,9 @@ if [ -n "$SPEC_TYPE" ] && [ "$SPEC_TYPE" != "none" ]; then
     fi
     if [ "$SPEC_TYPE" = "mtp" ]; then
         if [ -n "$MMPROJ" ]; then
-            echo "WARNING: --spec-type mtp is incompatible with --mmproj (vision). Disabling MTP."
-            SPEC_TYPE=""
-        elif [ "${PARALLEL:-1}" != "1" ]; then
+            echo "NOTE: MTP + multimodal active — MTP will pause during image/audio processing and resume for text tokens."
+        fi
+        if [ "${PARALLEL:-1}" != "1" ]; then
             echo "WARNING: --spec-type mtp requires --parallel 1. Forcing PARALLEL=1."
             PARALLEL=1
         fi
@@ -256,7 +256,7 @@ exec llama-server \
     $([ "$REASONING_BUDGET" -gt 0 ] 2>/dev/null && echo "--reasoning-budget $REASONING_BUDGET") \
     -ctk "$CACHE_TYPE_K" \
     -ctv "$CACHE_TYPE_V" \
-    --flash-attn "$FLASH_ATTN" \
+    $([ "$FLASH_ATTN" = "on" ] && echo "--flash-attn") \
     ${STOP:+--stop "$STOP"} \
     ${PARALLEL:+--parallel "$PARALLEL"} \
     $([ "$NO_MMAP" = "on" ] && echo "--no-mmap") \
