@@ -110,6 +110,7 @@ MODELS = {
         "description": "Qwopus 3.6 35B-A3B-v1 (~17GB)",
         "size_gb": 17,
         "mmproj": "mmproj.gguf",
+        "mtp_capable": True,
     },
     "qwopus3.6-27b": {
         "hf_repo": "Jackrong/Qwopus3.6-27B-v1-preview-GGUF",
@@ -117,6 +118,7 @@ MODELS = {
         "description": "Qwopus 3.6 27B-v1-preview (~14GB)",
         "size_gb": 14,
         "mmproj": "mmproj.gguf",
+        "mtp_capable": True,
     },
     "minimax-m2.7": {
         "hf_repo": "unsloth/MiniMax-M2.7-GGUF",
@@ -806,23 +808,40 @@ def _maybe_download_mmproj(model_info: dict, output_path: Path, model_name: str 
     print(f"  Multimodal projector ready: {canonical_name}")
 
 
-def convert_safetensors(model_name: str, quant: str, output_dir: str, nthreads: int | None = None) -> None:
+def convert_safetensors(
+    model_name: str,
+    quant: str,
+    output_dir: str,
+    nthreads: int | None = None,
+    mtp: bool = False,
+) -> None:
     """Convert a safetensors model to a quantized GGUF via fp16 GGUF intermediate.
 
     Pipeline
     --------
     1. Download the safetensors repo (fp16_repo, or hf_repo if fp16_repo absent).
-    2. Run convert_hf_to_gguf.py → fp16 GGUF.
+    2. Run convert_hf_to_gguf.py → fp16 GGUF (includes MTP tensors when present).
     3. Run llama-quantize → target quant GGUF.
     4. Clean up the safetensors download and the fp16 intermediate.
 
     This command is only available in the ``convert`` Docker image, which ships
     convert_hf_to_gguf.py and its Python dependencies (torch, transformers, …).
 
+    When ``mtp=True``:
+    - The prebuilt-GGUF shortcut is skipped (prebuilts strip MTP tensors).
+    - Output is named ``{model_name}-{quant}-mtp.gguf`` to distinguish it from
+      the standard GGUF.  Set ``LLAMA_MODEL`` in .env to the resulting path and
+      enable ``LLAMA_SPEC_TYPE=mtp``.
+    - The fp16 GGUF produced by convert_hf_to_gguf.py naturally contains MTP
+      head tensors (nextn.*) when the source model was trained with MTP; these
+      are preserved through llama-quantize into the final GGUF.
+
     Args:
-        model_name: Key from the MODELS dict (e.g. "qwopus3.6-35b")
-        quant: Target quantization (e.g. "TQ2_0", "Q4_K_M")
+        model_name: Key from the MODELS dict (e.g. "qwopus3.6-27b")
+        quant: Target quantization (e.g. "TQ2_0", "Q4_K_M", "IQ4_XS")
         output_dir: Directory where the final GGUF should be placed
+        mtp: When True, produce a GGUF with MTP tensors included (requires
+            the model to have been trained with MTP, e.g. qwopus3.6-27b).
     """
     # Locate convert_hf_to_gguf.py — expected in the same directory as this script
     # when running inside the convert Docker image.
@@ -848,10 +867,21 @@ def convert_safetensors(model_name: str, quant: str, output_dir: str, nthreads: 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    canonical = output_path / f"{model_name}-{quant}.gguf"
+    if mtp:
+        if not model_info.get("mtp_capable"):
+            print(
+                f"Warning: {model_name} is not marked as mtp_capable in MODELS. "
+                "The safetensors may not include MTP head tensors. Proceeding anyway."
+            )
+        canonical = output_path / f"{model_name}-{quant}-mtp.gguf"
+    else:
+        canonical = output_path / f"{model_name}-{quant}.gguf"
 
+    mtp_label = "  MTP    : enabled (nextn tensors will be included)" if mtp else ""
     _section(f"Model: {model_name}  |  Quant: {quant}  |  Source: {source_repo}")
     print(f"  Output : {canonical}")
+    if mtp_label:
+        print(mtp_label)
 
     if canonical.exists():
         size_str = _fmt_bytes(canonical.stat().st_size)
@@ -862,11 +892,11 @@ def convert_safetensors(model_name: str, quant: str, output_dir: str, nthreads: 
     # ------------------------------------------------------------------ #
     # 0. Short-circuit: check if a pre-built GGUF already exists in hf_repo
     #    (same logic as the `download` command). Skip for TurboQuant targets
-    #    since those are never pre-built on HuggingFace.
+    #    and for MTP builds — prebuilt GGUFs strip MTP tensors.
     # ------------------------------------------------------------------ #
     is_turboquant = quant in TQ_QUANT_OPTIONS
     hf_repo = model_info["hf_repo"]
-    if not is_turboquant:
+    if not is_turboquant and not mtp:
         print(f"  Checking HuggingFace for pre-built {quant} in {hf_repo} ...")
         hf_file = find_quant_in_repo(hf_repo, quant)
         if hf_file:
@@ -879,6 +909,8 @@ def convert_safetensors(model_name: str, quant: str, output_dir: str, nthreads: 
             _maybe_download_mmproj(model_info, output_path, model_name)
             return
         print(f"  No pre-built {quant} found — falling back to safetensors conversion.")
+    elif mtp:
+        print("  Skipping pre-built GGUF check — prebuilts strip MTP tensors.")
 
     # ------------------------------------------------------------------ #
     # 1. Download safetensors
@@ -950,6 +982,18 @@ def convert_safetensors(model_name: str, quant: str, output_dir: str, nthreads: 
     _done(canonical)
     _maybe_download_mmproj(model_info, output_path, model_name)
 
+    if mtp:
+        print(
+            "\n  ── MTP GGUF ready ────────────────────────────────────────────\n"
+            f"  To use this GGUF, add to your .env:\n"
+            f"    LLAMA_MODEL=/models/{canonical.name}\n"
+            f"    LLAMA_SPEC_TYPE=mtp\n"
+            f"    LLAMA_SPEC_DRAFT_N_MAX=3\n"
+            f"    LLAMA_PARALLEL=1\n"
+            "  Then restart the server:  docker compose up -d\n"
+            "  ─────────────────────────────────────────────────────────────"
+        )
+
 
 def convert_model(
     model_path: str,
@@ -1019,6 +1063,8 @@ def list_models() -> None:
                 tags.append("TurboQuant")
             if "mmproj" in info:
                 tags.append("Multimodal")
+            if info.get("mtp_capable"):
+                tags.append("MTP")
             tag_str = f" [{', '.join(tags)}]" if tags else ""
             print(f"  {key:25s} - {info['description']}{tag_str}")
         print()
@@ -1148,6 +1194,18 @@ def main():
     cst_parser.add_argument(
         "-t", "--threads", type=int, default=None, metavar="N", help=_threads_help
     )
+    cst_parser.add_argument(
+        "--mtp",
+        action="store_true",
+        default=False,
+        help=(
+            "Include MTP (Multi-Token Prediction) head tensors in the output GGUF. "
+            "Requires the source model to have been trained with MTP (e.g. qwopus3.6-27b, "
+            "qwopus3.6-35b). Skips the prebuilt-GGUF shortcut — always converts from "
+            "safetensors so that MTP tensors are not stripped. Output is named "
+            "{model}-{quant}-mtp.gguf. Enable with LLAMA_SPEC_TYPE=mtp in .env."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -1160,7 +1218,7 @@ def main():
     elif args.command == "turboquant":
         turboquant_model(args.model_path, args.quant, args.output_dir, nthreads=args.threads)
     elif args.command == "convert-st":
-        convert_safetensors(args.model, args.quant, args.output_dir, nthreads=args.threads)
+        convert_safetensors(args.model, args.quant, args.output_dir, nthreads=args.threads, mtp=args.mtp)
     else:
         parser.print_help()
 

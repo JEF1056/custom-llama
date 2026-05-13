@@ -14,6 +14,12 @@ docker compose run --rm llama-convert download qwen3.6-27b --quant TQ2_0
 # Safetensors-only repo (convert → fp16 GGUF → quantize):
 docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant TQ2_0
 
+# MTP-capable GGUF from safetensors (includes nextn head tensors):
+docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS --mtp
+# Output: /models/qwopus3.6-27b-IQ4_XS-mtp.gguf
+# Then set in .env: LLAMA_MODEL=/models/qwopus3.6-27b-IQ4_XS-mtp.gguf
+#                   LLAMA_SPEC_TYPE=mtp  LLAMA_SPEC_DRAFT_N_MAX=3
+
 # Re-quantize an existing GGUF already in ./models:
 docker compose run --rm llama-convert convert /models/model-Q8_0.gguf --quant Q4_K_M
 ```
@@ -75,7 +81,7 @@ Cloudflare Edge (api.jessfan.com)
 - **`LLAMA_CACHE_TYPE_K=V=turbo3`** requires `LLAMA_FLASH_ATTN=on` — setting turbo3 without flash attention will fail.
 - **`LLAMA_CLEAR_IDLE=on`** requires `LLAMA_CACHE_RAM` to be set and non-zero — otherwise the flag is silently omitted by `entrypoint.sh`.
 - **`LLAMA_DIRECT_IO=on`** is recommended when `LLAMA_GPU_LAYERS=99` — it prevents the ~18 GB model from being cached in the OS page cache after it's already in VRAM.
-- **MTP requires an MTP-capable GGUF** — the model must have `nextn`/MTP head layers baked in (e.g. `*-mtp.gguf` from HuggingFace). Standard Q4_K_M files don't contain MTP heads.
+- **MTP requires an MTP-capable GGUF** — the model must have `nextn`/MTP head layers baked in. The prebuilt GGUFs at `Jackrong/Qwopus3.6-27B-v1-preview-GGUF` strip MTP heads (no `-mtp.gguf` variants). However, the safetensors at `Jackrong/Qwopus3.6-27B-v1-preview` **do** include MTP weights ("MTP: trained with multi-steps"). Produce an MTP-capable GGUF via `docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS`, then enable `LLAMA_SPEC_TYPE=mtp`.
 - **`LLAMA_SPEC_TYPE=mtp` requires `LLAMA_PARALLEL=1`** — the server hard-errors on `n_parallel > 1` with MTP. `entrypoint.sh` auto-forces this with a warning.
 - **MTP + vision coexist** — MTP speculative decoding pauses during image/audio processing and resumes for text tokens. `handle_mtp_for_ubatch` detects embedding-only batches (`tokens==nullptr`) and resets its pending state so the MTP KV cache skips image positions cleanly.
 - **llama-cpp source** is now `JEF1056/llama-cpp-turboquant` (`llama-next` branch) — TurboQuant KV + upstream sync + MTP speculative decoding + HIP/FATTN fixes on top.
