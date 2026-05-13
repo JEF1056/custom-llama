@@ -94,7 +94,6 @@ class BrowserManager:
             viewport={"width": 1920, "height": 1080},
             user_agent=user_agent,
             ignore_https_errors=True,
-            java_enabled=False,
         )
         await self._default_context.set_extra_http_headers({
             "Accept-Language": "en-US,en;q=0.9",
@@ -133,7 +132,6 @@ class BrowserManager:
             viewport={"width": 1920, "height": 1080},
             user_agent=random.choice(USER_AGENTS),
             ignore_https_errors=True,
-            java_enabled=False,
         )
         await session.context.set_extra_http_headers({
             "Accept-Language": "en-US,en;q=0.9",

@@ -190,6 +190,9 @@ services:
       dockerfile: Dockerfile
     container_name: mcp-search-server
 
+    ports:
+      - "${MCP_SERVER_HOST:-127.0.0.1}:${MCP_SERVER_PORT:-3100}:3100"
+
     volumes:
       # Only mount Python cache directory, not the entire .cache directory.
       # The .cache directory contains Playwright browsers which must not be overwritten

@@ -3,7 +3,7 @@
 import logging
 from abc import ABC, abstractmethod
 
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 
 from src.config import settings
 
@@ -44,13 +44,13 @@ class DuckDuckGoEngine(SearchEngineBase):
         results: list[dict] = []
 
         try:
-            async with DDGS() as ddgs:
-                for result in ddgs.text(query, max_results=limit):
-                    results.append({
-                        "title": result.get("title", ""),
-                        "url": result.get("href", ""),
-                        "snippet": result.get("body", ""),
-                    })
+            ddgs = DDGS()
+            for result in ddgs.text(query, max_results=limit):
+                results.append({
+                    "title": result.get("title", ""),
+                    "url": result.get("href", ""),
+                    "snippet": result.get("body", ""),
+                })
         except Exception as e:
             logger.error("DuckDuckGo search error: %s", str(e))
 

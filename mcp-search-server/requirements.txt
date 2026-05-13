@@ -14,7 +14,7 @@ httpx>=0.25.0
 html2text>=2024.2.26
 
 # Search Engines
-duckduckgo-search>=5.0.0
+ddgs>=1.0.0
 
 # Data Validation
 pydantic>=2.0.0
