@@ -1,5 +1,5 @@
-# Core MCP
-mcp>=1.0.0
+# Core MCP — 1.9.0+ required for FastMCP.streamable_http_app() (Streamable HTTP transport)
+mcp>=1.9.0
 
 # HTTP Server (for SSE transport and CORS)
 fastapi>=0.100.0

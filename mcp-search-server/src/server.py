@@ -1,9 +1,10 @@
-"""MCP Server for web search and content extraction using SSE transport."""
+"""MCP Server for web search and content extraction using SSE and Streamable HTTP transports."""
 
 import asyncio
+import contextlib
 import logging
 
-from mcp.server import FastMCP
+from mcp.server.fastmcp import FastMCP
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import Response
@@ -147,46 +148,53 @@ def healthcheck(request: Request) -> Response:
 
 
 def create_app(server: FastMCP) -> Starlette:
-    """Create a Starlette app with SSE transport.
+    """Create a Starlette app with SSE and Streamable HTTP transports.
+
+    Exposes three MCP transport endpoints:
+      GET  /sse        — SSE stream (legacy SSE transport)
+      POST /messages/  — SSE message handler
+      POST /mcp        — Streamable HTTP transport (recommended)
 
     Args:
         server: The MCP server instance.
 
     Returns:
-        Starlette app with SSE transport.
+        Starlette app serving both transports plus a /health endpoint.
     """
-    # Get the SSE app (for SSE transport: GET /sse and POST /mcp)
-    sse_app = server.sse_app()
+    # SSE transport: GET /sse + POST /messages/
+    sse_routes = list(server.sse_app().routes)
 
-    # Extract routes from the SSE app
-    sse_routes = list(sse_app.routes)
+    # Streamable HTTP transport: POST /mcp  (also initialises the session manager)
+    http_routes = list(server.streamable_http_app().routes)
 
-    # Add healthcheck endpoint
     healthcheck_route = Route("/health", endpoint=healthcheck, methods=["GET"])
-    all_routes = sse_routes + [healthcheck_route]
 
-    # Create Starlette app
-    app = Starlette(
+    @contextlib.asynccontextmanager
+    async def lifespan(app: Starlette):
+        # StreamableHTTPSessionManager must be running while the server handles requests.
+        async with server.session_manager.run():
+            yield
+
+    return Starlette(
         debug=server.settings.debug,
-        routes=all_routes,
+        routes=sse_routes + http_routes + [healthcheck_route],
+        lifespan=lifespan,
     )
-
-    return app
 
 
 async def run_server(server: FastMCP) -> None:
-    """Run the MCP server with SSE transport.
+    """Run the MCP server with SSE and Streamable HTTP transports.
 
     Args:
         server: The MCP server instance.
     """
-    # Create app with SSE transport and CORS
     app = create_app(server)
 
-    logger.info("Starting MCP server on SSE transport at %s:%s", settings.MCP_SERVER_HOST, settings.MCP_SERVER_PORT)
-    logger.info("SSE endpoint: GET /sse")
-    logger.info("MCP endpoint: POST /mcp")
-    logger.info("Healthcheck: GET /health")
+    logger.info("Starting MCP server at %s:%s", settings.MCP_SERVER_HOST, settings.MCP_SERVER_PORT)
+    logger.info("SSE transport:             GET  /sse")
+    logger.info("SSE message handler:       POST /messages/")
+    logger.info("Streamable HTTP transport: POST /mcp  (recommended)")
+    logger.info("Healthcheck:               GET  /health")
 
     # Start the Starlette app directly with uvicorn so that the CORS middleware is applied
     import uvicorn

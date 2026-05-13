@@ -19,5 +19,12 @@
         }
       }
     }
+  },
+  "mcp": {
+    "search": {
+      "type": "remote",
+      "url": "http://localhost:3100/mcp",
+      "enabled": true
+    }
   }
 }
