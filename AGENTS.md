@@ -73,6 +73,7 @@ Cloudflare Edge (api.jessfan.com)
 - **`LLAMA_GPU_LAYERS=99`** — llama.cpp clamps to the model's actual layer count; this is the correct way to "offload all layers".
 - **`LLAMA_CTX_SIZE=200000`** with `LLAMA_PARALLEL=2` means each slot gets 100K tokens of context.
 - **`LLAMA_CACHE_TYPE_K=V=turbo3`** requires `LLAMA_FLASH_ATTN=on` — setting turbo3 without flash attention will fail.
+- **`LLAMA_CLEAR_IDLE=on`** requires `LLAMA_CACHE_RAM` to be set and non-zero — otherwise the flag is silently omitted by `entrypoint.sh`.
 - **`LLAMA_DIRECT_IO=on`** is recommended when `LLAMA_GPU_LAYERS=99` — it prevents the ~18 GB model from being cached in the OS page cache after it's already in VRAM.
 
 ## Environment variables (key ones)
@@ -89,6 +90,9 @@ Cloudflare Edge (api.jessfan.com)
 | `CF_TUNNEL_TOKEN` | — | Cloudflare Tunnel token |
 | `CF_ACCESS_HOSTNAME` | — | Cloudflare Access protected hostname |
 | `LLAMA_SLOT_SAVE_PATH` | `/models/slots` | KV cache slot persistence |
+| `LLAMA_KV_UNIFIED` | `on` | Share full context pool across all slots (`--kv-unified`) |
+| `LLAMA_CACHE_RAM` | — | Host-RAM prompt cache in MiB (`--cache-ram`); `-1` = unlimited, `0` = off |
+| `LLAMA_CLEAR_IDLE` | `on` | Save idle slots to `--cache-ram` on each new task (`--clear-idle`); requires `LLAMA_CACHE_RAM` |
 
 ## opencode.json
 

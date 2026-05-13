@@ -59,6 +59,18 @@ PRESERVE_THINKING=${LLAMA_PRESERVE_THINKING:-on}
 #             on  = pass --no-kv-offload, forcing KV cache to stay on GPU at all times.
 NO_KV_OFFLOAD=${LLAMA_NO_KV_OFFLOAD:-off}
 
+# Unified KV cache across slots: on = --kv-unified (share full context pool across all slots).
+# Default in llama.cpp ≥ b4550; explicit here for clarity.
+KV_UNIFIED=${LLAMA_KV_UNIFIED:-on}
+
+# Host-memory prompt cache size in MiB (--cache-ram).
+# -1 = unlimited, 0 = disabled, empty = omit flag (let llama.cpp default apply).
+CACHE_RAM=${LLAMA_CACHE_RAM:-}
+
+# Clear idle slots to host RAM on each new task (--clear-idle).
+# Requires CACHE_RAM to be set and non-zero. Reduces n_kv to active tokens only.
+CLEAR_IDLE=${LLAMA_CLEAR_IDLE:-on}
+
 # Tensor split for multi-GPU (e.g., "13,14" splits model across GPU 0 and GPU 1)
 # Leave empty for single GPU — model must fit on one GPU
 TS=${LLAMA_TS:-}
@@ -166,6 +178,13 @@ echo "  Direct I/O: $([ "$DIRECT_IO" = "on" ] && echo "enabled" || echo "disable
 echo "  Reasoning Mode: $REASONING"
 echo "  Preserve Thinking: $PRESERVE_THINKING"
 echo "  No KV Offload: $([ "$NO_KV_OFFLOAD" = "on" ] && echo "enabled" || echo "disabled")"
+echo "  KV Unified:    $([ "$KV_UNIFIED" = "on" ] && echo "enabled" || echo "disabled")"
+if [ -n "$CACHE_RAM" ]; then
+    echo "  Cache RAM:     $([ "$CACHE_RAM" = "-1" ] && echo "unlimited" || echo "${CACHE_RAM} MiB")"
+fi
+if [ -n "$CACHE_RAM" ] && [ "$CACHE_RAM" != "0" ]; then
+    echo "  Clear Idle:    $([ "$CLEAR_IDLE" = "on" ] && echo "enabled" || echo "disabled")"
+fi
 if [ -n "$TS" ]; then
     echo "  Tensor Split: $TS"
 fi
@@ -222,6 +241,10 @@ exec llama-server \
     --reasoning "$REASONING" \
     $([ "$PRESERVE_THINKING" = "on" ] && echo '--chat-template-kwargs {"preserve_thinking":true}') \
     $([ "$NO_KV_OFFLOAD" = "on" ] && echo "--no-kv-offload") \
+    $([ "$KV_UNIFIED" = "on" ] && echo "--kv-unified") \
+    ${CACHE_RAM:+--cache-ram "$CACHE_RAM"} \
+    $([ "$CLEAR_IDLE" = "on" ] && [ -n "$CACHE_RAM" ] && [ "$CACHE_RAM" != "0" ] && echo "--clear-idle") \
+    $([ "$CLEAR_IDLE" = "off" ] && [ -n "$CACHE_RAM" ] && [ "$CACHE_RAM" != "0" ] && echo "--no-clear-idle") \
     ${TS:+--tensor-split "$TS"} \
     ${NCMOE:+-ncmoe "$NCMOE"} \
     ${SLOT_SAVE_PATH:+--slot-save-path "$SLOT_SAVE_PATH"} \
