@@ -6,6 +6,7 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 from starlette.applications import Starlette
+from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Route
@@ -175,11 +176,18 @@ def create_app(server: FastMCP) -> Starlette:
         async with server.session_manager.run():
             yield
 
-    return Starlette(
+    app = Starlette(
         debug=server.settings.debug,
         routes=sse_routes + http_routes + [healthcheck_route],
         lifespan=lifespan,
     )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    return app
 
 
 async def run_server(server: FastMCP) -> None:

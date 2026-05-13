@@ -7,9 +7,9 @@ A self-hosted LLM inference server built around [llama.cpp (TurboQuant fork)](ht
 No Cloudflare, or secrets needed — just the inference server on this machine.
 
 ```bash
-cp .env.default .env   # set MODEL_NAME + QUANT (default: IQ4_XS); leave everything else blank
-docker compose build && docker compose build llama-convert
-docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant Q3_K_L
+cp .env.default .env   # set MODEL_NAME + QUANT (default: Q4_K_M); leave everything else blank
+docker compose build mcp-search-server llama-server llama-convert
+docker compose run --rm llama-convert download qwopus3.6-27b --quant Q4_K_M
 docker compose up -d llama-server
 ```
 
@@ -117,7 +117,7 @@ docker compose build llama-convert
 
 # Download and quantize a model (choose one):
 # Pre-built GGUF on HuggingFace
-docker compose run --rm llama-convert download qwen3.5-27b --quant Q4_K_M
+docker compose run --rm llama-convert download qwopus3.6-27b --quant Q4_K_M
 
 # OR Safetensors-only repos (convert → fp16 → quantize)
 docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant IQ4_XS
@@ -148,7 +148,7 @@ curl -H "CF-Access-Client-Id: <id>" \
      -H "CF-Access-Client-Secret: <secret>" \
      https://api.jessfan.com/v1/chat/completions \
      -H "Content-Type: application/json" \
-     -d '{"model": "qwen3.5-27b-Q4_K_M", "messages": [{"role": "user", "content": "Hello"}]}'
+     -d '{"model": "qwopus3.6-27b-Q4_K_M", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
 ### Step 7: Connect an OpenAI-compatible client
@@ -166,7 +166,7 @@ client = openai.OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="qwen3.5-27b-Q4_K_M",
+    model="qwopus3.6-27b-Q4_K_M",
     messages=[{"role": "user", "content": "Hello"}],
 )
 ```
