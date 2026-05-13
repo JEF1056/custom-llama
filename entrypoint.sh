@@ -256,7 +256,7 @@ exec llama-server \
     $([ "$REASONING_BUDGET" -gt 0 ] 2>/dev/null && echo "--reasoning-budget $REASONING_BUDGET") \
     -ctk "$CACHE_TYPE_K" \
     -ctv "$CACHE_TYPE_V" \
-    $([ "$FLASH_ATTN" = "on" ] && echo "--flash-attn") \
+    --flash-attn "$FLASH_ATTN" \
     ${STOP:+--stop "$STOP"} \
     ${PARALLEL:+--parallel "$PARALLEL"} \
     $([ "$NO_MMAP" = "on" ] && echo "--no-mmap") \
