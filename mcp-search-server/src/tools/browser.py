@@ -7,6 +7,7 @@ import os
 from typing import Any
 
 from mcp.server import FastMCP
+from mcp.server.fastmcp import Image
 
 from src.browser.automation import browser_manager
 
@@ -51,7 +52,7 @@ def browser_handler(server: FastMCP) -> None:
             # Navigate to the URL
             page = await browser_manager.goto(
                 url,
-                wait_until=wait_until or "networkidle",
+                wait_until=wait_until or "domcontentloaded",
                 session_id=session_id,
             )
 
@@ -76,21 +77,19 @@ def browser_handler(server: FastMCP) -> None:
     @server.tool()
     async def browser_screenshot(
         full_page: bool = False,
-        path: str | None = None,
         session_id: str | None = None,
-    ) -> str:
+    ) -> Image:
         """Take a screenshot of the current page.
 
         Use this tool to see what the page looks like after navigating. This is useful
-        for understanding the page layout and identifying elements to interact with.
+        for understanding the page layout and identifying elements
 
         Args:
             full_page: Whether to capture the full page
-            path: The file path to save the screenshot. If None, saves to screenshot_dir.
             session_id: The session ID to use. If None, uses the default context.
 
         Returns:
-            JSON string with screenshot path
+            Image object containing the screenshot PNG data.
         """
         try:
             # Start browser if not running
@@ -100,15 +99,14 @@ def browser_handler(server: FastMCP) -> None:
             # Get the session context
             context = await browser_manager.get_session(session_id)
             if not context:
-                return json.dumps({"status": "error", "error": "Browser not running"})
+                raise RuntimeError("Browser not running")
 
             # Create a new page for the screenshot
             page = await context.new_page()
 
-            # Take screenshot
-            screenshot_path = await browser_manager.screenshot(
+            # Take screenshot - returns raw PNG bytes
+            screenshot_bytes = await browser_manager.screenshot(
                 page,
-                path=path,
                 full_page=full_page,
                 session_id=session_id,
             )
@@ -116,15 +114,10 @@ def browser_handler(server: FastMCP) -> None:
             # Clean up page
             await page.close()
 
-            result = {
-                "status": "success",
-                "screenshot_path": screenshot_path,
-                "session_id": session_id or "default",
-            }
-            return json.dumps(result, indent=2)
+            return Image(data=screenshot_bytes, format="png")
         except Exception as e:
             logger.error("Browser screenshot error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)})
+            raise e
 
     @server.tool()
     async def browser_click(

@@ -187,7 +187,7 @@ class BrowserManager:
         self,
         url: str,
         timeout: int | None = None,
-        wait_until: str = "networkidle",
+        wait_until: str = "domcontentloaded",
         session_id: str | None = None,
     ) -> Page:
         """Navigate to a URL with anti-detection measures.
@@ -223,33 +223,35 @@ class BrowserManager:
     async def screenshot(
         self,
         page: Page,
-        path: str | None = None,
         full_page: bool = False,
         session_id: str | None = None,
-    ) -> str:
-        """Take a screenshot of the page.
+    ) -> bytes:
+        """Take a screenshot of the page and return raw PNG bytes.
 
         Args:
             page: The page to screenshot.
-            path: The file path to save the screenshot. If None, saves to screenshot_dir.
             full_page: Whether to capture the full page.
             session_id: The session ID. Used for default path generation.
 
         Returns:
-            The path where the screenshot was saved.
+            Raw PNG bytes of the screenshot.
         """
-        if path is None:
-            timestamp = asyncio.get_event_loop().time()
-            session_prefix = session_id[:8] if session_id else "default"
-            path = os.path.join(
-                self._screenshot_dir,
-                f"screenshot_{session_prefix}_{timestamp:.0f}.png",
-            )
+        # Capture as bytes
+        screenshot_bytes = await page.screenshot(full_page=full_page)
 
-        os.makedirs(os.path.dirname(path) or self._screenshot_dir, exist_ok=True)
-        await page.screenshot(path=path, full_page=full_page)
+        # Save to disk for logging/debugging
+        timestamp = asyncio.get_event_loop().time()
+        session_prefix = session_id[:8] if session_id else "default"
+        path = os.path.join(
+            self._screenshot_dir,
+            f"screenshot_{session_prefix}_{timestamp:.0f}.png",
+        )
+        os.makedirs(self._screenshot_dir, exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(screenshot_bytes)
         logger.info("Screenshot saved to %s", path)
-        return path
+
+        return screenshot_bytes
 
     async def get_content(self, page: Page) -> str:
         """Get the page content.

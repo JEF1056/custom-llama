@@ -114,7 +114,7 @@ fi
 if [ -n "$LLAMA_MODEL" ]; then
     MODEL="$LLAMA_MODEL"
 elif [ -n "$MODEL_NAME" ]; then
-    QUANT="${QUANT:-${TQ_QUANT:-Q4_K_M}}"
+    QUANT="${QUANT:-${TQ_QUANT:-IQ4_XS}}"
     MODEL="/models/${MODEL_NAME}-${QUANT}.gguf"
 else
     MODEL=/models/model.gguf
@@ -132,7 +132,7 @@ if [ ! -f "$MODEL" ]; then
     echo ""
     echo "Prepare the model first using the convert image, for example:"
     if [ -n "$MODEL_NAME" ]; then
-        echo "  docker compose run --rm llama-convert download $MODEL_NAME --quant ${QUANT:-Q4_K_M}"
+        echo "  docker compose run --rm llama-convert download $MODEL_NAME --quant ${QUANT:-IQ4_XS}"
         echo "  # or for safetensors-only models:"
         echo "  docker compose run --rm llama-convert convert-st $MODEL_NAME --quant ${QUANT:-TQ2_0}"
     else
