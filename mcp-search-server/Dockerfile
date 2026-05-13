@@ -3,30 +3,30 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-# Install build dependencies
+# Install build dependencies (rarely changes)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install Python dependencies
+# Copy requirements and install Python dependencies (changes when requirements.txt changes)
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-# Copy source code
-COPY src/ ./src/
+# Copy pyproject.toml and install the application (changes when pyproject.toml changes)
 COPY pyproject.toml .
-
-# Install the application
 RUN pip install --no-cache-dir --prefix=/install .
+
+# Copy source code (changes frequently — placed last for optimal caching)
+COPY src/ ./src/
 
 # Stage 2: Runtime stage
 FROM python:3.12-slim AS runtime
 
 WORKDIR /app
 
-# Install system dependencies for Playwright (chromium)
+# Install system dependencies for Playwright (chromium) (rarely changes)
 # Based on https://github.com/microsoft/playwright/blob/main/packages/playwright-core/src/server/linux/linuxBrowserRunner.js
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -72,33 +72,42 @@ RUN apt-get update && \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy installed Python packages from builder stage
+# Copy installed Python packages from builder stage (changes when Python dependencies change)
 COPY --from=builder /install /usr/local
 
-# Copy application code
-COPY --from=builder /build/src/ ./src/
+# Copy pyproject.toml (changes rarely)
 COPY --from=builder /build/pyproject.toml .
 
-# Copy entrypoint script
+# Copy entrypoint script and make it executable (changes rarely)
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
-# Install Playwright browsers
+# Install Playwright browsers as root (very expensive, rarely changes — placed before source code)
 RUN playwright install --with-deps chromium
 
-# Create non-root user
+# Create non-root user (rarely changes)
 RUN groupadd -r appuser && \
     useradd -r -g appuser -d /app -s /sbin/nologin appuser && \
     chown -R appuser:appuser /app
 
+# Copy Playwright browsers to appuser's cache directory so they're accessible (rarely changes)
+RUN mkdir -p /home/appuser/.cache/ms-playwright && \
+    cp -r /root/.cache/ms-playwright/* /home/appuser/.cache/ms-playwright/ 2>/dev/null || true && \
+    chown -R appuser:appuser /home/appuser/.cache/ms-playwright
+
+# Switch to non-root user (rarely changes)
 USER appuser
 
-# Expose the MCP server port
+# Copy source code (changes frequently — placed last for optimal caching)
+COPY --from=builder /build/src/ ./src/
+
+# Expose the MCP server port (never changes)
 EXPOSE ${MCP_SERVER_PORT:-3100}
 
-# Health check
+# Health check - MCP server uses stdio transport, not HTTP
+# Use a simple process check instead (rarely changes)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${MCP_SERVER_PORT:-3100}/health || exit 1
+    CMD pgrep -f "python -m src.server" || exit 1
 
-# Set entrypoint
+# Set entrypoint (rarely changes)
 ENTRYPOINT ["./entrypoint.sh"]

@@ -166,6 +166,164 @@ Here's an example workflow demonstrating how to use the browser automation tools
    browser_close()
 ```
 
+## Usage Pattern
+
+### When to Use the MCP Server
+
+The MCP search server should be called in the following scenarios:
+
+1. **The agent is stuck or needs additional information**: When the agent encounters a knowledge gap or needs to gather real-time information to complete a task, it should use the search tools to find relevant data from the web.
+
+2. **The user specifies URLs that need to be fetched**: When the user provides specific URLs and asks the agent to retrieve or analyze content from those pages, the agent should use the fetch tool or browser automation tools to access the content.
+
+### Search Tools vs. Browser Automation Tools
+
+The MCP server provides two categories of tools that work together:
+
+| Category | Tools | Purpose |
+|----------|-------|---------|
+| **Search Tools** | `search`, `fetch`, `deep_search` | Quick information retrieval via HTTP requests and content extraction. Best for pages that don't require JavaScript rendering. |
+| **Browser Automation Tools** | `browser_navigate`, `browser_screenshot`, `browser_click`, `browser_fill`, `browser_evaluate`, `browser_get_text`, `browser_get_content`, `browser_monitor`, `browser_close`, `browser_list_sessions` | Full browser interaction for JavaScript-heavy pages that can't be scraped with simple HTTP requests. |
+
+**When to use search tools:**
+- Quick web searches for information
+- Fetching simple web pages (HTML without heavy JavaScript)
+- Extracting structured content from pages that render server-side
+
+**When to use browser automation tools:**
+- Interacting with JavaScript-heavy pages (SPAs, dynamic content)
+- Filling forms and clicking buttons
+- Taking screenshots for visual verification
+- Executing JavaScript on pages
+- Monitoring page changes over time
+
+### Workflow: Search + Browser Automation Together
+
+The search tools and browser automation tools are designed to work together in a complementary workflow:
+
+```
+1. Initial Information Gathering
+   └── Use search tools (search, fetch, deep_search) for quick results
+       ├── search: Find relevant pages via web search
+       ├── fetch: Extract content from specific URLs
+       └── deep_search: Get search results with extracted content
+
+2. Deep Dive into Specific Pages
+   └── If search results indicate a page needs deeper interaction:
+       ├── browser_navigate: Navigate to the URL
+       ├── browser_screenshot: Verify the page loaded correctly
+       ├── browser_get_content: Extract text content
+       ├── browser_click: Click links/buttons to navigate
+       ├── browser_fill: Fill forms (search boxes, login forms, etc.)
+       ├── browser_evaluate: Execute JavaScript for custom data extraction
+       └── browser_get_text: Get specific element text
+
+3. Iterative Exploration
+   └── Repeat step 2 as needed for different pages
+       ├── Use browser_monitor for pages that change over time
+       └── Use browser_close when done with a session
+```
+
+### Example Scenarios
+
+#### Scenario 1: Researching a Topic
+
+```
+User: "Find me the latest information about quantum computing breakthroughs in 2026"
+
+Agent workflow:
+1. Call search(query="quantum computing breakthroughs 2026", max_results=5)
+2. Review search results for relevant articles
+3. Call fetch(url="https://example.com/quantum-breakthrough") for promising articles
+4. If the page requires JavaScript rendering, use browser_navigate + browser_get_content
+5. Compile findings from all sources
+```
+
+#### Scenario 2: User-Specified URL Analysis
+
+```
+User: "Check what's on this page and tell me about the latest features"
+User provides: https://example.com/product
+
+Agent workflow:
+1. Call fetch(url="https://example.com/product")
+2. If fetch returns empty or incomplete content (JS-heavy page):
+   a. Call browser_navigate(url="https://example.com/product")
+   b. Call browser_screenshot() to verify page loaded
+   c. Call browser_get_content() to extract text
+   d. Call browser_get_text(selector="h1") to get the main heading
+3. Analyze and summarize the content
+```
+
+#### Scenario 3: Interactive Web Application
+
+```
+User: "Search for 'Python 3.13 release notes' and click on the first result"
+
+Agent workflow:
+1. Call search(query="Python 3.13 release notes", max_results=3)
+2. Identify the first relevant URL from results
+3. Call browser_navigate(url="https://docs.python.org/3/whatsnew/3.13.html")
+4. Call browser_screenshot() to verify the page loaded
+5. Call browser_click(selector="a.release-link") to click on a link
+6. Call browser_get_content() to extract the new page content
+```
+
+#### Scenario 4: Form Interaction
+
+```
+User: "Go to https://example.com/search and search for 'AI trends'"
+
+Agent workflow:
+1. Call browser_navigate(url="https://example.com/search")
+2. Call browser_screenshot() to verify the page loaded
+3. Call browser_fill(selector="input.search-box", value="AI trends")
+4. Call browser_click(selector="button.search-button")
+5. Call browser_get_content() to extract search results
+```
+
+#### Scenario 5: Stuck Agent Recovery
+
+```
+User: "I need to know the current weather in Tokyo"
+
+Agent workflow:
+1. Call search(query="current weather Tokyo", max_results=3)
+2. If search results don't provide detailed weather info:
+   a. Call fetch(url="https://weather.com/tokyo")
+   b. If fetch fails (JS-heavy page):
+      - Call browser_navigate(url="https://weather.com/tokyo")
+      - Call browser_get_content() to extract weather data
+3. Compile and present the weather information
+```
+
+#### Scenario 6: Multi-Step Research with Monitoring
+
+```
+User: "Monitor this stock price page for the next minute and tell me if it changes"
+
+Agent workflow:
+1. Call browser_navigate(url="https://example.com/stock/ABC")
+2. Call browser_screenshot() to verify the page loaded
+3. Call browser_get_text(selector=".stock-price") to get initial price
+4. Call browser_monitor(interval=10, duration=60) to capture changes
+5. Compare the captured screenshots/text to identify price changes
+```
+
+#### Scenario 7: Deep Search with Fallback
+
+```
+User: "Find me documentation about React Server Components"
+
+Agent workflow:
+1. Call deep_search(query="React Server Components documentation", max_results=5)
+2. Review extracted content from top results
+3. If content is incomplete (e.g., requires JavaScript rendering):
+   a. Call browser_navigate(url="https://react.dev/reference/rsc/server-components")
+   b. Call browser_evaluate(script="JSON.stringify(document.querySelector('.content').innerHTML)")
+   c. Extract and present the full documentation
+```
+
 ## Setup
 
 ### Prerequisites

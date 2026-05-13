@@ -1,7 +1,7 @@
 networks:
-  # Internal-only network. Services here have NO route to the public internet.
+  # Shared network for llama-server and MCP server to communicate.
+  # Note: NOT internal — cloudflared needs internet access to connect to Cloudflare.
   llama-net:
-    internal: true
 
 services:
   # ---------------------------------------------------------------------------
@@ -189,8 +189,10 @@ services:
       dockerfile: Dockerfile
     container_name: mcp-search-server
 
-    # MCP servers use stdio transport — no port mapping needed.
-    # The MCP client communicates via stdin/stdout.
+    # MCP servers use SSE transport — expose the HTTP port for MCP clients.
+    # MCP clients connect via HTTP SSE at http://mcp-search-server:3100/sse
+    ports:
+      - "${MCP_SERVER_PORT:-3100}:${MCP_SERVER_PORT:-3100}"
 
     volumes:
       - mcp-cache:/app/.cache
@@ -216,6 +218,16 @@ services:
           memory: 512M
 
     restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${MCP_SERVER_PORT:-3100}/sse"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    networks:
+      - llama-net
 
 volumes:
   mcp-cache:

@@ -6,9 +6,15 @@ echo "Starting up..."
 
 # Wait for Playwright browsers to be ready
 echo "Checking Playwright browser installation..."
-if [ ! -d "/root/.cache/ms-playwright" ]; then
+# Check both root and appuser cache directories
+if [ ! -d "/root/.cache/ms-playwright" ] && [ ! -d "/home/appuser/.cache/ms-playwright" ]; then
     echo "Installing Playwright browsers..."
-    playwright install chromium
+    # Run as root to install browsers
+    su -c "playwright install chromium" root
+    # Copy to appuser's cache directory
+    mkdir -p /home/appuser/.cache/ms-playwright
+    cp -r /root/.cache/ms-playwright/* /home/appuser/.cache/ms-playwright/ 2>/dev/null || true
+    chown -R appuser:appuser /home/appuser/.cache/ms-playwright
 fi
 
 # Verify Playwright is working

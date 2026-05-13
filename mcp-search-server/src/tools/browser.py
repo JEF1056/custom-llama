@@ -26,7 +26,14 @@ def browser_handler(server: FastMCP) -> None:
         wait_until: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Navigate to a URL.
+        """Navigate to a URL using a headless browser.
+
+        Use this tool when you need to interact with JavaScript-heavy pages that require
+        full browser rendering. This is the first step in the browser automation workflow.
+
+        After navigating, use browser_screenshot() to see the page, browser_click() to
+        interact with elements, browser_fill() to fill forms, browser_get_text() or
+        browser_get_content() to extract content, or browser_evaluate() to run JavaScript.
 
         Args:
             url: The URL to navigate to
@@ -73,6 +80,9 @@ def browser_handler(server: FastMCP) -> None:
         session_id: str | None = None,
     ) -> str:
         """Take a screenshot of the current page.
+
+        Use this tool to see what the page looks like after navigating. This is useful
+        for understanding the page layout and identifying elements to interact with.
 
         Args:
             full_page: Whether to capture the full page
@@ -123,7 +133,11 @@ def browser_handler(server: FastMCP) -> None:
         wait_until: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Click an element.
+        """Click an element on the page.
+
+        Use this tool to interact with buttons, links, and other clickable elements.
+        After clicking, use browser_screenshot() to see the result or browser_get_text()
+        to extract content from the new page.
 
         Args:
             selector: The CSS selector for the element
@@ -173,7 +187,16 @@ def browser_handler(server: FastMCP) -> None:
         value: str,
         session_id: str | None = None,
     ) -> str:
-        """Fill an input field.
+        """Fill an input field on the page.
+
+        Use this tool to fill in form fields, search boxes, and other input elements.
+        Common use cases:
+        - Filling out contact forms (USE CASE 3: Form Submission)
+        - Entering search queries (USE CASE 1: Grounding)
+        - Entering login credentials (USE CASE 4: Authentication)
+        - Entering search terms for availability checks (USE CASE 9: Availability Checking)
+
+        After filling, use browser_click() to submit the form or browser_get_text() to verify the value.
 
         Args:
             selector: The CSS selector for the input
@@ -219,6 +242,15 @@ def browser_handler(server: FastMCP) -> None:
     ) -> str:
         """Execute JavaScript on the page.
 
+        Use this tool to run custom JavaScript on the page for advanced data extraction
+        or debugging. Common use cases:
+        - Extracting data from complex DOM structures (USE CASE 5: Dynamic Content Extraction)
+        - Running debugging scripts (USE CASE 8: Interactive Debugging)
+        - Checking for availability indicators (USE CASE 9: Availability Checking)
+        - Extracting data from SPAs that don't expose data in the DOM (USE CASE 5)
+
+        Example: "document.querySelector('.price').textContent" to get a price element
+
         Args:
             script: The JavaScript code to execute
             session_id: The session ID to use. If None, uses the default context.
@@ -261,6 +293,12 @@ def browser_handler(server: FastMCP) -> None:
     ) -> str:
         """Get text content of an element.
 
+        Use this tool to extract text from specific elements on the page. Common use cases:
+        - Getting prices, stock status, or other data from elements (USE CASE 2: Real-time Data)
+        - Checking availability indicators (USE CASE 9: Availability Checking)
+        - Extracting search results or product listings (USE CASE 6: Data Collection)
+        - Verifying form submission success (USE CASE 3: Form Submission)
+
         Args:
             selector: The CSS selector for the element
             session_id: The session ID to use. If None, uses the default context.
@@ -301,6 +339,14 @@ def browser_handler(server: FastMCP) -> None:
         session_id: str | None = None,
     ) -> str:
         """Get the page content (text extraction).
+
+        Use this tool to extract all text content from the current page. Common use cases:
+        - Extracting article content or blog posts (USE CASE 1: Grounding)
+        - Getting full page content for analysis (USE CASE 6: Data Collection)
+        - Extracting data from SPAs that require JavaScript rendering (USE CASE 5: Dynamic Content)
+        - Verifying content exists before generating responses (USE CASE 1)
+
+        This is useful when you need comprehensive content from a page rather than specific elements.
 
         Args:
             session_id: The session ID to use. If None, uses the default context.
@@ -346,7 +392,16 @@ def browser_handler(server: FastMCP) -> None:
     ) -> str:
         """Periodic screenshot monitoring.
 
-        Captures screenshots at regular intervals for a specified duration.
+        Captures screenshots at regular intervals for a specified duration. Use this tool
+        to monitor a page for changes over time.
+
+        Common use cases:
+        - Price monitoring: Track price changes over time (USE CASE 10: Competitive Intelligence)
+        - Availability checking: Monitor product stock levels (USE CASE 9: Availability Checking)
+        - Appointment slot monitoring: Track when slots become available (USE CASE 9)
+        - Content change detection: Monitor for updates to a page (USE CASE 10)
+
+        After monitoring, compare the screenshots to detect changes.
 
         Args:
             interval: Seconds between screenshots (default: 5)
@@ -409,6 +464,9 @@ def browser_handler(server: FastMCP) -> None:
     ) -> str:
         """Close the browser session.
 
+        Use this tool to close the browser when you're done with your tasks. This frees up
+        resources and ensures the browser is properly shut down.
+
         Args:
             session_id: The session ID to close. If None, closes the default context.
 
@@ -435,6 +493,10 @@ def browser_handler(server: FastMCP) -> None:
     @server.tool()
     async def browser_list_sessions() -> str:
         """List active browser sessions.
+
+        Use this tool to see which browser sessions are currently active. This is useful
+        when you have multiple sessions open and need to know which session IDs to use
+        for other browser automation tools.
 
         Returns:
             JSON string with list of session IDs
