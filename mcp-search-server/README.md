@@ -1,6 +1,6 @@
 # MCP Search Server
 
-An advanced MCP (Model Context Protocol) server for semantic web search with browser automation. This server allows LLMs to perform web searches, fetch web pages, and extract content using browser automation.
+An advanced MCP (Model Context Protocol) server for semantic web search with browser automation using SSE (Server-Sent Events) transport. This server allows LLMs to perform web searches, fetch web pages, and extract content using browser automation.
 
 ## Features
 
@@ -360,33 +360,68 @@ Agent workflow:
 
 ### MCP Client Configuration
 
-To connect your MCP client to this server, add the following configuration:
+To connect your MCP client to this server, add the following configuration. The server uses SSE (Server-Sent Events) transport on `/sse` and `/mcp` endpoints:
+
+#### Docker Compose Configuration
 
 ```json
 {
   "mcpServers": {
     "search": {
       "command": "docker",
-      "args": ["exec", "-i", "mcp-search-server", "python", "-m", "src.server"]
+      "args": ["exec", "-i", "mcp-search-server", "python", "-m", "src.server"],
+      "env": {
+        "MCP_SERVER_HOST": "0.0.0.0",
+        "MCP_SERVER_PORT": "3100"
+      }
     }
   }
 }
 ```
 
-Or for direct execution:
+#### Direct Execution Configuration
 
 ```json
 {
   "mcpServers": {
     "search": {
       "command": "python",
-      "args": ["-m", "src.server"]
+      "args": ["-m", "src.server"],
+      "env": {
+        "MCP_SERVER_HOST": "0.0.0.0",
+        "MCP_SERVER_PORT": "3100"
+      }
     }
   }
 }
 ```
 
-## Configuration
+#### SSE Transport
+
+The server uses the SSE (Server-Sent Events) transport protocol. The endpoints are:
+- `GET /sse` - SSE endpoint for client to receive events (returns `text/event-stream`)
+- `POST /mcp` - MCP JSON-RPC message endpoint (accepts `application/json`)
+
+The server requires clients to accept both `application/json` and `text/event-stream` content types.
+
+#### CORS Configuration
+
+The server supports CORS to allow MCP clients from different origins. Configure the following environment variables:
+
+| Environment Variable | Description | Default |
+|---------------------|-------------|---------|
+| `CORS_ALLOW_ALL` | Allow all CORS origins (use `*` for development) | `false` |
+| `CORS_ORIGINS` | Comma-separated list of allowed CORS origins | `http://localhost:8080,http://localhost:3000,http://localhost:2280` |
+
+**Default CORS Origins for MCP Clients:**
+
+| Client | Origin |
+|--------|--------|
+| llama.cpp Server Web UI | `http://localhost:8080` |
+| Roo | `http://localhost:3000` |
+| OpenCode | `http://localhost:2280` |
+
+#### Full Configuration
 
 | Environment Variable | Description | Default |
 |---------------------|-------------|---------|
@@ -403,6 +438,8 @@ Or for direct execution:
 | `REDIS_HOST` | Redis host (optional, for distributed caching) | `` |
 | `REDIS_PORT` | Redis port | `6379` |
 | `REDIS_PASSWORD` | Redis password | `` |
+| `CORS_ALLOW_ALL` | Allow all CORS origins (development only) | `false` |
+| `CORS_ORIGINS` | Comma-separated list of allowed CORS origins | `http://localhost:8080,http://localhost:3000,http://localhost:2280` |
 
 ## Project Structure
 

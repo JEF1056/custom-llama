@@ -4,25 +4,40 @@ set -e
 echo "=== MCP Search Server ==="
 echo "Starting up..."
 
+# Set HOME to appuser's home directory so Playwright finds browsers in the right place
+export HOME=/home/appuser
+
 # Wait for Playwright browsers to be ready
 echo "Checking Playwright browser installation..."
 # Check both root and appuser cache directories
 if [ ! -d "/root/.cache/ms-playwright" ] && [ ! -d "/home/appuser/.cache/ms-playwright" ]; then
-    echo "Installing Playwright browsers..."
-    # Run as root to install browsers
-    su -c "playwright install chromium" root
+    echo "Installing Playwright browsers as root..."
+    # Run as root to install browsers (need root for --with-deps)
+    su -c "HOME=/root playwright install --with-deps chromium" root
     # Copy to appuser's cache directory
     mkdir -p /home/appuser/.cache/ms-playwright
     cp -r /root/.cache/ms-playwright/* /home/appuser/.cache/ms-playwright/ 2>/dev/null || true
     chown -R appuser:appuser /home/appuser/.cache/ms-playwright
+    echo "Browsers installed and copied to appuser cache"
+else
+    # Browsers already exist, ensure they're accessible to appuser
+    if [ -d "/root/.cache/ms-playwright" ] && [ ! -d "/home/appuser/.cache/ms-playwright" ]; then
+        echo "Copying browsers from root cache to appuser cache..."
+        mkdir -p /home/appuser/.cache/ms-playwright
+        cp -r /root/.cache/ms-playwright/* /home/appuser/.cache/ms-playwright/ 2>/dev/null || true
+        chown -R appuser:appuser /home/appuser/.cache/ms-playwright
+    fi
 fi
 
-# Verify Playwright is working
+# Verify Playwright browsers exist
 echo "Verifying Playwright installation..."
-if playwright install --dry-run 2>/dev/null; then
+if [ -d "/home/appuser/.cache/ms-playwright" ]; then
+    echo "Playwright browsers found:"
+    ls -la /home/appuser/.cache/ms-playwright/
     echo "Playwright browsers are ready!"
 else
-    echo "Warning: Playwright browsers may not be fully installed"
+    echo "ERROR: Playwright browsers not found! Search will not work."
+    exit 1
 fi
 
 # Print configuration

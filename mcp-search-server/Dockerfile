@@ -8,6 +8,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     gcc \
     g++ \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies (changes when requirements.txt changes)
@@ -83,20 +84,29 @@ COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
 # Install Playwright browsers as root (very expensive, rarely changes — placed before source code)
-RUN playwright install --with-deps chromium
+# Use --with-deps to install system dependencies and browsers in one step
+RUN playwright install --with-deps chromium && \
+    # Verify the installation succeeded
+    ls -la /root/.cache/ms-playwright/
 
 # Create non-root user (rarely changes)
 RUN groupadd -r appuser && \
     useradd -r -g appuser -d /app -s /sbin/nologin appuser && \
     chown -R appuser:appuser /app
 
-# Copy Playwright browsers to appuser's cache directory so they're accessible (rarely changes)
+# Copy Playwright browsers to appuser's cache directory so they're accessible
+# Create the directory structure and copy all browser binaries
 RUN mkdir -p /home/appuser/.cache/ms-playwright && \
     cp -r /root/.cache/ms-playwright/* /home/appuser/.cache/ms-playwright/ 2>/dev/null || true && \
-    chown -R appuser:appuser /home/appuser/.cache/ms-playwright
+    chown -R appuser:appuser /home/appuser/.cache/ms-playwright && \
+    # Verify the copy succeeded
+    ls -la /home/appuser/.cache/ms-playwright/
 
 # Switch to non-root user (rarely changes)
 USER appuser
+
+# Set HOME to appuser's home directory so Playwright finds browsers in the right place
+ENV HOME=/home/appuser
 
 # Copy source code (changes frequently — placed last for optimal caching)
 COPY --from=builder /build/src/ ./src/
@@ -104,10 +114,9 @@ COPY --from=builder /build/src/ ./src/
 # Expose the MCP server port (never changes)
 EXPOSE ${MCP_SERVER_PORT:-3100}
 
-# Health check - MCP server uses stdio transport, not HTTP
-# Use a simple process check instead (rarely changes)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD pgrep -f "python -m src.server" || exit 1
+# Health check - MCP server uses SSE transport on HTTP
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:${MCP_SERVER_PORT:-3100}/health || exit 1
 
 # Set entrypoint (rarely changes)
 ENTRYPOINT ["./entrypoint.sh"]

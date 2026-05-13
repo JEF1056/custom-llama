@@ -1,9 +1,14 @@
-"""MCP Server for web search and content extraction."""
+"""MCP Server for web search and content extraction using SSE transport."""
 
 import asyncio
 import logging
 
 from mcp.server import FastMCP
+from starlette.applications import Starlette
+from starlette.middleware.cors import CORSMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
+from starlette.routing import Route
 
 from src.config import settings
 from src.tools.browser import browser_handler
@@ -25,8 +30,7 @@ def create_server() -> FastMCP:
         name="mcp-search-server",
         host=settings.MCP_SERVER_HOST,
         port=settings.MCP_SERVER_PORT,
-        sse_path="/sse",
-        message_path="/message",
+        streamable_http_path="/mcp",
         instructions=(
             "A search server that can perform web searches, extract content from web pages, "
             "and automate browser interactions.\n\n"
@@ -57,70 +61,70 @@ def create_server() -> FastMCP:
             "   - browser_close: Close the browser\n"
             "   - browser_list_sessions: List active browser sessions\n\n"
             "=== WORKFLOW: SEARCH + BROWSER AUTOMATION TOGETHER ===\n"
-            "1. Initial information gathering via search tools (search → fetch)\n"
-            "2. Deep dive into specific pages via browser automation (navigate → click → extract)\n"
+            "1. Initial information gathering via search tools (search -> fetch)\n"
+            "2. Deep dive into specific pages via browser automation (navigate -> click -> extract)\n"
             "3. Iterative exploration based on findings\n\n"
             "=== USE CASE 1: GROUNDING/ADVISING LLM GENERATION ===\n"
             "When the LLM needs to generate responses based on real-time web data:\n"
-            "- search for the topic → fetch content from relevant URLs → use extracted content to ground the response\n"
-            "- deep_search for comprehensive information → use extracted content to answer the question\n"
-            "Example: \"What is the current weather in Tokyo?\" → search → fetch → answer based on weather data\n\n"
+            "- search for the topic -> fetch content from relevant URLs -> use extracted content to ground the response\n"
+            "- deep_search for comprehensive information -> use extracted content to answer the question\n"
+            "Example: \"What is the current weather in Tokyo?\" -> search -> fetch -> answer based on weather data\n\n"
             "=== USE CASE 2: REAL-TIME DATA FETCHING ===\n"
             "When the user needs live data from websites:\n"
             "- fetch specific URLs with live data (stock prices, sports scores, news)\n"
-            "- browser_navigate to JS-heavy pages with live data → browser_get_text to extract values\n"
-            "Example: \"What's the price of Bitcoin?\" → fetch → extract price from page\n\n"
+            "- browser_navigate to JS-heavy pages with live data -> browser_get_text to extract values\n"
+            "Example: \"What's the price of Bitcoin?\" -> fetch -> extract price from page\n\n"
             "=== USE CASE 3: FORM SUBMISSION/AUTOMATION ===\n"
             "When the user needs to fill out forms or automate web workflows:\n"
-            "- browser_navigate to the form page → browser_fill to fill fields → browser_click to submit\n"
+            "- browser_navigate to the form page -> browser_fill to fill fields -> browser_click to submit\n"
             "- browser_get_text or browser_get_content to verify submission\n"
-            "Example: \"Fill out this contact form\" → navigate → fill → click → verify\n\n"
+            "Example: \"Fill out this contact form\" -> navigate -> fill -> click -> verify\n\n"
             "=== USE CASE 4: AUTHENTICATION/SESSION MANAGEMENT ===\n"
             "When the user needs to access authenticated content:\n"
-            "- browser_navigate to login page → browser_fill to enter credentials → browser_click to submit\n"
-            "- browser_get_text to verify login success → browser_navigate to protected page\n"
-            "Example: \"Check my email\" → navigate to login → fill credentials → access inbox\n\n"
+            "- browser_navigate to login page -> browser_fill to enter credentials -> browser_click to submit\n"
+            "- browser_get_text to verify login success -> browser_navigate to protected page\n"
+            "Example: \"Check my email\" -> navigate to login -> fill credentials -> access inbox\n\n"
             "=== USE CASE 5: DYNAMIC CONTENT EXTRACTION ===\n"
             "When the user needs data from SPAs that require JavaScript rendering:\n"
-            "- browser_navigate to the page → browser_get_text or browser_get_content to extract data\n"
+            "- browser_navigate to the page -> browser_get_text or browser_get_content to extract data\n"
             "- browser_evaluate to run custom JavaScript for data extraction\n"
-            "Example: \"Get the latest reviews\" → navigate → extract reviews from SPA\n\n"
+            "Example: \"Get the latest reviews\" -> navigate -> extract reviews from SPA\n\n"
             "=== USE CASE 6: DATA COLLECTION/SCRAPING ===\n"
             "When the user needs to collect data from multiple pages:\n"
-            "- search for the topic → fetch multiple URLs → extract data from each\n"
-            "- browser_navigate to each page → browser_get_text to collect data\n"
-            "Example: \"Get all product prices from this site\" → navigate → extract → repeat\n\n"
+            "- search for the topic -> fetch multiple URLs -> extract data from each\n"
+            "- browser_navigate to each page -> browser_get_text to collect data\n"
+            "Example: \"Get all product prices from this site\" -> navigate -> extract -> repeat\n\n"
             "=== USE CASE 7: PROGRESS MONITORING ===\n"
             "When the user needs to monitor a page for changes over time:\n"
-            "- browser_navigate to the page → browser_monitor to capture periodic screenshots\n"
+            "- browser_navigate to the page -> browser_monitor to capture periodic screenshots\n"
             "- Compare screenshots to detect changes\n"
-            "Example: \"Monitor this product page for price drops\" → navigate → monitor → compare\n\n"
+            "Example: \"Monitor this product page for price drops\" -> navigate -> monitor -> compare\n\n"
             "=== USE CASE 8: INTERACTIVE DEBUGGING ===\n"
             "When the user needs to debug a web application:\n"
-            "- browser_navigate to the page → browser_screenshot to see the page\n"
-            "- browser_evaluate to run debugging scripts → browser_get_text to verify\n"
-            "Example: \"Debug this form\" → navigate → screenshot → evaluate → fix\n\n"
+            "- browser_navigate to the page -> browser_screenshot to see the page\n"
+            "- browser_evaluate to run debugging scripts -> browser_get_text to verify\n"
+            "Example: \"Debug this form\" -> navigate -> screenshot -> evaluate -> fix\n\n"
             "=== USE CASE 9: AVAILABILITY CHECKING ===\n"
             "When the user needs to check product availability or appointment slots:\n"
-            "- browser_navigate to the availability page → browser_get_text to check status\n"
+            "- browser_navigate to the availability page -> browser_get_text to check status\n"
             "- browser_evaluate to check for availability indicators\n"
-            "Example: \"Is this product in stock?\" → navigate → check availability\n\n"
+            "Example: \"Is this product in stock?\" -> navigate -> check availability\n\n"
             "=== USE CASE 10: COMPETITIVE INTELLIGENCE ===\n"
             "When the user needs to monitor competitor websites:\n"
-            "- browser_navigate to competitor pages → browser_screenshot to capture\n"
-            "- browser_monitor for ongoing monitoring → compare changes over time\n"
-            "Example: \"What's my competitor's pricing?\" → navigate → extract → compare\n\n"
+            "- browser_navigate to competitor pages -> browser_screenshot to capture\n"
+            "- browser_monitor for ongoing monitoring -> compare changes over time\n"
+            "Example: \"What's my competitor's pricing?\" -> navigate -> extract -> compare\n\n"
             "=== EXAMPLE SCENARIOS ===\n"
-            "- Researching a topic: search → fetch → browser fallback for JS-heavy pages\n"
-            "- User-specified URL analysis: fetch → browser fallback\n"
-            "- Interactive web application: navigate → click → extract\n"
-            "- Form interaction: navigate → fill → click → extract\n"
-            "- Stuck agent recovery: search → fetch → browser fallback\n"
-            "- Multi-step research with monitoring: navigate → monitor → compare\n"
-            "- Deep search with fallback: deep_search → browser evaluate\n"
-            "- Real-time data: fetch → extract → answer\n"
-            "- Availability check: navigate → get_text → check status\n"
-            "- Price monitoring: navigate → monitor → compare over time"
+            "- Researching a topic: search -> fetch -> browser fallback for JS-heavy pages\n"
+            "- User-specified URL analysis: fetch -> browser fallback\n"
+            "- Interactive web application: navigate -> click -> extract\n"
+            "- Form interaction: navigate -> fill -> click -> extract\n"
+            "- Stuck agent recovery: search -> fetch -> browser fallback\n"
+            "- Multi-step research with monitoring: navigate -> monitor -> compare\n"
+            "- Deep search with fallback: deep_search -> browser evaluate\n"
+            "- Real-time data: fetch -> extract -> answer\n"
+            "- Availability check: navigate -> get_text -> check status\n"
+            "- Price monitoring: navigate -> monitor -> compare over time"
         ),
     )
     return server
@@ -138,14 +142,74 @@ def register_tools(server: FastMCP) -> None:
     browser_handler(server)
 
 
+def healthcheck(request: Request) -> Response:
+    """Simple healthcheck endpoint."""
+    return Response(content="OK", media_type="text/plain", status_code=200)
+
+
+def create_app(server: FastMCP) -> Starlette:
+    """Create a Starlette app with SSE transport and CORS middleware.
+
+    Args:
+        server: The MCP server instance.
+
+    Returns:
+        Starlette app with SSE transport and CORS middleware.
+    """
+    # Get the SSE app (for SSE transport: GET /sse and POST /mcp)
+    sse_app = server.sse_app()
+
+    # Extract routes from the SSE app
+    sse_routes = list(sse_app.routes)
+
+    # Add healthcheck endpoint
+    healthcheck_route = Route("/health", endpoint=healthcheck, methods=["GET"])
+    all_routes = sse_routes + [healthcheck_route]
+
+    # Create Starlette app
+    app = Starlette(
+        debug=server.settings.debug,
+        routes=all_routes,
+    )
+
+    # Add CORS middleware to allow cross-origin requests from MCP clients
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.effective_cors_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "Accept", "Cache-Control"],
+        expose_headers=["Content-Type", "Cache-Control"],
+        max_age=3600,  # Cache preflight response for 1 hour
+    )
+
+    return app
+
+
 async def run_server(server: FastMCP) -> None:
-    """Run the MCP server with SSE (HTTP) transport.
+    """Run the MCP server with SSE transport.
 
     Args:
         server: The MCP server instance.
     """
+    # Create app with SSE transport and CORS
+    app = create_app(server)
+
     logger.info("Starting MCP server on SSE transport at %s:%s", settings.MCP_SERVER_HOST, settings.MCP_SERVER_PORT)
-    await server.run_sse_async()
+    logger.info("SSE endpoint: GET /sse")
+    logger.info("MCP endpoint: POST /mcp")
+    logger.info("Healthcheck: GET /health")
+    logger.info("CORS origins: %s", settings.effective_cors_origins)
+
+    # Start the Starlette app directly with uvicorn so that the CORS middleware is applied
+    import uvicorn
+    config = uvicorn.Config(
+        app,
+        host=settings.MCP_SERVER_HOST,
+        port=settings.MCP_SERVER_PORT,
+        log_level="info",
+    )
+    await uvicorn.Server(config).serve()
 
 
 def main() -> None:
