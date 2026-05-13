@@ -77,7 +77,7 @@ Cloudflare Edge (api.jessfan.com)
 - **`LLAMA_DIRECT_IO=on`** is recommended when `LLAMA_GPU_LAYERS=99` — it prevents the ~18 GB model from being cached in the OS page cache after it's already in VRAM.
 - **MTP requires an MTP-capable GGUF** — the model must have `nextn`/MTP head layers baked in (e.g. `*-mtp.gguf` from HuggingFace). Standard Q4_K_M files don't contain MTP heads.
 - **`LLAMA_SPEC_TYPE=mtp` requires `LLAMA_PARALLEL=1`** — the server hard-errors on `n_parallel > 1` with MTP. `entrypoint.sh` auto-forces this with a warning.
-- **MTP + vision = crash** — `--spec-type mtp` with `--mmproj` is a confirmed upstream bug. `entrypoint.sh` auto-disables MTP when `LLAMA_MMPROJ` is set.
+- **MTP + vision cannot be active simultaneously** — the server rejects the combo with a clear error (fixed in `llama-next`: `handle_mtp_for_ubatch` now guards against `tokens==nullptr` image batches; server init rejects the pairing early). `entrypoint.sh` auto-disables MTP when `LLAMA_MMPROJ` is set.
 - **llama-cpp source** is now `JEF1056/llama-cpp-turboquant` (`llama-next` branch) — TurboQuant KV + upstream sync + MTP speculative decoding + HIP/FATTN fixes on top.
 
 ## Environment variables (key ones)
