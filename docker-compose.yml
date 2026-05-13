@@ -3,9 +3,6 @@ networks:
   llama-net:
     internal: true
 
-volumes:
-  # Model volume — shared between llama-server and llama-convert
-
 services:
   # ---------------------------------------------------------------------------
   # Model preparation (download / quantize / convert) — run before the server.
