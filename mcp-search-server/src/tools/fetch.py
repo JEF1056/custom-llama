@@ -1,8 +1,9 @@
 """Fetch tool for MCP server."""
 
+import json
 import logging
 
-from mcp.server import Server
+from mcp.server import FastMCP
 
 from src.browser.automation import browser_manager
 from src.extractor.content import ContentExtractor
@@ -10,15 +11,15 @@ from src.extractor.content import ContentExtractor
 logger = logging.getLogger(__name__)
 
 
-def register_fetch_tool(server: Server) -> None:
+def fetch_handler(server: FastMCP) -> None:
     """Register the fetch tool with the MCP server.
 
     Args:
         server: The MCP server instance.
     """
 
-    @server.tool("fetch", "Fetch and extract content from a URL")
-    async def fetch_tool(url: str) -> str:
+    @server.tool()
+    async def fetch(url: str) -> str:
         """Fetch and extract content from a URL.
 
         Uses browser automation to render JavaScript-heavy pages and
@@ -48,7 +49,7 @@ def register_fetch_tool(server: Server) -> None:
             # Clean up page
             await page.close()
 
-            return str(content)
+            return json.dumps(content, indent=2)
         except Exception as e:
             logger.error("Fetch error: %s", str(e))
             return f"Error fetching URL: {str(e)}"

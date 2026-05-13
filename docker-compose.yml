@@ -92,7 +92,11 @@ services:
       LLAMA_GPU_LAYERS: ${LLAMA_GPU_LAYERS:-99}
       LLAMA_MAX_TOKENS: ${LLAMA_MAX_TOKENS:--1}
       LLAMA_TOP_P: ${LLAMA_TOP_P:-0.95}
-      LLAMA_TEMP: ${LLAMA_TEMP:-0.7}
+      LLAMA_TEMP: ${LLAMA_TEMP:-0.6}
+      LLAMA_TOP_K: ${LLAMA_TOP_K:-0}
+      LLAMA_MIN_P: ${LLAMA_MIN_P:-0.0}
+      LLAMA_PRESENCE_PENALTY: ${LLAMA_PRESENCE_PENALTY:-0.0}
+      LLAMA_REPETITION_PENALTY: ${LLAMA_REPETITION_PENALTY:-1.0}
       LLAMA_STOP: ${LLAMA_STOP:-}
 
       LLAMA_MODEL: ${LLAMA_MODEL:-}
@@ -117,7 +121,16 @@ services:
       LLAMA_NCMOE: ${LLAMA_NCMOE:-}
 
       LLAMA_NO_KV_OFFLOAD: ${LLAMA_NO_KV_OFFLOAD:-off}
-
+      
+      # DRY sampling (Don't Repeat Yourself) — anti-loop protection for reasoning models
+      LLAMA_DRY_MULTIPLIER: ${LLAMA_DRY_MULTIPLIER:-0}
+      LLAMA_DRY_BASE: ${LLAMA_DRY_BASE:-1.75}
+      LLAMA_DRY_ALLOWED_LENGTH: ${LLAMA_DRY_ALLOWED_LENGTH:-2}
+      LLAMA_DRY_PENALTY_LAST_N: ${LLAMA_DRY_PENALTY_LAST_N:-512}
+      
+      # Reasoning budget — hard cap on tokens inside <think>…</think> per turn
+      LLAMA_REASONING_BUDGET: ${LLAMA_REASONING_BUDGET:-0}
+      
       # KV cache slot persistence — saves/restores slot state to disk so
       # per-conversation KV caches survive server restarts.
       LLAMA_SLOT_SAVE_PATH: ${LLAMA_SLOT_SAVE_PATH:-/models/slots}
@@ -166,3 +179,44 @@ services:
     restart: unless-stopped
     depends_on:
       - llama-server
+
+  # ---------------------------------------------------------------------------
+  # MCP Search Server — semantic web search with browser automation
+  # ---------------------------------------------------------------------------
+  mcp-search-server:
+    build:
+      context: ./mcp-search-server
+      dockerfile: Dockerfile
+    container_name: mcp-search-server
+
+    # MCP servers use stdio transport — no port mapping needed.
+    # The MCP client communicates via stdin/stdout.
+
+    volumes:
+      - mcp-cache:/app/.cache
+      - /tmp/playwright:/tmp/playwright
+
+    environment:
+      MCP_SERVER_HOST: ${MCP_SERVER_HOST:-0.0.0.0}
+      MCP_SERVER_PORT: ${MCP_SERVER_PORT:-3100}
+      SEARCH_ENGINE: ${SEARCH_ENGINE:-duckduckgo}
+      SEARCH_API_KEY: ${SEARCH_API_KEY:-}
+      BROWSER_TIMEOUT: ${BROWSER_TIMEOUT:-30}
+      MAX_RESULTS: ${MAX_RESULTS:-10}
+      CACHE_ENABLED: ${CACHE_ENABLED:-true}
+      CACHE_TTL: ${CACHE_TTL:-3600}
+
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+    restart: unless-stopped
+
+volumes:
+  mcp-cache:
+    driver: local

@@ -12,7 +12,11 @@ UBATCH_SIZE=${LLAMA_UBATCH_SIZE:-2048}
 GPU_LAYERS=${LLAMA_GPU_LAYERS:-99}
 MAX_TOKENS=${LLAMA_MAX_TOKENS:--1}
 TOP_P=${LLAMA_TOP_P:-0.95}
-TEMP=${LLAMA_TEMP:-0.7}
+TEMP=${LLAMA_TEMP:-0.6}
+TOP_K=${LLAMA_TOP_K:-0}
+MIN_P=${LLAMA_MIN_P:-0.0}
+PRESENCE_PENALTY=${LLAMA_PRESENCE_PENALTY:-0.0}
+REPETITION_PENALTY=${LLAMA_REPETITION_PENALTY:-1.0}
 STOP=${LLAMA_STOP:-}
 DRY_MULTIPLIER=${LLAMA_DRY_MULTIPLIER:-0}
 DRY_BASE=${LLAMA_DRY_BASE:-1.75}
@@ -198,6 +202,10 @@ exec llama-server \
     -n "$MAX_TOKENS" \
     --top-p "$TOP_P" \
     --temp "$TEMP" \
+    ${TOP_K:+--top-k "$TOP_K"} \
+    ${MIN_P:+--min-p "$MIN_P"} \
+    ${PRESENCE_PENALTY:+--presence-penalty "$PRESENCE_PENALTY"} \
+    ${REPETITION_PENALTY:+--repeat-penalty "$REPETITION_PENALTY"} \
     --dry-multiplier "$DRY_MULTIPLIER" \
     --dry-base "$DRY_BASE" \
     --dry-allowed-length "$DRY_ALLOWED_LENGTH" \

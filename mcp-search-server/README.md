@@ -38,6 +38,134 @@ Perform a web search and extract full content from top results.
 
 **Returns:** Search results with extracted content from top 3 results.
 
+## Browser Automation Tools
+
+The server provides 10 browser automation tools powered by Playwright for headless browser interaction:
+
+### `browser_navigate`
+Navigate to a URL.
+
+**Parameters:**
+- `url` (string): The URL to navigate to
+- `wait_until` (string, optional): When to consider navigation completed (`load`, `domcontentloaded`, `networkidle`, `commit`)
+- `session_id` (string, optional): The session ID to use. If None, uses the default context.
+
+**Returns:** JSON string with page title, URL, and status.
+
+### `browser_screenshot`
+Take a screenshot of the current page.
+
+**Parameters:**
+- `full_page` (boolean, optional): Whether to capture the full page
+- `path` (string, optional): The file path to save the screenshot. If None, saves to screenshot_dir.
+- `session_id` (string, optional): The session ID to use. If None, uses the default context.
+
+**Returns:** JSON string with screenshot path.
+
+### `browser_click`
+Click an element.
+
+**Parameters:**
+- `selector` (string): The CSS selector for the element
+- `timeout` (integer, optional): Timeout in seconds. Defaults to BROWSER_TIMEOUT.
+- `wait_until` (string, optional): When to consider navigation completed after click
+- `session_id` (string, optional): The session ID to use. If None, uses the default context.
+
+**Returns:** JSON string with success/failure status.
+
+### `browser_fill`
+Fill an input field.
+
+**Parameters:**
+- `selector` (string): The CSS selector for the input
+- `value` (string): The value to fill
+- `session_id` (string, optional): The session ID to use. If None, uses the default context.
+
+**Returns:** JSON string with success/failure status.
+
+### `browser_evaluate`
+Execute JavaScript on the page.
+
+**Parameters:**
+- `script` (string): The JavaScript code to execute
+- `session_id` (string, optional): The session ID to use. If None, uses the default context.
+
+**Returns:** JSON string with the result of the JavaScript execution.
+
+### `browser_get_text`
+Get text content of an element.
+
+**Parameters:**
+- `selector` (string): The CSS selector for the element
+- `session_id` (string, optional): The session ID to use. If None, uses the default context.
+
+**Returns:** JSON string with the text content.
+
+### `browser_get_content`
+Get the page content (text extraction).
+
+**Parameters:**
+- `session_id` (string, optional): The session ID to use. If None, uses the default context.
+
+**Returns:** JSON string with page text content and content length.
+
+### `browser_monitor`
+Periodic screenshot monitoring. Captures screenshots at regular intervals for a specified duration.
+
+**Parameters:**
+- `interval` (integer, optional): Seconds between screenshots (default: 5)
+- `duration` (integer, optional): Total seconds to monitor (default: 30)
+- `path` (string, optional): Output directory for screenshots. If None, uses screenshot_dir.
+- `session_id` (string, optional): The session ID to use. If None, uses the default context.
+
+**Returns:** JSON string with list of screenshot paths.
+
+### `browser_close`
+Close the browser session.
+
+**Parameters:**
+- `session_id` (string, optional): The session ID to close. If None, closes the default context.
+
+**Returns:** JSON string with success/failure status.
+
+### `browser_list_sessions`
+List active browser sessions.
+
+**Returns:** JSON string with list of session IDs and total count.
+
+## Example Workflow
+
+Here's an example workflow demonstrating how to use the browser automation tools together to interact with a web page:
+
+```
+1. Navigate to a URL:
+   browser_navigate(url="https://example.com")
+
+2. Take a screenshot to verify the page loaded:
+   browser_screenshot()
+
+3. Get the page content:
+   browser_get_content()
+
+4. Click a link:
+   browser_click(selector="a.example-link")
+
+5. Fill a form:
+   browser_fill(selector="input#search", value="search term")
+
+6. Execute JavaScript to extract data:
+   browser_evaluate(script="document.querySelector('.data').textContent")
+
+7. Get specific element text:
+   browser_get_text(selector="h1")
+
+8. Monitor page changes (captures screenshots every 5 seconds for 30 seconds):
+   browser_monitor(interval=5, duration=30)
+
+9. Close the browser session:
+   browser_close()
+```
+
 ## Setup
 
 ### Prerequisites
@@ -49,15 +177,15 @@ Perform a web search and extract full content from top results.
 
 1. Clone the repository and navigate to the project directory:
    ```bash
-   cd mcp-search-server
+   cd ..
    ```
 
 2. Copy the environment file:
    ```bash
-   cp .env.example .env
+   cp mcp-search-server/.env.example mcp-search-server/.env
    ```
 
-3. (Optional) Configure your search engine API keys in `.env`:
+3. (Optional) Configure your search engine API keys in `mcp-search-server/.env`:
    ```bash
    # For Bing Search API
    SEARCH_API_KEY=your_bing_api_key
@@ -69,7 +197,7 @@ Perform a web search and extract full content from top results.
 
 4. Build and start the container:
    ```bash
-   docker compose up --build
+   docker compose --profile mcp-search up --build
    ```
 
 ### MCP Client Configuration
@@ -110,6 +238,7 @@ Or for direct execution:
 | `SEARCH_API_KEY` | API key for search engine (required for Bing/Google) | `` |
 | `GOOGLE_CSE_ID` | Google Custom Search Engine ID (required for Google) | `` |
 | `BROWSER_TIMEOUT` | Browser timeout in seconds | `30` |
+| `SCREENSHOT_DIR` | Directory to save screenshots | `/app/screenshots` |
 | `MAX_RESULTS` | Maximum number of search results | `10` |
 | `CACHE_ENABLED` | Enable caching (`true`/`false`) | `true` |
 | `CACHE_TTL` | Cache TTL in seconds | `3600` |
@@ -121,13 +250,13 @@ Or for direct execution:
 
 ```
 mcp-search-server/
-├── docker-compose.yml      # Docker Compose configuration
 ├── Dockerfile              # Multi-stage Docker build
 ├── .dockerignore           # Docker ignore patterns
 ├── .env.example            # Example environment variables
 ├── entrypoint.sh           # Container entrypoint script
 ├── requirements.txt        # Python dependencies
 ├── pyproject.toml          # Python project configuration
+├── README.md               # This file
 ├── src/
 │   ├── __init__.py
 │   ├── server.py           # Main MCP server
@@ -144,6 +273,7 @@ mcp-search-server/
 │   │   └── content.py      # Content extraction
 │   └── tools/
 │       ├── __init__.py
+│       ├── browser.py      # Browser automation tools
 │       ├── search.py       # Search tool
 │       ├── fetch.py        # Fetch tool
 │       └── deep_search.py  # Deep search tool

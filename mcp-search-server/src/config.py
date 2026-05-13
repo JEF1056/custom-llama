@@ -24,6 +24,7 @@ class Settings(BaseModel):
 
     # Browser settings
     BROWSER_TIMEOUT: int = Field(default=30, description="Browser timeout in seconds")
+    SCREENSHOT_DIR: str = Field(default="/app/screenshots", description="Directory to save screenshots")
 
     # Result settings
     MAX_RESULTS: int = Field(default=10, description="Maximum number of search results")

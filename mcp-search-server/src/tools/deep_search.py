@@ -4,7 +4,7 @@ import json
 import logging
 from datetime import datetime
 
-from mcp.server import Server
+from mcp.server import FastMCP
 
 from src.browser.automation import browser_manager
 from src.config import settings
@@ -15,15 +15,15 @@ from src.search.models import SearchResponse, SearchResult
 logger = logging.getLogger(__name__)
 
 
-def register_deep_search_tool(server: Server) -> None:
+def deep_search_handler(server: FastMCP) -> None:
     """Register the deep search tool with the MCP server.
 
     Args:
         server: The MCP server instance.
     """
 
-    @server.tool("deep_search", "Deep search with content extraction")
-    async def deep_search_tool(query: str, max_results: int | None = None) -> str:
+    @server.tool()
+    async def deep_search(query: str, max_results: int | None = None) -> str:
         """Deep search with content extraction.
 
         Performs a web search and extracts full content from top results.

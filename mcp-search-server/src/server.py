@@ -2,67 +2,52 @@
 
 import asyncio
 import logging
-from contextlib import asynccontextmanager
 
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
+from mcp.server import FastMCP
 
 from src.config import settings
-from src.tools.deep_search import register_deep_search_tool
-from src.tools.fetch import register_fetch_tool
-from src.tools.search import register_search_tool
+from src.tools.browser import browser_handler
+from src.tools.deep_search import deep_search_handler
+from src.tools.fetch import fetch_handler
+from src.tools.search import search_handler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-@asynccontextmanager
-async def server_lifespan(server: Server):
-    """Manage server startup and shutdown.
-
-    Args:
-        server: The MCP server instance.
-    """
-    logger.info("MCP Search Server starting up...")
-    logger.info("Search engine: %s", settings.SEARCH_ENGINE)
-    logger.info("Max results: %s", settings.MAX_RESULTS)
-    logger.info("Cache enabled: %s", settings.CACHE_ENABLED)
-    logger.info("Cache TTL: %s seconds", settings.CACHE_TTL)
-    yield
-    logger.info("MCP Search Server shutting down...")
-
-
-def create_server() -> Server:
+def create_server() -> FastMCP:
     """Create and configure the MCP server.
 
     Returns:
         Configured MCP server instance.
     """
-    server = Server("mcp-search-server")
-    server.lifespan = server_lifespan
+    server = FastMCP(
+        name="mcp-search-server",
+        instructions="A search server that can perform web searches, extract content from web pages, and automate browser interactions.",
+    )
     return server
 
 
-def register_tools(server: Server) -> None:
+def register_tools(server: FastMCP) -> None:
     """Register all MCP tools with the server.
 
     Args:
         server: The MCP server instance.
     """
-    register_search_tool(server)
-    register_fetch_tool(server)
-    register_deep_search_tool(server)
+    search_handler(server)
+    fetch_handler(server)
+    deep_search_handler(server)
+    browser_handler(server)
 
 
-async def run_server(server: Server) -> None:
+async def run_server(server: FastMCP) -> None:
     """Run the MCP server with stdio transport.
 
     Args:
         server: The MCP server instance.
     """
     logger.info("Starting MCP server on stdio transport")
-    async with stdio_server() as stream:
-        await server.run(stream)
+    await server.run_stdio_async()
 
 
 def main() -> None:
