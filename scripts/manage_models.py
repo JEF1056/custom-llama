@@ -1014,7 +1014,37 @@ def _graft_mtp_tensors(st_dir: Path, base_repo: str) -> None:
     with open(index_path, "w") as f:
         json.dump(index, f, indent=2, ensure_ascii=False)
         f.write("\n")
-    print("  Updated safetensors index → MTP graft complete ✓")
+    print("  Updated safetensors index")
+
+    # Ensure config.json has mtp_num_hidden_layers — the converter relies on
+    # this to extend block_count and emit nextn metadata.  Fine-tunes may have
+    # it set to 0 or missing entirely even though the field exists in the base.
+    # The field can live at the top level or nested under text_config.
+    config_path = st_dir / "config.json"
+    if config_path.exists():
+        with open(config_path) as f:
+            config = json.load(f)
+        text_cfg = config.get("text_config", config)
+        local_mtp = text_cfg.get("mtp_num_hidden_layers", 0)
+        if local_mtp < 1:
+            base_config_path = hf_hub_download(
+                repo_id=base_repo,
+                filename="config.json",
+                token=hf_token,
+            )
+            with open(base_config_path) as f:
+                base_config = json.load(f)
+            base_text_cfg = base_config.get("text_config", base_config)
+            base_mtp = base_text_cfg.get("mtp_num_hidden_layers", 1)
+            text_cfg["mtp_num_hidden_layers"] = base_mtp
+            with open(config_path, "w") as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+            print(f"  Patched config.json: mtp_num_hidden_layers={base_mtp}")
+        else:
+            print(f"  config.json already has mtp_num_hidden_layers={local_mtp}")
+
+    print("  MTP graft complete ✓")
 
 
 def convert_safetensors(
