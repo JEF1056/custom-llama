@@ -1146,53 +1146,56 @@ def convert_safetensors(
         print("  Skipping pre-built GGUF check — prebuilts strip MTP tensors.")
 
     # ------------------------------------------------------------------ #
-    # 1. Download safetensors
+    # 1. Check for existing fp16 GGUF before downloading anything
     # ------------------------------------------------------------------ #
-    _section(f"Downloading safetensors: {source_repo}")
-    try:
-        from huggingface_hub import snapshot_download
-    except ImportError:
-        print("Error: huggingface_hub is not installed.")
-        sys.exit(1)
-
-    hf_token = os.environ.get("HF_TOKEN") or None
-    st_dir = output_path / f".{model_name}-safetensors"
-
-    # max_workers=1 serializes shard downloads to avoid the simultaneous disk-
-    # write pressure that causes WSL2's vmmem to balloon on Windows.
-    snapshot_download(
-        repo_id=source_repo,
-        local_dir=str(st_dir),
-        token=hf_token,
-        ignore_patterns=["*.md", "*.txt", "*.json.lock", "*.gguf"],
-        max_workers=1,
-    )
-
-    # ------------------------------------------------------------------ #
-    # 1b. Graft MTP tensors from base model (if needed)
-    # ------------------------------------------------------------------ #
-    graft_repo = None
-    if mtp:
-        _section("Checking MTP tensor status")
-        graft_repo = _detect_mtp_graft(st_dir, model_info)
-    if graft_repo:
-        _section(f"Grafting MTP tensors from {graft_repo}")
-        _graft_mtp_tensors(st_dir, graft_repo)
-
-    # ------------------------------------------------------------------ #
-    # 2. Convert safetensors → fp16 GGUF
-    # ------------------------------------------------------------------ #
-    fp16_gguf = output_path / f"{model_name}-fp16.gguf"
-    _section("Converting safetensors → fp16 GGUF")
-
-    if graft_repo and fp16_gguf.exists():
-        print("  MTP graft active — removing stale fp16 GGUF to force re-conversion.")
-        fp16_gguf.unlink()
+    # Use a distinct filename when MTP is requested so plain and MTP fp16s
+    # can coexist and we never mistake one for the other.
+    fp16_stem = f"{model_name}-fp16-mtp" if mtp else f"{model_name}-fp16"
+    fp16_gguf = output_path / f"{fp16_stem}.gguf"
 
     if fp16_gguf.exists():
         fp16_size = _fmt_bytes(fp16_gguf.stat().st_size)
-        print(f"  ✓ fp16 GGUF already on disk: {fp16_gguf.name} ({fp16_size}) — skipping conversion.")
+        _section("Converting safetensors → fp16 GGUF")
+        print(f"  ✓ fp16 GGUF already on disk: {fp16_gguf.name} ({fp16_size}) — skipping download & conversion.")
     else:
+        # -------------------------------------------------------------- #
+        # 1a. Download safetensors
+        # -------------------------------------------------------------- #
+        _section(f"Downloading safetensors: {source_repo}")
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError:
+            print("Error: huggingface_hub is not installed.")
+            sys.exit(1)
+
+        hf_token = os.environ.get("HF_TOKEN") or None
+        st_dir = output_path / f".{model_name}-safetensors"
+
+        # max_workers=1 serializes shard downloads to avoid the simultaneous disk-
+        # write pressure that causes WSL2's vmmem to balloon on Windows.
+        snapshot_download(
+            repo_id=source_repo,
+            local_dir=str(st_dir),
+            token=hf_token,
+            ignore_patterns=["*.md", "*.txt", "*.json.lock", "*.gguf"],
+            max_workers=1,
+        )
+
+        # -------------------------------------------------------------- #
+        # 1b. Graft MTP tensors from base model (if needed)
+        # -------------------------------------------------------------- #
+        graft_repo = None
+        if mtp:
+            _section("Checking MTP tensor status")
+            graft_repo = _detect_mtp_graft(st_dir, model_info)
+        if graft_repo:
+            _section(f"Grafting MTP tensors from {graft_repo}")
+            _graft_mtp_tensors(st_dir, graft_repo)
+
+        # -------------------------------------------------------------- #
+        # 1c. Convert safetensors → fp16 GGUF
+        # -------------------------------------------------------------- #
+        _section("Converting safetensors → fp16 GGUF")
         print(f"  Source : {st_dir}")
         print(f"  Output : {fp16_gguf.name}")
 
@@ -1213,6 +1216,14 @@ def convert_safetensors(
 
         fp16_size = _fmt_bytes(fp16_gguf.stat().st_size) if fp16_gguf.exists() else "unknown"
         print(f"\n  Done: {fp16_gguf.name} ({fp16_size})")
+
+        # Clean up safetensors immediately — they're no longer needed once
+        # the fp16 GGUF is produced.  The fp16 is the resumable checkpoint.
+        if keep_intermediate:
+            print(f"  Keeping safetensors cache  : {st_dir.name}")
+        else:
+            print(f"  Removing safetensors cache : {st_dir.name}")
+            shutil.rmtree(st_dir, ignore_errors=True)
 
     # ------------------------------------------------------------------ #
     # 3. Quantize fp16 GGUF → target quant
@@ -1270,16 +1281,13 @@ def convert_safetensors(
             print(f"  Warning: MTP verification failed ({e}) — proceeding anyway.")
 
     # ------------------------------------------------------------------ #
-    # 4. Clean up intermediate files (only on success — preserves resumability)
+    # 4. Clean up fp16 intermediate (safetensors already handled in step 1c)
     # ------------------------------------------------------------------ #
     if keep_intermediate:
-        print(f"\n  Keeping fp16 GGUF          : {fp16_gguf.name}")
-        print(f"  Keeping safetensors cache  : {st_dir.name}")
+        print(f"\n  Keeping fp16 GGUF : {fp16_gguf.name}")
     else:
         print(f"\n  Removing fp16 GGUF : {fp16_gguf.name}")
         fp16_gguf.unlink(missing_ok=True)
-        print(f"  Removing safetensors cache : {st_dir.name}")
-        shutil.rmtree(st_dir, ignore_errors=True)
 
     _done(canonical)
     _maybe_download_mmproj(model_info, output_path, model_name)
