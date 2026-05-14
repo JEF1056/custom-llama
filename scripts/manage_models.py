@@ -6,6 +6,7 @@ Supports downloading models from HuggingFace and converting to GGUF format.
 
 import contextlib
 import os
+import struct
 import sys
 import argparse
 import json
@@ -811,6 +812,56 @@ def _maybe_download_mmproj(model_info: dict, output_path: Path, model_name: str 
     print(f"  Multimodal projector ready: {canonical_name}")
 
 
+def _gguf_tensor_names(gguf_path: Path) -> list[str]:
+    """Read tensor names from a GGUF file header without loading weights."""
+    names: list[str] = []
+    with open(gguf_path, "rb") as f:
+        magic = f.read(4)
+        if magic != b"GGUF":
+            return names
+        _version = struct.unpack("<I", f.read(4))[0]
+        n_tensors = struct.unpack("<Q", f.read(8))[0]
+        n_kv = struct.unpack("<Q", f.read(8))[0]
+
+        # Skip KV pairs
+        for _ in range(n_kv):
+            # key: uint64 len + bytes
+            klen = struct.unpack("<Q", f.read(8))[0]
+            f.read(klen)
+            # value type
+            vtype = struct.unpack("<I", f.read(4))[0]
+            _skip_gguf_value(f, vtype)
+
+        # Read tensor info
+        for _ in range(n_tensors):
+            nlen = struct.unpack("<Q", f.read(8))[0]
+            name = f.read(nlen).decode("utf-8")
+            names.append(name)
+            n_dims = struct.unpack("<I", f.read(4))[0]
+            f.read(8 * n_dims)  # dimensions
+            f.read(4)           # type
+            f.read(8)           # offset
+    return names
+
+
+def _skip_gguf_value(f, vtype: int) -> None:
+    """Skip a single GGUF metadata value based on its type tag.
+
+    Type IDs: 0-7 = UINT8..BOOL, 8 = STRING, 9 = ARRAY, 10-12 = UINT64..FLOAT64.
+    """
+    fixed = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
+    if vtype in fixed:
+        f.read(fixed[vtype])
+    elif vtype == 8:  # STRING
+        slen = struct.unpack("<Q", f.read(8))[0]
+        f.read(slen)
+    elif vtype == 9:  # ARRAY
+        elem_type = struct.unpack("<I", f.read(4))[0]
+        count = struct.unpack("<Q", f.read(8))[0]
+        for _ in range(count):
+            _skip_gguf_value(f, elem_type)
+
+
 def _graft_mtp_tensors(st_dir: Path, base_repo: str) -> None:
     """Download MTP head tensors from a base model and inject them into a
     fine-tune's safetensors directory.
@@ -899,13 +950,15 @@ def _graft_mtp_tensors(st_dir: Path, base_repo: str) -> None:
         print(f"    {sn}  ({count} tensor(s))")
 
     grafted_tensors = {}
-    for shard_name in base_shards_needed:
-        print(f"\n  Downloading {shard_name}...")
+    for i, shard_name in enumerate(base_shards_needed, 1):
+        print(f"\n  [{i}/{len(base_shards_needed)}] Downloading {base_repo}/{shard_name} ...")
         shard_path = hf_hub_download(
             repo_id=base_repo,
             filename=shard_name,
             token=hf_token,
         )
+        shard_size = Path(shard_path).stat().st_size
+        print(f"  [{i}/{len(base_shards_needed)}] Downloaded {_fmt_bytes(shard_size)} → loading tensors...")
         shard_data = load_file(shard_path)
         for k in base_mtp_keys:
             if base_map[k] == shard_name and k in shard_data:
@@ -1116,6 +1169,42 @@ def convert_safetensors(
     # 3. Quantize fp16 GGUF → target quant
     # ------------------------------------------------------------------ #
     _quantize(fp16_gguf, canonical, quant, nthreads=nthreads)
+
+    # ------------------------------------------------------------------ #
+    # 3b. Verify MTP tensors in output GGUF
+    # ------------------------------------------------------------------ #
+    if mtp:
+        _section("Verifying MTP tensors in output GGUF")
+        try:
+            tensor_names = _gguf_tensor_names(canonical)
+            config_path = st_dir / "config.json"
+            n_layers = 0
+            if config_path.exists():
+                with open(config_path) as cf:
+                    cfg = json.load(cf)
+                    tc = cfg.get("text_config", cfg)
+                    n_layers = tc.get("num_hidden_layers", 0)
+
+            if n_layers > 0:
+                mtp_block = f"blk.{n_layers}"
+                mtp_found = [n for n in tensor_names if n.startswith(mtp_block + ".")]
+                print(f"  Total tensors in GGUF: {len(tensor_names)}")
+                print(f"  Base layers: {n_layers}  →  MTP block: {mtp_block}.*")
+                if mtp_found:
+                    print(f"  ✓ Found {len(mtp_found)} MTP tensor(s) at {mtp_block}.*:")
+                    for t in mtp_found:
+                        print(f"      {t}")
+                else:
+                    print(f"\n  ✗ ERROR: No tensors found at {mtp_block}.* — MTP graft failed!")
+                    print("    The GGUF has block_count metadata for MTP but missing tensors.")
+                    print(f"    The server will crash with: missing tensor '{mtp_block}.attn_norm.weight'")
+                    print(f"    Delete {canonical.name} and investigate the graft step.")
+                    canonical.unlink(missing_ok=True)
+                    sys.exit(1)
+            else:
+                print("  Warning: could not read num_hidden_layers — skipping MTP verification.")
+        except Exception as e:
+            print(f"  Warning: MTP verification failed ({e}) — proceeding anyway.")
 
     # ------------------------------------------------------------------ #
     # 4. Clean up intermediate files (only on success — preserves resumability)
