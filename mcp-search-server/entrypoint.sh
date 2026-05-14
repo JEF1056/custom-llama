@@ -40,6 +40,14 @@ else
     exit 1
 fi
 
+# Create mcp-files directories (owned by appuser — /app is already appuser-owned)
+echo "Setting up /app/mcp-files directories..."
+mkdir -p /app/mcp-files/screenshots
+
+# Clean up stale files older than 24 hours
+echo "Cleaning up stale files in /app/mcp-files..."
+find /app/mcp-files -type f -mtime +1 -delete 2>/dev/null || true
+
 # Print configuration
 echo ""
 echo "Configuration:"

@@ -155,7 +155,7 @@ def register_resources(server: FastMCP) -> None:
     The LLM can read these via the resources/read RPC call.
     """
 
-    @server.resource("file:///tmp/mcp-files/{filename}")
+    @server.resource("file:///app/mcp-files/{filename}")
     def read_file(filename: str) -> str:
         """Read a file from the output directory.
 
@@ -174,7 +174,7 @@ def register_resources(server: FastMCP) -> None:
             import base64
             return base64.b64encode(file_path.read_bytes()).decode("utf-8")
 
-    logger.info("Registered file resource template: file:///tmp/mcp-files/{filename}")
+    logger.info("Registered file resource template: file:///app/mcp-files/{filename}")
 
 
 def healthcheck(request: Request) -> Response:

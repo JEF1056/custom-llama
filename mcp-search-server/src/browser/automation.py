@@ -65,7 +65,7 @@ class BrowserManager:
         """Initialize the browser manager.
 
         Args:
-            screenshot_dir: Directory to save screenshots. Defaults to /tmp/mcp-files/screenshots.
+            screenshot_dir: Directory to save screenshots. Defaults to /app/mcp-files/screenshots.
         """
         self._playwright = None
         self._browser: Browser | None = None
