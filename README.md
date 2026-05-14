@@ -14,7 +14,6 @@ No Cloudflare or secrets needed — just the inference server on this machine.
 cp .env.default .env
 docker compose build llama-server llama-convert mcp-search-server
 docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS --mtp
-
 docker compose up -d llama-server
 ```
 
