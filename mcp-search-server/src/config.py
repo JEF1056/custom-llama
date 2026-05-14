@@ -24,13 +24,17 @@ class Settings(BaseModel):
 
     # Browser settings
     BROWSER_TIMEOUT: int = Field(default=30, description="Browser timeout in seconds")
-    SCREENSHOT_DIR: str = Field(default="/app/screenshots", description="Directory to save screenshots")
+    SCREENSHOT_DIR: str = Field(default="/tmp/mcp-files/screenshots", description="Directory to save screenshots")
+    SESSION_IDLE_TIMEOUT: int = Field(default=600, description="Seconds of inactivity before browser session auto-closes")
 
     # Result settings
     MAX_RESULTS: int = Field(default=10, description="Maximum number of search results")
 
     # Fetch settings
     FETCH_MAX_LENGTH: int = Field(default=4000, description="Max content length for fetch tool before summarization")
+
+    # File output settings
+    FILE_OUTPUT_DIR: str = Field(default="/tmp/mcp-files", description="Directory for files created by create_file tool")
 
     # Cache settings
     CACHE_ENABLED: bool = Field(default=True, description="Enable caching")
