@@ -812,54 +812,68 @@ def _maybe_download_mmproj(model_info: dict, output_path: Path, model_name: str 
     print(f"  Multimodal projector ready: {canonical_name}")
 
 
-def _gguf_tensor_names(gguf_path: Path) -> list[str]:
-    """Read tensor names from a GGUF file header without loading weights."""
-    names: list[str] = []
-    with open(gguf_path, "rb") as f:
-        magic = f.read(4)
-        if magic != b"GGUF":
-            return names
-        _version = struct.unpack("<I", f.read(4))[0]
-        n_tensors = struct.unpack("<Q", f.read(8))[0]
-        n_kv = struct.unpack("<Q", f.read(8))[0]
-
-        # Skip KV pairs
-        for _ in range(n_kv):
-            # key: uint64 len + bytes
-            klen = struct.unpack("<Q", f.read(8))[0]
-            f.read(klen)
-            # value type
-            vtype = struct.unpack("<I", f.read(4))[0]
-            _skip_gguf_value(f, vtype)
-
-        # Read tensor info
-        for _ in range(n_tensors):
-            nlen = struct.unpack("<Q", f.read(8))[0]
-            name = f.read(nlen).decode("utf-8")
-            names.append(name)
-            n_dims = struct.unpack("<I", f.read(4))[0]
-            f.read(8 * n_dims)  # dimensions
-            f.read(4)           # type
-            f.read(8)           # offset
-    return names
-
-
-def _skip_gguf_value(f, vtype: int) -> None:
+def _skip_gguf_value(f, vtype: int):
     """Skip a single GGUF metadata value based on its type tag.
+    Returns the value for integer types, None otherwise.
 
     Type IDs: 0-7 = UINT8..BOOL, 8 = STRING, 9 = ARRAY, 10-12 = UINT64..FLOAT64.
     """
     fixed = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
     if vtype in fixed:
-        f.read(fixed[vtype])
+        data = f.read(fixed[vtype])
+        if vtype in (4, 5):  # UINT32, INT32
+            return struct.unpack("<I" if vtype == 4 else "<i", data)[0]
+        if vtype in (10, 11):  # UINT64, INT64
+            return struct.unpack("<Q" if vtype == 10 else "<q", data)[0]
+        return None
     elif vtype == 8:  # STRING
         slen = struct.unpack("<Q", f.read(8))[0]
         f.read(slen)
+        return None
     elif vtype == 9:  # ARRAY
         elem_type = struct.unpack("<I", f.read(4))[0]
         count = struct.unpack("<Q", f.read(8))[0]
         for _ in range(count):
             _skip_gguf_value(f, elem_type)
+        return None
+    return None
+
+
+def _gguf_read_header(gguf_path: Path) -> dict:
+    """Read GGUF metadata and tensor names from a file header.
+
+    Returns dict with keys: 'metadata' (dict of kv pairs we care about),
+    'tensor_names' (list of str), 'n_tensors' (int).
+    """
+    result: dict = {"metadata": {}, "tensor_names": [], "n_tensors": 0}
+    with open(gguf_path, "rb") as f:
+        magic = f.read(4)
+        if magic != b"GGUF":
+            return result
+        _version = struct.unpack("<I", f.read(4))[0]
+        n_tensors = struct.unpack("<Q", f.read(8))[0]
+        n_kv = struct.unpack("<Q", f.read(8))[0]
+        result["n_tensors"] = n_tensors
+
+        # Read KV pairs, capture ones we care about
+        for _ in range(n_kv):
+            klen = struct.unpack("<Q", f.read(8))[0]
+            key = f.read(klen).decode("utf-8")
+            vtype = struct.unpack("<I", f.read(4))[0]
+            val = _skip_gguf_value(f, vtype)
+            if "nextn_predict_layers" in key or "block_count" in key:
+                result["metadata"][key] = val
+
+        # Read tensor names
+        for _ in range(n_tensors):
+            nlen = struct.unpack("<Q", f.read(8))[0]
+            name = f.read(nlen).decode("utf-8")
+            result["tensor_names"].append(name)
+            n_dims = struct.unpack("<I", f.read(4))[0]
+            f.read(8 * n_dims)  # dimensions
+            f.read(4)           # type
+            f.read(8)           # offset
+    return result
 
 
 def _graft_mtp_tensors(st_dir: Path, base_repo: str) -> None:
@@ -1176,33 +1190,47 @@ def convert_safetensors(
     if mtp:
         _section("Verifying MTP tensors in output GGUF")
         try:
-            tensor_names = _gguf_tensor_names(canonical)
-            config_path = st_dir / "config.json"
-            n_layers = 0
-            if config_path.exists():
-                with open(config_path) as cf:
-                    cfg = json.load(cf)
-                    tc = cfg.get("text_config", cfg)
-                    n_layers = tc.get("num_hidden_layers", 0)
+            header = _gguf_read_header(canonical)
+            tensor_names = header["tensor_names"]
+            metadata = header["metadata"]
 
-            if n_layers > 0:
-                mtp_block = f"blk.{n_layers}"
-                mtp_found = [n for n in tensor_names if n.startswith(mtp_block + ".")]
-                print(f"  Total tensors in GGUF: {len(tensor_names)}")
-                print(f"  Base layers: {n_layers}  →  MTP block: {mtp_block}.*")
-                if mtp_found:
-                    print(f"  ✓ Found {len(mtp_found)} MTP tensor(s) at {mtp_block}.*:")
-                    for t in mtp_found:
-                        print(f"      {t}")
-                else:
-                    print(f"\n  ✗ ERROR: No tensors found at {mtp_block}.* — MTP graft failed!")
-                    print("    The GGUF has block_count metadata for MTP but missing tensors.")
-                    print(f"    The server will crash with: missing tensor '{mtp_block}.attn_norm.weight'")
-                    print(f"    Delete {canonical.name} and investigate the graft step.")
-                    canonical.unlink(missing_ok=True)
-                    sys.exit(1)
+            # Check nextn_predict_layers metadata (the authoritative MTP indicator)
+            nextn_key = next((k for k in metadata if "nextn_predict_layers" in k), None)
+            nextn_val = metadata.get(nextn_key) if nextn_key else None
+            block_key = next((k for k in metadata if "block_count" in k), None)
+            block_val = metadata.get(block_key) if block_key else None
+
+            print(f"  Total tensors in GGUF: {len(tensor_names)}")
+            print(f"  Metadata: {nextn_key} = {nextn_val}")
+            print(f"  Metadata: {block_key} = {block_val}")
+
+            if nextn_val and nextn_val > 0:
+                print(f"  ✓ GGUF declares {nextn_val} MTP prediction layer(s)")
             else:
-                print("  Warning: could not read num_hidden_layers — skipping MTP verification.")
+                print("  ✗ WARNING: nextn_predict_layers not set or zero — MTP metadata missing.")
+
+            # Look for nextn-specific tensors (blk.N.nextn.*)
+            nextn_tensors = [n for n in tensor_names if ".nextn." in n]
+            if nextn_tensors:
+                print(f"  ✓ Found {len(nextn_tensors)} nextn tensor(s):")
+                for t in nextn_tensors:
+                    print(f"      {t}")
+            else:
+                # Also check for MTP block tensors (blk.N.attn_* at index >= base layers)
+                base_layers = (block_val - nextn_val) if block_val and nextn_val else 0
+                if base_layers > 0:
+                    mtp_block = f"blk.{base_layers}"
+                    mtp_found = [n for n in tensor_names if n.startswith(mtp_block + ".")]
+                    if mtp_found:
+                        print(f"  ✓ Found {len(mtp_found)} tensor(s) at {mtp_block}.*:")
+                        for t in mtp_found:
+                            print(f"      {t}")
+                    else:
+                        print(f"\n  ✗ WARNING: No MTP tensors found (no .nextn. or {mtp_block}.* tensors).")
+                        print(f"    The server may crash with: missing tensor '{mtp_block}.attn_norm.weight'")
+                        print(f"    File kept: {canonical.name}")
+                else:
+                    print("  ✗ WARNING: Cannot determine MTP block index — check manually.")
         except Exception as e:
             print(f"  Warning: MTP verification failed ({e}) — proceeding anyway.")
 
