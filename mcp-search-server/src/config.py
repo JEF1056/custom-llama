@@ -29,6 +29,9 @@ class Settings(BaseModel):
     # Result settings
     MAX_RESULTS: int = Field(default=10, description="Maximum number of search results")
 
+    # Fetch settings
+    FETCH_MAX_LENGTH: int = Field(default=4000, description="Max content length for fetch tool before summarization")
+
     # Cache settings
     CACHE_ENABLED: bool = Field(default=True, description="Enable caching")
     CACHE_TTL: int = Field(default=3600, description="Cache TTL in seconds")

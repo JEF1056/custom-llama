@@ -1,6 +1,7 @@
 """Content extraction from web pages."""
 
 import logging
+import re
 from typing import Optional
 
 from bs4 import BeautifulSoup
@@ -24,23 +25,24 @@ class ContentExtractor:
         """Initialize the content extractor."""
         self._soup = None
 
-    def extract(self, html: str) -> dict:
+    def extract(self, html: str, max_length: int = 4000) -> dict:
         """Extract content from HTML.
 
         Args:
             html: The HTML content to extract from.
+            max_length: Maximum total text length before summarization is applied.
 
         Returns:
             A dictionary containing extracted content with keys:
                 - title: Page title
-                - content: Main text content
+                - content: Main text content (summarized if it exceeds max_length)
                 - links: List of links
                 - images: List of images
                 - headings: Structured headings
                 - tables: Structured tables
         """
         self._soup = BeautifulSoup(html, "html.parser")
-        return {
+        result = {
             "title": self._extract_title(),
             "content": self._extract_text(),
             "links": self._extract_links(),
@@ -48,6 +50,107 @@ class ContentExtractor:
             "headings": self._extract_headings(),
             "tables": self._extract_tables(),
         }
+
+        # Check if summarization is needed
+        total_text = len(result["content"])
+        if total_text > max_length:
+            result["content"] = self._summarize(
+                result["content"],
+                result["headings"],
+                max_length,
+                total_text,
+            )
+
+        return result
+
+    def _summarize(self, content: str, headings: list[dict], max_length: int, original_length: int) -> str:
+        """Summarize content when it exceeds max_length.
+
+        Strategy:
+            1. Always keep the first ~200 chars (first meaningful paragraph)
+            2. Use headings to identify sections and keep ~100-150 chars per section
+            3. Remove code blocks and table content first
+            4. Add a summary indicator
+
+        Args:
+            content: The full extracted text content.
+            headings: List of heading dicts with 'level' and 'text' keys.
+            max_length: Target maximum length.
+            original_length: Length of the original content.
+
+        Returns:
+            Summarized content string.
+        """
+        # Strip code blocks (between ``` markers)
+        cleaned = re.sub(r"```.*?```", "", content, flags=re.DOTALL)
+
+        # Split into lines for processing
+        lines = cleaned.split("\n")
+
+        # Build summary: always keep first ~200 chars
+        summary_parts: list[str] = []
+        summary_parts.append(f"[Summarized — original was {original_length} chars, showing key sections]\n")
+
+        # First paragraph: first ~200 chars of meaningful text
+        first_para = ""
+        for line in lines:
+            stripped = line.strip()
+            if stripped:
+                first_para += stripped + "\n"
+        first_para = first_para.strip()
+        if len(first_para) > 200:
+            first_para = first_para[:200].rsplit(" ", 1)[0] + "..."
+        if first_para:
+            summary_parts.append(first_para)
+
+        # If we have headings, use them to extract section excerpts
+        if headings:
+            summary_parts.append("")  # blank line separator
+            for heading in headings:
+                section_text = self._extract_section_excerpt(content, heading["text"])
+                if section_text:
+                    level = heading["level"]
+                    prefix = "#" * level
+                    summary_parts.append(f"{prefix} {heading['text']}")
+                    summary_parts.append(section_text)
+
+        # Assemble and check length
+        result = "\n".join(summary_parts)
+
+        # If still too long, hard-truncate with ellipsis
+        if len(result) > max_length:
+            result = result[:max_length - 3].rsplit(" ", 1)[0] + "..."
+
+        return result
+
+    def _extract_section_excerpt(self, content: str, heading_text: str, excerpt_len: int = 120) -> str:
+        """Extract a brief excerpt from the section following a heading.
+
+        Args:
+            content: Full content text.
+            heading_text: The heading text to search for.
+            excerpt_len: Target excerpt length in characters.
+
+        Returns:
+            Brief excerpt text, or empty string if not found.
+        """
+        # Find the heading in the content (it may appear as-is or with markdown prefix)
+        idx = content.find(heading_text)
+        if idx == -1:
+            return ""
+
+        # Start after the heading
+        start = idx + len(heading_text)
+        # Take the next ~excerpt_len chars, stripping code blocks
+        excerpt = content[start:start + excerpt_len + 200]
+        # Remove code blocks from excerpt
+        excerpt = re.sub(r"```.*?```", "", excerpt, flags=re.DOTALL)
+        excerpt = excerpt.strip()
+
+        if len(excerpt) > excerpt_len:
+            excerpt = excerpt[:excerpt_len].rsplit(" ", 1)[0] + "..."
+
+        return excerpt
 
     def _extract_title(self) -> str:
         """Extract the page title.

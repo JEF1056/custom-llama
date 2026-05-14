@@ -6,6 +6,7 @@ import logging
 from mcp.server import FastMCP
 
 from src.browser.automation import browser_manager
+from src.config import settings
 from src.extractor.content import ContentExtractor
 
 logger = logging.getLogger(__name__)
@@ -23,7 +24,7 @@ def fetch_handler(server: FastMCP) -> None:
         """Fetch and extract content from a URL.
 
         Use this tool when the user specifies a URL to fetch, or when you need to extract
-        content from a specific page. This tool uses browser automation to render
+        content from a specific page. This tools uses browser automation to render
         JavaScript-heavy pages and extracts the main content.
 
         If this tool fails (e.g., the page requires JavaScript rendering), use browser_navigate()
@@ -46,9 +47,9 @@ def fetch_handler(server: FastMCP) -> None:
             # Get the rendered page content
             html = await browser_manager.get_content(page)
 
-            # Extract content
+            # Extract content with max_length limit
             extractor = ContentExtractor()
-            content = extractor.extract(html)
+            content = extractor.extract(html, max_length=settings.FETCH_MAX_LENGTH)
 
             # Clean up page
             await page.close()
