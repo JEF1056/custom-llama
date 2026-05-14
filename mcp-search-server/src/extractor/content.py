@@ -25,17 +25,18 @@ class ContentExtractor:
         """Initialize the content extractor."""
         self._soup = None
 
-    def extract(self, html: str, max_length: int = 4000) -> dict:
+    def extract(self, html: str, max_length: int = 4000, truncate: bool = True) -> dict:
         """Extract content from HTML.
 
         Args:
             html: The HTML content to extract from.
             max_length: Maximum total text length before summarization is applied.
+            truncate: When True, summarize content that exceeds max_length. When False, return full content.
 
         Returns:
             A dictionary containing extracted content with keys:
                 - title: Page title
-                - content: Main text content (summarized if it exceeds max_length)
+                - content: Main text content (summarized if it exceeds max_length and truncate is True)
                 - links: List of links
                 - images: List of images
                 - headings: Structured headings
@@ -52,14 +53,15 @@ class ContentExtractor:
         }
 
         # Check if summarization is needed
-        total_text = len(result["content"])
-        if total_text > max_length:
-            result["content"] = self._summarize(
-                result["content"],
-                result["headings"],
-                max_length,
-                total_text,
-            )
+        if truncate:
+            total_text = len(result["content"])
+            if total_text > max_length:
+                result["content"] = self._summarize(
+                    result["content"],
+                    result["headings"],
+                    max_length,
+                    total_text,
+                )
 
         return result
 

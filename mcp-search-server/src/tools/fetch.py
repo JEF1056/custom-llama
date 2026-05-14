@@ -16,7 +16,7 @@ def fetch_handler(server: FastMCP) -> None:
     """Register the fetch tool."""
 
     @server.tool()
-    async def fetch(url: str) -> str:
+    async def fetch(url: str, truncate: bool = True) -> str:
         """Fetch and extract text content from a URL.
 
         Renders JavaScript via a headless browser. For multi-step interactions
@@ -24,6 +24,8 @@ def fetch_handler(server: FastMCP) -> None:
 
         Args:
             url: URL to fetch
+            truncate: When True (default), content exceeding the max length is summarized.
+                      When False, the full extracted content is returned without truncation.
 
         Returns:
             JSON string of extracted content
@@ -39,9 +41,9 @@ def fetch_handler(server: FastMCP) -> None:
             # Get the rendered page content
             html = await browser_manager.get_content(page)
 
-            # Extract content with max_length limit
+            # Extract content
             extractor = ContentExtractor()
-            content = extractor.extract(html, max_length=settings.FETCH_MAX_LENGTH)
+            content = extractor.extract(html, max_length=settings.FETCH_MAX_LENGTH, truncate=truncate)
 
             # Clean up page
             await page.close()
