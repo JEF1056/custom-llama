@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import logging
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 from starlette.applications import Starlette
@@ -15,6 +16,7 @@ from src.config import settings
 from src.tools.browser import browser_handler
 from src.tools.deep_search import deep_search_handler
 from src.tools.fetch import fetch_handler
+from src.tools.filetool import create_file_handler
 from src.tools.search import search_handler
 
 logging.basicConfig(level=logging.INFO)
@@ -142,6 +144,37 @@ def register_tools(server: FastMCP) -> None:
     fetch_handler(server)
     deep_search_handler(server)
     browser_handler(server)
+    create_file_handler(server)
+
+
+def register_resources(server: FastMCP) -> None:
+    """Register MCP Resources and ResourceTemplates.
+
+    Registers a resource template for reading files created by the create_file
+    tool or screenshots saved by browser_screenshot / browser_monitor.
+    The LLM can read these via the resources/read RPC call.
+    """
+
+    @server.resource("file:///tmp/mcp-files/{filename}")
+    def read_file(filename: str) -> str:
+        """Read a file from the output directory.
+
+        Args:
+            filename: Name of the file to read.
+        """
+        file_path = Path(settings.FILE_OUTPUT_DIR) / filename
+        if not file_path.exists():
+            raise ValueError(f"File not found: {filename}")
+        if not file_path.is_file():
+            raise ValueError(f"Not a file: {filename}")
+        # Try text first, fall back to base64 for binary
+        try:
+            return file_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            import base64
+            return base64.b64encode(file_path.read_bytes()).decode("utf-8")
+
+    logger.info("Registered file resource template: file:///tmp/mcp-files/{filename}")
 
 
 def healthcheck(request: Request) -> Response:
@@ -220,6 +253,7 @@ def main() -> None:
     """Start the MCP server."""
     server = create_server()
     register_tools(server)
+    register_resources(server)
     asyncio.run(run_server(server))
 
 
