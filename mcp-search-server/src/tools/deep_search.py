@@ -24,23 +24,20 @@ def deep_search_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def deep_search(query: str, max_results: int | None = None) -> str:
-        """Deep search with content extraction.
+        """Deep search with content extraction from top results.
 
-        Use this tool when you need comprehensive information on a topic. This tool performs
-        a web search and extracts full content from the top 3 results, combining search
-        results with actual page content.
+        Performs a web search and extracts full content from the top 3 results.
+        Use when you need comprehensive information on a topic in a single call.
 
-        This is the most powerful search tool - use it when you need detailed information
-        and the agent is stuck or needs extensive context. After getting deep search results,
-        use browser automation tools for any JavaScript-heavy pages that require further
-        interaction.
+        For interactive browsing (clicking, filling forms), use browser_create_session()
+        followed by browser_navigate() and other browser tools.
 
         Args:
             query: The search query
             max_results: Maximum number of results (default from config)
 
         Returns:
-            JSON string of search results with extracted content
+            JSON string of search results with extracted content from top 3
         """
         engine = get_search_engine()
         search_results = await engine.search(query, max_results)

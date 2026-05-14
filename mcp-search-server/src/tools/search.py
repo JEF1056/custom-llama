@@ -24,11 +24,11 @@ def search_handler(server: FastMCP) -> None:
     async def search(query: str, max_results: int | None = None) -> str:
         """Search the web for information using a search engine.
 
-        Use this tool when you need to find information on a topic or when the agent is stuck
-        and needs additional context. This is the first step in the research workflow.
+        Use this tool when you need to find information on a topic. Returns titles,
+        URLs, and snippets from search results.
 
-        After getting search results, use fetch() to extract content from specific URLs,
-        or browser_navigate() for JavaScript-heavy pages that require full browser rendering.
+        After getting results, use fetch() to extract content from specific URLs,
+        or browser_screenshot(url=...) for a one-off visual of a page.
 
         Args:
             query: The search query

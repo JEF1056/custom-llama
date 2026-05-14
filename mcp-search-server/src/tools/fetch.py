@@ -23,12 +23,11 @@ def fetch_handler(server: FastMCP) -> None:
     async def fetch(url: str) -> str:
         """Fetch and extract content from a URL.
 
-        Use this tool when the user specifies a URL to fetch, or when you need to extract
-        content from a specific page. This tools uses browser automation to render
-        JavaScript-heavy pages and extracts the main content.
+        Fetches a URL, renders JavaScript via a headless browser, and extracts the
+        main text content. Use this for one-off content extraction from a specific URL.
 
-        If this tool fails (e.g., the page requires JavaScript rendering), use browser_navigate()
-        and browser_get_content() as a fallback for full browser interaction.
+        For multi-step interactions (clicking, filling forms), use browser_create_session()
+        followed by browser_navigate() and other browser tools.
 
         Args:
             url: The URL to fetch

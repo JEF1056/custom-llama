@@ -10,8 +10,31 @@ from mcp.server import FastMCP
 from mcp.server.fastmcp import Image
 
 from src.browser.automation import browser_manager
+from src.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _get_page_for_session(session_id: str):
+    """Get the last page from a session, or None if the session has no pages."""
+    session = browser_manager._sessions.get(session_id)
+    if session and session.pages:
+        return session.pages[-1]
+    return None
+
+
+async def _ensure_page(session_id: str):
+    """Get existing page from session or create a new one and store it."""
+    page = _get_page_for_session(session_id)
+    if page is not None:
+        return page
+    # Create a new page in the session's context
+    session = browser_manager._sessions.get(session_id)
+    if not session:
+        raise RuntimeError(f"Session {session_id} not found. Create one with browser_create_session first.")
+    page = await session.context.new_page()
+    session.pages.append(page)
+    return page
 
 
 def browser_handler(server: FastMCP) -> None:
@@ -22,24 +45,49 @@ def browser_handler(server: FastMCP) -> None:
     """
 
     @server.tool()
+    async def browser_create_session() -> str:
+        """Create a new browser session for multi-step interactions.
+
+        Call this first when you need to perform multiple browser actions (navigate,
+        click, fill, screenshot, etc.) on the same page. The returned session_id must
+        be passed to all subsequent browser tools to maintain page state.
+
+        For one-off actions (e.g., just a screenshot of a URL), use browser_screenshot(url=...) directly.
+
+        Returns:
+            JSON string containing the session_id.
+        """
+        try:
+            if not browser_manager.is_running:
+                await browser_manager.start()
+
+            session_id = await browser_manager.create_session()
+            result = {
+                "status": "success",
+                "session_id": session_id,
+                "message": "Browser session created",
+            }
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            logger.error("Browser create_session error: %s", str(e))
+            return json.dumps({"status": "error", "error": str(e)})
+
+    @server.tool()
     async def browser_navigate(
         url: str,
         wait_until: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Navigate to a URL using a headless browser.
+        """Navigate to a URL in a browser session.
 
-        Use this tool when you need to interact with JavaScript-heavy pages that require
-        full browser rendering. This is the first step in the browser automation workflow.
-
-        After navigating, use browser_screenshot() to see the page, browser_click() to
-        interact with elements, browser_fill() to fill forms, browser_get_text() or
-        browser_get_content() to extract content, or browser_evaluate() to run JavaScript.
+        Use this to load a page before performing further actions (click, fill, screenshot,
+        etc.). Requires a session_id from browser_create_session() to persist the page.
+        Without session_id, the page is navigated and immediately closed.
 
         Args:
             url: The URL to navigate to
             wait_until: When to consider navigation completed (load, domcontentloaded, networkidle, commit)
-            session_id: The session ID to use. If None, uses the default context.
+            session_id: Session ID from browser_create_session(). Required to keep the page alive.
 
         Returns:
             JSON string with page title, URL, and status
@@ -49,25 +97,39 @@ def browser_handler(server: FastMCP) -> None:
             if not browser_manager.is_running:
                 await browser_manager.start()
 
-            # Navigate to the URL
-            page = await browser_manager.goto(
-                url,
-                wait_until=wait_until or "domcontentloaded",
-                session_id=session_id,
-            )
+            if session_id:
+                # Use session-based page tracking
+                page = await _ensure_page(session_id)
+                await page.goto(
+                    url,
+                    timeout=settings.BROWSER_TIMEOUT * 1000,
+                    wait_until=wait_until or "domcontentloaded",
+                )
+            else:
+                # One-off navigation — create page, navigate, close
+                context = await browser_manager.get_session(None)
+                if not context:
+                    raise RuntimeError("Browser not running")
+                page = await context.new_page()
+                await page.goto(
+                    url,
+                    timeout=settings.BROWSER_TIMEOUT * 1000,
+                    wait_until=wait_until or "domcontentloaded",
+                )
 
             # Get page info
             title = await page.title()
             current_url = page.url
 
-            # Clean up page
-            await page.close()
+            # Close page only for one-off (no session_id)
+            if not session_id:
+                await page.close()
 
             result = {
                 "status": "success",
                 "url": current_url,
                 "title": title,
-                "session_id": session_id or "default",
+                "session_id": session_id or "none",
             }
             return json.dumps(result, indent=2)
         except Exception as e:
@@ -76,17 +138,20 @@ def browser_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def browser_screenshot(
+        url: str | None = None,
         full_page: bool = False,
         session_id: str | None = None,
     ) -> Image:
-        """Take a screenshot of the current page.
+        """Take a screenshot of a URL or the current page in a session.
 
-        Use this tool to see what the page looks like after navigating. This is useful
-        for understanding the page layout and identifying elements
+        Two usage modes:
+        1. One-off: provide url=... to navigate and screenshot in a single call.
+        2. Session: provide session_id=... to screenshot the current page from an active session.
 
         Args:
+            url: URL to navigate to and screenshot (required for one-off mode)
             full_page: Whether to capture the full page
-            session_id: The session ID to use. If None, uses the default context.
+            session_id: Session ID from browser_create_session() (required for session mode)
 
         Returns:
             Image object containing the screenshot PNG data.
@@ -96,23 +161,37 @@ def browser_handler(server: FastMCP) -> None:
             if not browser_manager.is_running:
                 await browser_manager.start()
 
-            # Get the session context
-            context = await browser_manager.get_session(session_id)
-            if not context:
-                raise RuntimeError("Browser not running")
-
-            # Create a new page for the screenshot
-            page = await context.new_page()
+            if session_id:
+                # Use session-based page tracking
+                page = await _ensure_page(session_id)
+                if url:
+                    await page.goto(
+                        url,
+                        timeout=settings.BROWSER_TIMEOUT * 1000,
+                        wait_until="domcontentloaded",
+                    )
+            else:
+                # One-off screenshot
+                context = await browser_manager.get_session(None)
+                if not context:
+                    raise RuntimeError("Browser not running")
+                page = await context.new_page()
+                if url:
+                    await page.goto(
+                        url,
+                        timeout=settings.BROWSER_TIMEOUT * 1000,
+                        wait_until="domcontentloaded",
+                    )
 
             # Take screenshot - returns raw PNG bytes
             screenshot_bytes = await browser_manager.screenshot(
                 page,
                 full_page=full_page,
-                session_id=session_id,
             )
 
-            # Clean up page
-            await page.close()
+            # Clean up page only for one-off (no session_id)
+            if not session_id:
+                await page.close()
 
             return Image(data=screenshot_bytes, format="png")
         except Exception as e:
@@ -122,21 +201,23 @@ def browser_handler(server: FastMCP) -> None:
     @server.tool()
     async def browser_click(
         selector: str,
+        url: str | None = None,
         timeout: int | None = None,
         wait_until: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Click an element on the page.
+        """Click an element on the current page in a session.
 
-        Use this tool to interact with buttons, links, and other clickable elements.
-        After clicking, use browser_screenshot() to see the result or browser_get_text()
-        to extract content from the new page.
+        Requires a session_id from browser_create_session(). The page must already be
+        loaded (via browser_navigate or browser_screenshot with url=). Use url= to
+        navigate to a new page before clicking.
 
         Args:
-            selector: The CSS selector for the element
+            selector: CSS selector for the element to click
+            url: Optional URL to navigate to before clicking
             timeout: Timeout in seconds. Defaults to settings.BROWSER_TIMEOUT.
             wait_until: When to consider navigation completed after click
-            session_id: The session ID to use. If None, uses the default context.
+            session_id: Session ID from browser_create_session(). Required.
 
         Returns:
             JSON string with success/failure status
@@ -146,13 +227,25 @@ def browser_handler(server: FastMCP) -> None:
             if not browser_manager.is_running:
                 await browser_manager.start()
 
-            # Get the session context
-            context = await browser_manager.get_session(session_id)
-            if not context:
-                return json.dumps({"status": "error", "error": "Browser not running"})
-
-            # Create a new page
-            page = await context.new_page()
+            if session_id:
+                page = await _ensure_page(session_id)
+                if url:
+                    await page.goto(
+                        url,
+                        timeout=settings.BROWSER_TIMEOUT * 1000,
+                        wait_until="domcontentloaded",
+                    )
+            else:
+                context = await browser_manager.get_session(None)
+                if not context:
+                    return json.dumps({"status": "error", "error": "Browser not running"})
+                page = await context.new_page()
+                if url:
+                    await page.goto(
+                        url,
+                        timeout=settings.BROWSER_TIMEOUT * 1000,
+                        wait_until="domcontentloaded",
+                    )
 
             # Click the element
             await browser_manager.click(page, selector)
@@ -161,13 +254,14 @@ def browser_handler(server: FastMCP) -> None:
             if wait_until:
                 await page.wait_for_load_state(wait_until)
 
-            # Clean up page
-            await page.close()
+            # Clean up page only for one-off
+            if not session_id:
+                await page.close()
 
             result = {
                 "status": "success",
                 "message": f"Clicked element: {selector}",
-                "session_id": session_id or "default",
+                "session_id": session_id or "none",
             }
             return json.dumps(result, indent=2)
         except Exception as e:
@@ -178,23 +272,19 @@ def browser_handler(server: FastMCP) -> None:
     async def browser_fill(
         selector: str,
         value: str,
+        url: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Fill an input field on the page.
+        """Fill an input field on the current page in a session.
 
-        Use this tool to fill in form fields, search boxes, and other input elements.
-        Common use cases:
-        - Filling out contact forms (USE CASE 3: Form Submission)
-        - Entering search queries (USE CASE 1: Grounding)
-        - Entering login credentials (USE CASE 4: Authentication)
-        - Entering search terms for availability checks (USE CASE 9: Availability Checking)
-
-        After filling, use browser_click() to submit the form or browser_get_text() to verify the value.
+        Requires a session_id from browser_create_session(). The page must already be
+        loaded. Use url= to navigate to a new page before filling.
 
         Args:
-            selector: The CSS selector for the input
+            selector: CSS selector for the input element
             value: The value to fill
-            session_id: The session ID to use. If None, uses the default context.
+            url: Optional URL to navigate to before filling
+            session_id: Session ID from browser_create_session(). Required.
 
         Returns:
             JSON string with success/failure status
@@ -204,24 +294,37 @@ def browser_handler(server: FastMCP) -> None:
             if not browser_manager.is_running:
                 await browser_manager.start()
 
-            # Get the session context
-            context = await browser_manager.get_session(session_id)
-            if not context:
-                return json.dumps({"status": "error", "error": "Browser not running"})
-
-            # Create a new page
-            page = await context.new_page()
+            if session_id:
+                page = await _ensure_page(session_id)
+                if url:
+                    await page.goto(
+                        url,
+                        timeout=settings.BROWSER_TIMEOUT * 1000,
+                        wait_until="domcontentloaded",
+                    )
+            else:
+                context = await browser_manager.get_session(None)
+                if not context:
+                    return json.dumps({"status": "error", "error": "Browser not running"})
+                page = await context.new_page()
+                if url:
+                    await page.goto(
+                        url,
+                        timeout=settings.BROWSER_TIMEOUT * 1000,
+                        wait_until="domcontentloaded",
+                    )
 
             # Fill the input
             await browser_manager.fill(page, selector, value)
 
-            # Clean up page
-            await page.close()
+            # Clean up page only for one-off
+            if not session_id:
+                await page.close()
 
             result = {
                 "status": "success",
                 "message": f"Filled element: {selector} with {value}",
-                "session_id": session_id or "default",
+                "session_id": session_id or "none",
             }
             return json.dumps(result, indent=2)
         except Exception as e:
@@ -231,22 +334,18 @@ def browser_handler(server: FastMCP) -> None:
     @server.tool()
     async def browser_evaluate(
         script: str,
+        url: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Execute JavaScript on the page.
+        """Execute JavaScript on the current page in a session.
 
-        Use this tool to run custom JavaScript on the page for advanced data extraction
-        or debugging. Common use cases:
-        - Extracting data from complex DOM structures (USE CASE 5: Dynamic Content Extraction)
-        - Running debugging scripts (USE CASE 8: Interactive Debugging)
-        - Checking for availability indicators (USE CASE 9: Availability Checking)
-        - Extracting data from SPAs that don't expose data in the DOM (USE CASE 5)
-
-        Example: "document.querySelector('.price').textContent" to get a price element
+        Requires a session_id from browser_create_session(). The page must already be
+        loaded. Use url= to navigate to a new page first.
 
         Args:
-            script: The JavaScript code to execute
-            session_id: The session ID to use. If None, uses the default context.
+            script: JavaScript code to execute
+            url: Optional URL to navigate to before evaluating
+            session_id: Session ID from browser_create_session(). Required.
 
         Returns:
             JSON string with the result of the JavaScript execution
@@ -256,24 +355,37 @@ def browser_handler(server: FastMCP) -> None:
             if not browser_manager.is_running:
                 await browser_manager.start()
 
-            # Get the session context
-            context = await browser_manager.get_session(session_id)
-            if not context:
-                return json.dumps({"status": "error", "error": "Browser not running"})
-
-            # Create a new page
-            page = await context.new_page()
+            if session_id:
+                page = await _ensure_page(session_id)
+                if url:
+                    await page.goto(
+                        url,
+                        timeout=settings.BROWSER_TIMEOUT * 1000,
+                        wait_until="domcontentloaded",
+                    )
+            else:
+                context = await browser_manager.get_session(None)
+                if not context:
+                    return json.dumps({"status": "error", "error": "Browser not running"})
+                page = await context.new_page()
+                if url:
+                    await page.goto(
+                        url,
+                        timeout=settings.BROWSER_TIMEOUT * 1000,
+                        wait_until="domcontentloaded",
+                    )
 
             # Execute JavaScript
             result = await browser_manager.evaluate(page, script)
 
-            # Clean up page
-            await page.close()
+            # Clean up page only for one-off
+            if not session_id:
+                await page.close()
 
             return json.dumps({
                 "status": "success",
                 "result": result,
-                "session_id": session_id or "default",
+                "session_id": session_id or "none",
             }, indent=2)
         except Exception as e:
             logger.error("Browser evaluate error: %s", str(e))
@@ -282,19 +394,19 @@ def browser_handler(server: FastMCP) -> None:
     @server.tool()
     async def browser_get_text(
         selector: str,
+        url: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Get text content of an element.
+        """Get text content of an element on the current page in a session.
 
-        Use this tool to extract text from specific elements on the page. Common use cases:
-        - Getting prices, stock status, or other data from elements (USE CASE 2: Real-time Data)
-        - Checking availability indicators (USE CASE 9: Availability Checking)
-        - Extracting search results or product listings (USE CASE 6: Data Collection)
-        - Verifying form submission success (USE CASE 3: Form Submission)
+        Requires a session_id from browser_create_session(). The page must already be
+        loaded. Use url= to navigate to a new page first. Use browser_screenshot(url=...)
+        for a one-off screenshot instead.
 
         Args:
-            selector: The CSS selector for the element
-            session_id: The session ID to use. If None, uses the default context.
+            selector: CSS selector for the element
+            url: Optional URL to navigate to before getting text
+            session_id: Session ID from browser_create_session(). Required.
 
         Returns:
             JSON string with the text content
@@ -304,24 +416,37 @@ def browser_handler(server: FastMCP) -> None:
             if not browser_manager.is_running:
                 await browser_manager.start()
 
-            # Get the session context
-            context = await browser_manager.get_session(session_id)
-            if not context:
-                return json.dumps({"status": "error", "error": "Browser not running"})
-
-            # Create a new page
-            page = await context.new_page()
+            if session_id:
+                page = await _ensure_page(session_id)
+                if url:
+                    await page.goto(
+                        url,
+                        timeout=settings.BROWSER_TIMEOUT * 1000,
+                        wait_until="domcontentloaded",
+                    )
+            else:
+                context = await browser_manager.get_session(None)
+                if not context:
+                    return json.dumps({"status": "error", "error": "Browser not running"})
+                page = await context.new_page()
+                if url:
+                    await page.goto(
+                        url,
+                        timeout=settings.BROWSER_TIMEOUT * 1000,
+                        wait_until="domcontentloaded",
+                    )
 
             # Get text
             text = await browser_manager.get_text(page, selector)
 
-            # Clean up page
-            await page.close()
+            # Clean up page only for one-off
+            if not session_id:
+                await page.close()
 
             return json.dumps({
                 "status": "success",
                 "text": text,
-                "session_id": session_id or "default",
+                "session_id": session_id or "none",
             }, indent=2)
         except Exception as e:
             logger.error("Browser get_text error: %s", str(e))
@@ -329,20 +454,18 @@ def browser_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def browser_get_content(
+        url: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Get the page content (text extraction).
+        """Get the full page content of the current page in a session.
 
-        Use this tool to extract all text content from the current page. Common use cases:
-        - Extracting article content or blog posts (USE CASE 1: Grounding)
-        - Getting full page content for analysis (USE CASE 6: Data Collection)
-        - Extracting data from SPAs that require JavaScript rendering (USE CASE 5: Dynamic Content)
-        - Verifying content exists before generating responses (USE CASE 1)
-
-        This is useful when you need comprehensive content from a page rather than specific elements.
+        Requires a session_id from browser_create_session(). The page must already be
+        loaded. Use url= to navigate to a new page first.For one-off content extraction,
+        use the fetch() tool instead.
 
         Args:
-            session_id: The session ID to use. If None, uses the default context.
+            url: Optional URL to navigate to before getting content
+            session_id: Session ID from browser_create_session(). Required.
 
         Returns:
             JSON string with page text content
@@ -352,25 +475,38 @@ def browser_handler(server: FastMCP) -> None:
             if not browser_manager.is_running:
                 await browser_manager.start()
 
-            # Get the session context
-            context = await browser_manager.get_session(session_id)
-            if not context:
-                return json.dumps({"status": "error", "error": "Browser not running"})
-
-            # Create a new page
-            page = await context.new_page()
+            if session_id:
+                page = await _ensure_page(session_id)
+                if url:
+                    await page.goto(
+                        url,
+                        timeout=settings.BROWSER_TIMEOUT * 1000,
+                        wait_until="domcontentloaded",
+                    )
+            else:
+                context = await browser_manager.get_session(None)
+                if not context:
+                    return json.dumps({"status": "error", "error": "Browser not running"})
+                page = await context.new_page()
+                if url:
+                    await page.goto(
+                        url,
+                        timeout=settings.BROWSER_TIMEOUT * 1000,
+                        wait_until="domcontentloaded",
+                    )
 
             # Get content
             content = await browser_manager.get_content(page)
 
-            # Clean up page
-            await page.close()
+            # Clean up page only for one-off
+            if not session_id:
+                await page.close()
 
             return json.dumps({
                 "status": "success",
                 "content": content,
                 "content_length": len(content),
-                "session_id": session_id or "default",
+                "session_id": session_id or "none",
             }, indent=2)
         except Exception as e:
             logger.error("Browser get_content error: %s", str(e))
@@ -378,29 +514,23 @@ def browser_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def browser_monitor(
+        url: str | None = None,
         interval: int = 5,
         duration: int = 30,
         path: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Periodic screenshot monitoring.
+        """Periodic screenshot monitoring of a page.
 
-        Captures screenshots at regular intervals for a specified duration. Use this tool
-        to monitor a page for changes over time.
-
-        Common use cases:
-        - Price monitoring: Track price changes over time (USE CASE 10: Competitive Intelligence)
-        - Availability checking: Monitor product stock levels (USE CASE 9: Availability Checking)
-        - Appointment slot monitoring: Track when slots become available (USE CASE 9)
-        - Content change detection: Monitor for updates to a page (USE CASE 10)
-
-        After monitoring, compare the screenshots to detect changes.
+        Captures screenshots at regular intervals for a specified duration. Requires a
+        session_id from browser_create_session(). Use url= to navigate to a page first.
 
         Args:
+            url: Optional URL to navigate to before monitoring
             interval: Seconds between screenshots (default: 5)
             duration: Total seconds to monitor (default: 30)
             path: Output directory for screenshots. If None, uses screenshot_dir.
-            session_id: The session ID to use. If None, uses the default context.
+            session_id: Session ID from browser_create_session(). Required.
 
         Returns:
             JSON string with list of screenshot paths
@@ -410,11 +540,6 @@ def browser_handler(server: FastMCP) -> None:
             if not browser_manager.is_running:
                 await browser_manager.start()
 
-            # Get the session context
-            context = await browser_manager.get_session(session_id)
-            if not context:
-                return json.dumps({"status": "error", "error": "Browser not running"})
-
             # Use provided path or default screenshot directory
             output_dir = path or browser_manager.screenshot_dir
             os.makedirs(output_dir, exist_ok=True)
@@ -422,29 +547,46 @@ def browser_handler(server: FastMCP) -> None:
             # Calculate number of screenshots
             num_screenshots = duration // interval
 
+            if session_id:
+                page = await _ensure_page(session_id)
+            else:
+                context = await browser_manager.get_session(None)
+                if not context:
+                    return json.dumps({"status": "error", "error": "Browser not running"})
+                page = await context.new_page()
+
+            # Navigate if URL provided
+            if url:
+                await page.goto(
+                    url,
+                    timeout=settings.BROWSER_TIMEOUT * 1000,
+                    wait_until="domcontentloaded",
+                )
+
             screenshot_paths = []
-            page = await context.new_page()
 
             for i in range(num_screenshots):
-                screenshot_path = await browser_manager.screenshot(
-                    page,
-                    path=os.path.join(output_dir, f"monitor_{session_id or 'default'}_{i}.png"),
-                    session_id=session_id,
+                screenshot_bytes = await page.screenshot(full_page=False)
+                screenshot_path = os.path.join(
+                    output_dir, f"monitor_{session_id or 'oneoff'}_{i}.png"
                 )
+                with open(screenshot_path, "wb") as f:
+                    f.write(screenshot_bytes)
                 screenshot_paths.append(screenshot_path)
                 logger.info("Monitor screenshot %d saved to %s", i + 1, screenshot_path)
 
                 if i < num_screenshots - 1:
                     await asyncio.sleep(interval)
 
-            # Clean up page
-            await page.close()
+            # Clean up page only for one-off
+            if not session_id:
+                await page.close()
 
             result = {
                 "status": "success",
                 "message": f"Captured {len(screenshot_paths)} screenshots",
                 "screenshot_paths": screenshot_paths,
-                "session_id": session_id or "default",
+                "session_id": session_id or "none",
             }
             return json.dumps(result, indent=2)
         except Exception as e:
@@ -455,13 +597,13 @@ def browser_handler(server: FastMCP) -> None:
     async def browser_close(
         session_id: str | None = None,
     ) -> str:
-        """Close the browser session.
+        """Close a browser session.
 
-        Use this tool to close the browser when you're done with your tasks. This frees up
-        resources and ensures the browser is properly shut down.
+        Use this when done with a session created by browser_create_session().
+        Frees resources and closes the session's context.
 
         Args:
-            session_id: The session ID to close. If None, closes the default context.
+            session_id: Session ID to close. If None, closes the default context.
 
         Returns:
             JSON string with success/failure status
@@ -485,11 +627,9 @@ def browser_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def browser_list_sessions() -> str:
-        """List active browser sessions.
+        """List all active browser sessions.
 
-        Use this tool to see which browser sessions are currently active. This is useful
-        when you have multiple sessions open and need to know which session IDs to use
-        for other browser automation tools.
+        Returns the session IDs of all sessions created by browser_create_session().
 
         Returns:
             JSON string with list of session IDs
