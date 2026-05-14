@@ -201,6 +201,8 @@ services:
       # by an empty volume mount. Python cache goes in .cache/python instead.
       - mcp-cache:/app/.cache/python
       - /tmp/playwright:/tmp/playwright
+      # Persist files created by the create_file tool
+      - mcp-files:/tmp/mcp-files
 
     environment:
       MCP_SERVER_HOST: ${MCP_SERVER_HOST:-0.0.0.0}
@@ -234,4 +236,6 @@ services:
 
 volumes:
   mcp-cache:
+    driver: local
+  mcp-files:
     driver: local

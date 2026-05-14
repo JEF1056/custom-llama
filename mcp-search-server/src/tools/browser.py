@@ -1,13 +1,14 @@
 """Browser automation tools for MCP server."""
 
 import asyncio
+import base64
 import json
 import logging
 import os
 from typing import Any
 
 from mcp.server import FastMCP
-from mcp.server.fastmcp import Image
+from mcp.types import ImageContent, TextContent
 
 from src.browser.automation import browser_manager
 from src.config import settings
@@ -27,6 +28,7 @@ async def _ensure_page(session_id: str):
     """Get existing page from session or create a new one and store it."""
     page = _get_page_for_session(session_id)
     if page is not None:
+        browser_manager._touch_session(session_id)
         return page
     # Create a new page in the session's context
     session = browser_manager._sessions.get(session_id)
@@ -134,10 +136,14 @@ def browser_handler(server: FastMCP) -> None:
         url: str | None = None,
         full_page: bool = False,
         session_id: str | None = None,
-    ) -> Image:
+    ):
         """Screenshot a URL or the current page in a session.
 
         Modes: 1) One-off: provide url=...  2) Session: provide session_id=...
+
+        The screenshot is returned as an MCP ImageContent (base64 PNG) so the
+        LLM can view it directly. The image is also saved to disk and a resource
+        URI is provided for later access via the resources protocol.
 
         Args:
             url: URL to navigate to and screenshot
@@ -145,7 +151,8 @@ def browser_handler(server: FastMCP) -> None:
             session_id: Session ID for session mode
 
         Returns:
-            Image object with PNG data.
+            MCP ImageContent with the screenshot (base64 PNG), plus a TextContent
+            message with the resource URI for later access.
         """
         try:
             # Start browser if not running
@@ -174,20 +181,42 @@ def browser_handler(server: FastMCP) -> None:
                         wait_until="domcontentloaded",
                     )
 
-            # Take screenshot - returns raw PNG bytes
-            screenshot_bytes = await browser_manager.screenshot(
+            # Take screenshot - returns (bytes, file_path)
+            screenshot_bytes, screenshot_path = await browser_manager.screenshot(
                 page,
                 full_page=full_page,
+                session_id=session_id,
             )
 
             # Clean up page only for one-off (no session_id)
             if not session_id:
                 await page.close()
 
-            return Image(data=screenshot_bytes, format="png")
+            # Build resource URI
+            resource_uri = f"file://{screenshot_path}"
+
+            # Return as MCP ImageContent (base64 PNG)
+            image_b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+            image = ImageContent(
+                type="image",
+                data=image_b64,
+                mimeType="image/png",
+            )
+
+            info_text = (
+                f"Screenshot captured successfully.\n"
+                f"  Resource URI: {resource_uri}\n"
+                f"  Session: {session_id or 'none'}\n"
+                f"  Full page: {full_page}\n"
+                f"\n"
+                f"The screenshot is embedded above as an MCP image. "
+                f"You can also access it later via the resource URI."
+            )
+
+            return [image, TextContent(type="text", text=info_text)]
         except Exception as e:
             logger.error("Browser screenshot error: %s", str(e))
-            raise e
+            return [TextContent(type="text", text=f"Error: {str(e)}")]
 
     @server.tool()
     async def browser_click(
@@ -508,6 +537,9 @@ def browser_handler(server: FastMCP) -> None:
 
         Requires session_id. Use url= to navigate first.
 
+        Each screenshot is saved to disk and returned as a file:// resource URI
+        that can be read via the MCP resources protocol.
+
         Args:
             url: Optional URL to navigate to first
             interval: Seconds between screenshots (default: 5)
@@ -516,7 +548,7 @@ def browser_handler(server: FastMCP) -> None:
             session_id: Session ID (required)
 
         Returns:
-            JSON string with list of screenshot paths
+            JSON string with list of screenshot resource URIs
         """
         try:
             # Start browser if not running
@@ -546,7 +578,7 @@ def browser_handler(server: FastMCP) -> None:
                     wait_until="domcontentloaded",
                 )
 
-            screenshot_paths = []
+            screenshot_uris = []
 
             for i in range(num_screenshots):
                 screenshot_bytes = await page.screenshot(full_page=False)
@@ -555,7 +587,8 @@ def browser_handler(server: FastMCP) -> None:
                 )
                 with open(screenshot_path, "wb") as f:
                     f.write(screenshot_bytes)
-                screenshot_paths.append(screenshot_path)
+                resource_uri = f"file://{screenshot_path}"
+                screenshot_uris.append(resource_uri)
                 logger.info("Monitor screenshot %d saved to %s", i + 1, screenshot_path)
 
                 if i < num_screenshots - 1:
@@ -567,8 +600,8 @@ def browser_handler(server: FastMCP) -> None:
 
             result = {
                 "status": "success",
-                "message": f"Captured {len(screenshot_paths)} screenshots",
-                "screenshot_paths": screenshot_paths,
+                "message": f"Captured {len(screenshot_uris)} screenshots",
+                "screenshot_uris": screenshot_uris,
                 "session_id": session_id or "none",
             }
             return json.dumps(result, indent=2)

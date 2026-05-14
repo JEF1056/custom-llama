@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import random
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,7 +34,7 @@ class BrowserSession:
     session_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     context: BrowserContext | None = field(default=None)
     pages: list[Page] = field(default_factory=list)
-    created_at: str = field(default_factory=lambda: "")
+    last_activity: float = field(default_factory=time.time)
 
     @property
     def is_active(self) -> bool:
@@ -64,13 +65,14 @@ class BrowserManager:
         """Initialize the browser manager.
 
         Args:
-            screenshot_dir: Directory to save screenshots. Defaults to /app/screenshots.
+            screenshot_dir: Directory to save screenshots. Defaults to /tmp/mcp-files/screenshots.
         """
         self._playwright = None
         self._browser: Browser | None = None
         self._default_context: BrowserContext | None = None
         self._sessions: dict[str, BrowserSession] = {}
         self._screenshot_dir = screenshot_dir or settings.SCREENSHOT_DIR
+        self._cleanup_task: asyncio.Task | None = None
         # Ensure screenshot directory exists
         os.makedirs(self._screenshot_dir, exist_ok=True)
 
@@ -99,6 +101,7 @@ class BrowserManager:
             "Accept-Language": "en-US,en;q=0.9",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         })
+        self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         logger.info("Browser started with user agent: %s", user_agent[:50])
 
     async def stop(self) -> None:
@@ -116,6 +119,14 @@ class BrowserManager:
             await self._browser.close()
         if self._playwright:
             await self._playwright.stop()
+        # Cancel background cleanup task
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self._cleanup_task = None
         logger.info("Browser stopped")
 
     async def create_session(self) -> str:
@@ -167,6 +178,36 @@ class BrowserManager:
                 return True
             return False
 
+    def _touch_session(self, session_id: str) -> None:
+        """Update last_activity timestamp for a session."""
+        session = self._sessions.get(session_id)
+        if session:
+            session.last_activity = time.time()
+
+    async def expire_idle_sessions(self) -> None:
+        """Close sessions that have been idle longer than the configured timeout."""
+        timeout = settings.SESSION_IDLE_TIMEOUT
+        now = time.time()
+        expired = [
+            sid for sid, session in self._sessions.items()
+            if session.is_active and (now - session.last_activity) > timeout
+        ]
+        for sid in expired:
+            logger.info("Expiring idle session %s (idle %.1fs, timeout %ss)", sid, now - self._sessions[sid].last_activity, timeout)
+            await self.close_session(sid)
+        if expired:
+            logger.info("Expired %d idle session(s)", len(expired))
+
+    async def _cleanup_loop(self) -> None:
+        """Background task that periodically expires idle sessions."""
+        interval = min(settings.SESSION_IDLE_TIMEOUT // 4, 60)
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await self.expire_idle_sessions()
+            except Exception:
+                logger.exception("Error in session cleanup loop")
+
     async def get_session(self, session_id: str | None = None) -> BrowserContext | None:
         """Get a browser context by session ID.
 
@@ -179,6 +220,7 @@ class BrowserManager:
         if session_id:
             session = self._sessions.get(session_id)
             if session and session.is_active:
+                self._touch_session(session_id)
                 return session.context
             return None
         return self._default_context
@@ -225,8 +267,8 @@ class BrowserManager:
         page: Page,
         full_page: bool = False,
         session_id: str | None = None,
-    ) -> bytes:
-        """Take a screenshot of the page and return raw PNG bytes.
+    ) -> tuple[bytes, str]:
+        """Take a screenshot of the page and save it to disk.
 
         Args:
             page: The page to screenshot.
@@ -234,12 +276,12 @@ class BrowserManager:
             session_id: The session ID. Used for default path generation.
 
         Returns:
-            Raw PNG bytes of the screenshot.
+            Tuple of (raw PNG bytes, file path where the screenshot was saved).
         """
         # Capture as bytes
         screenshot_bytes = await page.screenshot(full_page=full_page)
 
-        # Save to disk for logging/debugging
+        # Save to disk
         timestamp = asyncio.get_event_loop().time()
         session_prefix = session_id[:8] if session_id else "default"
         path = os.path.join(
@@ -251,7 +293,7 @@ class BrowserManager:
             f.write(screenshot_bytes)
         logger.info("Screenshot saved to %s", path)
 
-        return screenshot_bytes
+        return screenshot_bytes, path
 
     async def get_content(self, page: Page) -> str:
         """Get the page content.
