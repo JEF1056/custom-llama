@@ -13,24 +13,17 @@ logger = logging.getLogger(__name__)
 
 
 def fetch_handler(server: FastMCP) -> None:
-    """Register the fetch tool with the MCP server.
-
-    Args:
-        server: The MCP server instance.
-    """
+    """Register the fetch tool."""
 
     @server.tool()
     async def fetch(url: str) -> str:
-        """Fetch and extract content from a URL.
+        """Fetch and extract text content from a URL.
 
-        Fetches a URL, renders JavaScript via a headless browser, and extracts the
-        main text content. Use this for one-off content extraction from a specific URL.
-
-        For multi-step interactions (clicking, filling forms), use browser_create_session()
-        followed by browser_navigate() and other browser tools.
+        Renders JavaScript via a headless browser. For multi-step interactions
+        (clicking, filling forms), use browser_create_session() + browser tools.
 
         Args:
-            url: The URL to fetch
+            url: URL to fetch
 
         Returns:
             JSON string of extracted content

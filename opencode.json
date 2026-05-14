@@ -7,21 +7,21 @@
       "options": {
         "baseURL": "http://localhost:8080/v1",
         "headers": {
-          "X-Context-Limit": "200000",
-          "X-Context-Window": "200000",
+          "X-Context-Limit": "100000",
+          "X-Context-Window": "100000",
           "X-Context-Compact": "true"
         }
       },
       "models": {
-        "qwenopus3.6-35b": {
-          "name": "Qwopus3.6-35B-A3B",
+        "qwenopus3.6-27b": {
+          "name": "Qwopus3.6",
           "context": 100000
         }
       }
     }
   },
   "mcp": {
-    "search": {
+    "search tools": {
       "type": "remote",
       "url": "http://localhost:3100/mcp",
       "enabled": true

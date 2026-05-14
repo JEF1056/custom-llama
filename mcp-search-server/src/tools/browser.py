@@ -38,24 +38,18 @@ async def _ensure_page(session_id: str):
 
 
 def browser_handler(server: FastMCP) -> None:
-    """Register all browser automation tools with the MCP server.
-
-    Args:
-        server: The MCP server instance.
-    """
+    """Register browser automation tools."""
 
     @server.tool()
     async def browser_create_session() -> str:
-        """Create a new browser session for multi-step interactions.
+        """Create a browser session for multi-step interactions.
 
-        Call this first when you need to perform multiple browser actions (navigate,
-        click, fill, screenshot, etc.) on the same page. The returned session_id must
-        be passed to all subsequent browser tools to maintain page state.
-
-        For one-off actions (e.g., just a screenshot of a URL), use browser_screenshot(url=...) directly.
+        Call first when performing multiple actions (navigate, click, fill, etc.)
+        on the same page. Pass the returned session_id to all subsequent browser tools.
+        For one-off actions, use browser_screenshot(url=...) directly.
 
         Returns:
-            JSON string containing the session_id.
+            JSON string with session_id.
         """
         try:
             if not browser_manager.is_running:
@@ -78,16 +72,15 @@ def browser_handler(server: FastMCP) -> None:
         wait_until: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Navigate to a URL in a browser session.
+        """Navigate to a URL.
 
-        Use this to load a page before performing further actions (click, fill, screenshot,
-        etc.). Requires a session_id from browser_create_session() to persist the page.
-        Without session_id, the page is navigated and immediately closed.
+        Load a page before further actions (click, fill, screenshot). Provide
+        session_id to persist the page; without it, the page closes immediately.
 
         Args:
-            url: The URL to navigate to
-            wait_until: When to consider navigation completed (load, domcontentloaded, networkidle, commit)
-            session_id: Session ID from browser_create_session(). Required to keep the page alive.
+            url: URL to navigate to
+            wait_until: Navigation completion trigger (load, domcontentloaded, networkidle, commit)
+            session_id: Session ID to keep page alive
 
         Returns:
             JSON string with page title, URL, and status
@@ -142,19 +135,17 @@ def browser_handler(server: FastMCP) -> None:
         full_page: bool = False,
         session_id: str | None = None,
     ) -> Image:
-        """Take a screenshot of a URL or the current page in a session.
+        """Screenshot a URL or the current page in a session.
 
-        Two usage modes:
-        1. One-off: provide url=... to navigate and screenshot in a single call.
-        2. Session: provide session_id=... to screenshot the current page from an active session.
+        Modes: 1) One-off: provide url=...  2) Session: provide session_id=...
 
         Args:
-            url: URL to navigate to and screenshot (required for one-off mode)
-            full_page: Whether to capture the full page
-            session_id: Session ID from browser_create_session() (required for session mode)
+            url: URL to navigate to and screenshot
+            full_page: Capture full page
+            session_id: Session ID for session mode
 
         Returns:
-            Image object containing the screenshot PNG data.
+            Image object with PNG data.
         """
         try:
             # Start browser if not running
@@ -206,18 +197,16 @@ def browser_handler(server: FastMCP) -> None:
         wait_until: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Click an element on the current page in a session.
+        """Click an element on the current page.
 
-        Requires a session_id from browser_create_session(). The page must already be
-        loaded (via browser_navigate or browser_screenshot with url=). Use url= to
-        navigate to a new page before clicking.
+        Requires session_id. Page must be loaded first. Use url= to navigate before clicking.
 
         Args:
-            selector: CSS selector for the element to click
-            url: Optional URL to navigate to before clicking
-            timeout: Timeout in seconds. Defaults to settings.BROWSER_TIMEOUT.
-            wait_until: When to consider navigation completed after click
-            session_id: Session ID from browser_create_session(). Required.
+            selector: CSS selector for the element
+            url: Optional URL to navigate to first
+            timeout: Timeout in seconds (default: settings.BROWSER_TIMEOUT)
+            wait_until: Navigation completion trigger after click
+            session_id: Session ID (required)
 
         Returns:
             JSON string with success/failure status
@@ -275,16 +264,15 @@ def browser_handler(server: FastMCP) -> None:
         url: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Fill an input field on the current page in a session.
+        """Fill an input field on the current page.
 
-        Requires a session_id from browser_create_session(). The page must already be
-        loaded. Use url= to navigate to a new page before filling.
+        Requires session_id. Page must be loaded first. Use url= to navigate before filling.
 
         Args:
-            selector: CSS selector for the input element
-            value: The value to fill
-            url: Optional URL to navigate to before filling
-            session_id: Session ID from browser_create_session(). Required.
+            selector: CSS selector for the input
+            value: Value to fill
+            url: Optional URL to navigate to first
+            session_id: Session ID (required)
 
         Returns:
             JSON string with success/failure status
@@ -337,18 +325,17 @@ def browser_handler(server: FastMCP) -> None:
         url: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Execute JavaScript on the current page in a session.
+        """Execute JavaScript on the current page.
 
-        Requires a session_id from browser_create_session(). The page must already be
-        loaded. Use url= to navigate to a new page first.
+        Requires session_id. Page must be loaded first. Use url= to navigate first.
 
         Args:
-            script: JavaScript code to execute
-            url: Optional URL to navigate to before evaluating
-            session_id: Session ID from browser_create_session(). Required.
+            script: JavaScript code
+            url: Optional URL to navigate to first
+            session_id: Session ID (required)
 
         Returns:
-            JSON string with the result of the JavaScript execution
+            JSON string with execution result
         """
         try:
             # Start browser if not running
@@ -397,19 +384,17 @@ def browser_handler(server: FastMCP) -> None:
         url: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Get text content of an element on the current page in a session.
+        """Get text content of an element on the current page.
 
-        Requires a session_id from browser_create_session(). The page must already be
-        loaded. Use url= to navigate to a new page first. Use browser_screenshot(url=...)
-        for a one-off screenshot instead.
+        Requires session_id. Page must be loaded first. Use url= to navigate first.
 
         Args:
             selector: CSS selector for the element
-            url: Optional URL to navigate to before getting text
-            session_id: Session ID from browser_create_session(). Required.
+            url: Optional URL to navigate to first
+            session_id: Session ID (required)
 
         Returns:
-            JSON string with the text content
+            JSON string with text content
         """
         try:
             # Start browser if not running
@@ -457,15 +442,14 @@ def browser_handler(server: FastMCP) -> None:
         url: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Get the full page content of the current page in a session.
+        """Get full page content of the current page.
 
-        Requires a session_id from browser_create_session(). The page must already be
-        loaded. Use url= to navigate to a new page first.For one-off content extraction,
-        use the fetch() tool instead.
+        Requires session_id. Page must be loaded first. Use url= to navigate first.
+        For one-off extraction, use fetch() instead.
 
         Args:
-            url: Optional URL to navigate to before getting content
-            session_id: Session ID from browser_create_session(). Required.
+            url: Optional URL to navigate to first
+            session_id: Session ID (required)
 
         Returns:
             JSON string with page text content
@@ -520,17 +504,16 @@ def browser_handler(server: FastMCP) -> None:
         path: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Periodic screenshot monitoring of a page.
+        """Capture periodic screenshots for a specified duration.
 
-        Captures screenshots at regular intervals for a specified duration. Requires a
-        session_id from browser_create_session(). Use url= to navigate to a page first.
+        Requires session_id. Use url= to navigate first.
 
         Args:
-            url: Optional URL to navigate to before monitoring
+            url: Optional URL to navigate to first
             interval: Seconds between screenshots (default: 5)
             duration: Total seconds to monitor (default: 30)
-            path: Output directory for screenshots. If None, uses screenshot_dir.
-            session_id: Session ID from browser_create_session(). Required.
+            path: Output directory (default: screenshot_dir)
+            session_id: Session ID (required)
 
         Returns:
             JSON string with list of screenshot paths
@@ -599,11 +582,10 @@ def browser_handler(server: FastMCP) -> None:
     ) -> str:
         """Close a browser session.
 
-        Use this when done with a session created by browser_create_session().
-        Frees resources and closes the session's context.
+        Use when done with a session from browser_create_session().
 
         Args:
-            session_id: Session ID to close. If None, closes the default context.
+            session_id: Session ID to close (None = default context)
 
         Returns:
             JSON string with success/failure status
@@ -627,9 +609,7 @@ def browser_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def browser_list_sessions() -> str:
-        """List all active browser sessions.
-
-        Returns the session IDs of all sessions created by browser_create_session().
+        """List active browser sessions.
 
         Returns:
             JSON string with list of session IDs

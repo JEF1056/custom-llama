@@ -14,25 +14,18 @@ logger = logging.getLogger(__name__)
 
 
 def search_handler(server: FastMCP) -> None:
-    """Register the search tool with the MCP server.
-
-    Args:
-        server: The MCP server instance.
-    """
+    """Register the search tool."""
 
     @server.tool()
     async def search(query: str, max_results: int | None = None) -> str:
-        """Search the web for information using a search engine.
+        """Search the web. Returns titles, URLs, and snippets.
 
-        Use this tool when you need to find information on a topic. Returns titles,
-        URLs, and snippets from search results.
-
-        After getting results, use fetch() to extract content from specific URLs,
-        or browser_screenshot(url=...) for a one-off visual of a page.
+        Follow up with fetch() to extract content from specific URLs,
+        or browser_screenshot(url=...) for a one-off visual.
 
         Args:
-            query: The search query
-            max_results: Maximum number of results (default from config)
+            query: Search query
+            max_results: Max results (default from config)
 
         Returns:
             JSON string of search results

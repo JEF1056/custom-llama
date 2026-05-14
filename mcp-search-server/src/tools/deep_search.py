@@ -16,28 +16,21 @@ logger = logging.getLogger(__name__)
 
 
 def deep_search_handler(server: FastMCP) -> None:
-    """Register the deep search tool with the MCP server.
-
-    Args:
-        server: The MCP server instance.
-    """
+    """Register the deep search tool."""
 
     @server.tool()
     async def deep_search(query: str, max_results: int | None = None) -> str:
-        """Deep search with content extraction from top results.
+        """Search the web and extract content from top 3 results.
 
-        Performs a web search and extracts full content from the top 3 results.
-        Use when you need comprehensive information on a topic in a single call.
-
-        For interactive browsing (clicking, filling forms), use browser_create_session()
-        followed by browser_navigate() and other browser tools.
+        Use for comprehensive information in a single call. For interactive
+        browsing, use browser_create_session() + browser tools.
 
         Args:
-            query: The search query
-            max_results: Maximum number of results (default from config)
+            query: Search query
+            max_results: Max results (default from config)
 
         Returns:
-            JSON string of search results with extracted content from top 3
+            JSON string with search results and extracted content from top 3
         """
         engine = get_search_engine()
         search_results = await engine.search(query, max_results)

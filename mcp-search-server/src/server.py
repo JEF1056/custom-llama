@@ -1,4 +1,4 @@
-"""MCP Server for web search and content extraction using SSE and Streamable HTTP transports."""
+"""MCP Server for web search and browser automation."""
 
 import asyncio
 import contextlib
