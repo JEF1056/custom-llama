@@ -1409,9 +1409,9 @@ def main():
     download_parser.add_argument(
         "-q",
         "--quant",
-        default="IQ4_XS",
+        default="Q3_K_L",
         help=(
-            "Quantization type (default: IQ4_XS). "
+            "Quantization type (default: Q3_K_L). "
             "If the requested quant is not available on HuggingFace, the script "
             "will download the best available source (FP16/BF16) and quantize locally, "
             "then clean up the source file. "
@@ -1446,9 +1446,9 @@ def main():
     convert_parser.add_argument(
         "-q",
         "--quant",
-        default="IQ4_XS",
+        default="Q3_K_L",
         choices=QUANT_PRIORITY[:10],
-        help="Quantization method (default: IQ4_XS)",
+        help="Quantization method (default: Q3_K_L)",
     )
     convert_parser.add_argument(
         "-o",

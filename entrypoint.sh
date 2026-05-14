@@ -90,7 +90,7 @@ SLOT_SAVE_PATH=${LLAMA_SLOT_SAVE_PATH:-}
 # Requires: MTP-capable GGUF (model must include nextn/MTP layers).
 # Compatible with MMPROJ/vision (MTP pauses during image processing, resumes for text).
 # RTX 3090 benchmark: ~47-55 TPS vs ~22-25 TPS without MTP (Qwen3.6-27B Q4_K_M, 164K ctx).
-# Requires MTP tensors in the GGUF — produce via: docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS
+# Requires MTP tensors in the GGUF — produce via: docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant Q3_K_L
 SPEC_TYPE=${LLAMA_SPEC_TYPE:-}
 SPEC_DRAFT_N_MAX=${LLAMA_SPEC_DRAFT_N_MAX:-}
 
@@ -123,7 +123,7 @@ fi
 if [ -n "$LLAMA_MODEL" ]; then
     MODEL="$LLAMA_MODEL"
 elif [ -n "$MODEL_NAME" ]; then
-    QUANT="${QUANT:-${TQ_QUANT:-IQ4_XS}}"
+    QUANT="${QUANT:-${TQ_QUANT:-Q3_K_L}}"
     MODEL="/models/${MODEL_NAME}-${QUANT}.gguf"
 else
     MODEL=/models/model.gguf
@@ -141,7 +141,7 @@ if [ ! -f "$MODEL" ]; then
     echo ""
     echo "Prepare the model first using the convert image, for example:"
     if [ -n "$MODEL_NAME" ]; then
-        echo "  docker compose run --rm llama-convert download $MODEL_NAME --quant ${QUANT:-IQ4_XS}"
+        echo "  docker compose run --rm llama-convert download $MODEL_NAME --quant ${QUANT:-Q3_K_L}"
         echo "  # or for safetensors-only models:"
         echo "  docker compose run --rm llama-convert convert-st $MODEL_NAME --quant ${QUANT:-TQ2_0}"
     else

@@ -15,12 +15,12 @@ docker compose run --rm llama-convert download qwen3.6-27b --quant TQ2_0
 docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant TQ2_0
 
 # MTP-capable GGUF (auto-grafts MTP head from base model):
-docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS --mtp
-docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant IQ4_XS --mtp
+docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant Q3_K_M --mtp
+docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant Q3_K_L --mtp
 # ↑ Both auto-graft MTP from their respective base models:
 #   qwopus3.6-27b ← Qwen/Qwen3.6-27B    (15 MTP tensors, dense)
 #   qwopus3.6-35b ← Qwen/Qwen3.6-35B-A3B (19 MTP tensors, MoE)
-# Then set in .env: LLAMA_MODEL=/models/{model}-IQ4_XS-mtp.gguf
+# Then set in .env: LLAMA_MODEL=/models/{model}-Q3_K_L-mtp.gguf
 #                   LLAMA_SPEC_TYPE=mtp  LLAMA_SPEC_DRAFT_N_MAX=3
 
 # Re-quantize an existing GGUF already in ./models:
@@ -95,7 +95,7 @@ Cloudflare Edge (api.jessfan.com)
 | Variable | Default | Effect |
 |---|---|---|
 | `MODEL_NAME` | `qwopus3.6-35b` | Model to download via `manage_models.py` |
-| `QUANT` | `IQ4_XS` | Quantization format (or `TQ_QUANT` for TurboQuant) |
+| `QUANT` | `Q3_K_L` | Quantization format (or `TQ_QUANT` for TurboQuant) |
 | `LLAMA_MODEL` | — | Direct path to a `.gguf` file (skips auto-download) |
 | `HF_TOKEN` | — | Required for gated HuggingFace repos |
 | `CONVERT_THREADS` | `cpu_count//2` | CPU threads for quantization (lower to prevent BSOD) |
