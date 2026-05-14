@@ -26,6 +26,7 @@ def fetch_handler(server: FastMCP) -> None:
             url: URL to fetch
             truncate: When True (default), content exceeding the max length is summarized.
                       When False, the full extracted content is returned without truncation.
+                      Only set to False if the full content is truly needed — it can be very large.
 
         Returns:
             JSON string of extracted content

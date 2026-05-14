@@ -85,7 +85,7 @@ def deep_search_handler(server: FastMCP) -> None:
         )
 
         # Add deep search results
-        response_dict = response.model_dump()
+        response_dict = response.model_dump(mode="json")
         response_dict["deep_results"] = enriched_results
 
         return json.dumps(response_dict, indent=2)
