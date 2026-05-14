@@ -630,7 +630,7 @@ def _done(path: Path) -> None:
     print(f"\n  ✓ Model ready: {path.name} ({size_str})")
 
 
-def download_model(model_name: str, quant: str, output_dir: str, nthreads: int | None = None) -> None:
+def download_model(model_name: str, quant: str, output_dir: str, nthreads: int | None = None, keep_intermediate: bool = False) -> None:
     """Download (and if necessary locally quantize) a model.
 
     Algorithm
@@ -743,8 +743,11 @@ def download_model(model_name: str, quant: str, output_dir: str, nthreads: int |
 
     _quantize(actual_source, canonical, quant, nthreads=nthreads)
 
-    print(f"\n  Removing source GGUF : {actual_source.name}")
-    actual_source.unlink(missing_ok=True)
+    if keep_intermediate:
+        print(f"\n  Keeping source GGUF  : {actual_source.name}")
+    else:
+        print(f"\n  Removing source GGUF : {actual_source.name}")
+        actual_source.unlink(missing_ok=True)
 
     _done(canonical)
     _maybe_download_mmproj(model_info, output_path, model_name)
@@ -814,6 +817,7 @@ def convert_safetensors(
     output_dir: str,
     nthreads: int | None = None,
     mtp: bool = False,
+    keep_intermediate: bool = False,
 ) -> None:
     """Convert a safetensors model to a quantized GGUF via fp16 GGUF intermediate.
 
@@ -974,10 +978,14 @@ def convert_safetensors(
     # ------------------------------------------------------------------ #
     # 4. Clean up intermediate files (only on success — preserves resumability)
     # ------------------------------------------------------------------ #
-    print(f"\n  Removing fp16 GGUF : {fp16_gguf.name}")
-    fp16_gguf.unlink(missing_ok=True)
-    print(f"  Removing safetensors cache : {st_dir.name}")
-    shutil.rmtree(st_dir, ignore_errors=True)
+    if keep_intermediate:
+        print(f"\n  Keeping fp16 GGUF          : {fp16_gguf.name}")
+        print(f"  Keeping safetensors cache  : {st_dir.name}")
+    else:
+        print(f"\n  Removing fp16 GGUF : {fp16_gguf.name}")
+        fp16_gguf.unlink(missing_ok=True)
+        print(f"  Removing safetensors cache : {st_dir.name}")
+        shutil.rmtree(st_dir, ignore_errors=True)
 
     _done(canonical)
     _maybe_download_mmproj(model_info, output_path, model_name)
@@ -1118,6 +1126,15 @@ def main():
     download_parser.add_argument(
         "-t", "--threads", type=int, default=None, metavar="N", help=_threads_help
     )
+    download_parser.add_argument(
+        "--keep-intermediate",
+        action="store_true",
+        default=False,
+        help=(
+            "Do not delete the downloaded source GGUF after local quantization. "
+            "Useful to avoid re-downloading if you need to requantize."
+        ),
+    )
 
     # Convert model (re-quantize an existing GGUF)
     convert_parser = subparsers.add_parser("convert", help="Re-quantize an existing GGUF")
@@ -1206,19 +1223,29 @@ def main():
             "{model}-{quant}-mtp.gguf. Enable with LLAMA_SPEC_TYPE=mtp in .env."
         ),
     )
+    cst_parser.add_argument(
+        "--keep-intermediate",
+        action="store_true",
+        default=False,
+        help=(
+            "Do not delete the fp16 GGUF or the downloaded safetensors cache after "
+            "quantization. Useful to avoid re-downloading/re-converting if you need "
+            "to requantize to a different format."
+        ),
+    )
 
     args = parser.parse_args()
 
     if args.command == "list":
         list_models()
     elif args.command == "download":
-        download_model(args.model, args.quant, args.output_dir, nthreads=args.threads)
+        download_model(args.model, args.quant, args.output_dir, nthreads=args.threads, keep_intermediate=args.keep_intermediate)
     elif args.command == "convert":
         convert_model(args.model_path, args.quant, args.output_dir, nthreads=args.threads)
     elif args.command == "turboquant":
         turboquant_model(args.model_path, args.quant, args.output_dir, nthreads=args.threads)
     elif args.command == "convert-st":
-        convert_safetensors(args.model, args.quant, args.output_dir, nthreads=args.threads, mtp=args.mtp)
+        convert_safetensors(args.model, args.quant, args.output_dir, nthreads=args.threads, mtp=args.mtp, keep_intermediate=args.keep_intermediate)
     else:
         parser.print_help()
 
