@@ -265,6 +265,8 @@ exec llama-server \
     ${CACHE_RAM:+--cache-ram "$CACHE_RAM"} \
     $([ "$CLEAR_IDLE" = "on" ] && [ -n "$CACHE_RAM" ] && [ "$CACHE_RAM" != "0" ] && echo "--clear-idle") \
     $([ "$CLEAR_IDLE" = "off" ] && [ -n "$CACHE_RAM" ] && [ "$CACHE_RAM" != "0" ] && echo "--no-clear-idle") \
+    ${LLAMA_CHECKPOINT_EVERY_N_TOKENS:+--checkpoint-every-n-tokens $LLAMA_CHECKPOINT_EVERY_N_TOKENS} \
+    ${LLAMA_CTX_CHECKPOINTS:+--ctx-checkpoints $LLAMA_CTX_CHECKPOINTS} \
     ${TS:+--tensor-split "$TS"} \
     ${NCMOE:+-ncmoe "$NCMOE"} \
     ${SLOT_SAVE_PATH:+--slot-save-path "$SLOT_SAVE_PATH"} \
