@@ -215,10 +215,6 @@ if [ -n "$SPEC_TYPE" ] && [ "$SPEC_TYPE" != "none" ]; then
         if [ -n "$MMPROJ" ]; then
             echo "NOTE: MTP + multimodal active — MTP will pause during image/audio processing and resume for text tokens."
         fi
-        if [ "${PARALLEL:-1}" != "1" ]; then
-            echo "WARNING: --spec-type mtp requires --parallel 1. Forcing PARALLEL=1."
-            PARALLEL=1
-        fi
     fi
 fi
 
