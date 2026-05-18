@@ -22,6 +22,8 @@ docker-compose*.yaml
 .dockerignore
 
 # IDE files
+.opencode
+.weave
 .vscode
 .idea
 *.swp

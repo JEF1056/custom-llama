@@ -16,10 +16,10 @@ docker-compose.override.yml
 Thumbs.db
 
 # IDE
+.opencode/
+.weave/
 .vscode/
 .idea/
-
-# Roo
 plans
 .roo
 .roomodes

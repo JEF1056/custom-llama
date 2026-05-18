@@ -60,7 +60,7 @@ Take a screenshot of the current page.
 - `path` (string, optional): The file path to save the screenshot. If None, saves to screenshot_dir.
 - `session_id` (string, optional): The session ID to use. If None, uses the default context.
 
-**Returns:** JSON string with screenshot path.
+**Returns:** Screenshot as base64 PNG (MCP ImageContent) plus a resource URI for later access.
 
 ### `browser_click`
 Click an element.
@@ -118,7 +118,7 @@ Periodic screenshot monitoring. Captures screenshots at regular intervals for a 
 - `path` (string, optional): Output directory for screenshots. If None, uses screenshot_dir.
 - `session_id` (string, optional): The session ID to use. If None, uses the default context.
 
-**Returns:** JSON string with list of screenshot paths.
+**Returns:** JSON string with list of screenshot resource URIs.
 
 ### `browser_close`
 Close the browser session.

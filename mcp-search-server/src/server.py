@@ -14,10 +14,15 @@ from starlette.routing import Route
 
 from src.config import settings
 from src.tools.browser import browser_handler
+from src.tools.calculator import calculator_handler
+from src.tools.code_run import code_run_handler
 from src.tools.deep_search import deep_search_handler
 from src.tools.fetch import fetch_handler
+from src.tools.file_ops import file_operations_handler
 from src.tools.filetool import create_file_handler
+from src.tools.http_request import http_request_handler
 from src.tools.search import search_handler
+from src.tools.time_now import time_now_handler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -36,100 +41,65 @@ def create_server() -> FastMCP:
         streamable_http_path="/mcp",
         stateless_http=True,
         instructions=(
-            "A search server that can perform web searches, extract content from web pages, "
-            "and automate browser interactions.\n\n"
+            "A generalized MCP tool server: web search, browser automation, HTTP requests, "
+            "code execution, file operations, math, and time utilities.\n\n"
             "=== WHEN TO USE THIS SERVER ===\n"
             "1. When the agent is stuck or needs additional information from the web\n"
             "2. When the user specifies URLs that need to be fetched\n"
-            "3. When the user asks for real-time data (news, stock prices, weather, sports scores)\n"
+            "3. When the user asks for real-time data (news, stock prices, sports scores)\n"
             "4. When the user needs to verify content exists on a live website\n"
             "5. When the user needs to interact with a web application (fill forms, click buttons)\n"
-            "6. When the user needs to monitor a page for changes over time\n"
-            "7. When the user needs to check availability (product stock, appointment slots)\n"
-            "8. When the user needs to track changes (price monitoring, competitor analysis)\n\n"
+            "6. When the user needs to make API calls to any REST endpoint\n"
+            "7. When the user needs to run Python code for data processing or computation\n"
+            "8. When the user needs mathematical computation (symbolic, numeric, or matrix)\n"
+            "9. When the user needs to create, read, list, or delete files\n"
+            "10. When the user needs current time or timezone conversion\n\n"
             "=== TOOL CATEGORIES ===\n"
-            "1. Search Tools (search, fetch, deep_search): Use for quick HTTP-based retrieval\n"
+            "1. Search Tools (search, fetch, deep_search): Web search and content extraction\n"
             "   - search: Search the web for information using a search engine\n"
             "   - fetch: Fetch and extract content from a specific URL\n"
-            "   - deep_search: Search + extract full content from top results\n\n"
-            "2. Browser Automation Tools (browser_navigate, browser_screenshot, browser_click, etc.):\n"
-            "   Use for JavaScript-heavy pages that require full browser interaction\n"
+            "   - deep_search: Search + extract full content from top 3 results\n\n"
+            "2. HTTP Tools (http_request): Generic HTTP client for any REST API\n"
+            "   - http_request: Make GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS requests\n"
+            "   - Supports auth (basic, bearer, apikey), custom headers, body\n\n"
+            "3. Code Execution (code_run): Sandboxed Python execution\n"
+            "   - code_run: Execute Python code with numpy, pandas, sympy, scipy, etc.\n"
+            "   - Blocked: os, subprocess, socket, threading, network modules\n\n"
+            "4. Browser Automation Tools (browser_*): Full Playwright automation\n"
             "   - browser_navigate: Navigate to a URL\n"
-            "   - browser_screenshot: Take a screenshot of the current page\n"
+            "   - browser_screenshot: Take a screenshot (returns as MCP image)\n"
             "   - browser_click: Click on an element\n"
             "   - browser_fill: Fill in a form field\n"
             "   - browser_evaluate: Execute JavaScript on the page\n"
             "   - browser_get_text: Get text content from an element\n"
             "   - browser_get_content: Get the full HTML content of the page\n"
-            "   - browser_monitor: Monitor page changes\n"
-            "   - browser_close: Close the browser\n"
+            "   - browser_monitor: Monitor page changes over time\n"
+            "   - browser_close: Close the browser session\n"
             "   - browser_list_sessions: List active browser sessions\n\n"
-            "=== WORKFLOW: SEARCH + BROWSER AUTOMATION TOGETHER ===\n"
-            "1. Initial information gathering via search tools (search -> fetch)\n"
-            "2. Deep dive into specific pages via browser automation (navigate -> click -> extract)\n"
-            "3. Iterative exploration based on findings\n\n"
-            "=== USE CASE 1: GROUNDING/ADVISING LLM GENERATION ===\n"
-            "When the LLM needs to generate responses based on real-time web data:\n"
-            "- search for the topic -> fetch content from relevant URLs -> use extracted content to ground the response\n"
-            "- deep_search for comprehensive information -> use extracted content to answer the question\n"
-            "Example: \"What is the current weather in Tokyo?\" -> search -> fetch -> answer based on weather data\n\n"
-            "=== USE CASE 2: REAL-TIME DATA FETCHING ===\n"
-            "When the user needs live data from websites:\n"
-            "- fetch specific URLs with live data (stock prices, sports scores, news)\n"
-            "- browser_navigate to JS-heavy pages with live data -> browser_get_text to extract values\n"
-            "Example: \"What's the price of Bitcoin?\" -> fetch -> extract price from page\n\n"
-            "=== USE CASE 3: FORM SUBMISSION/AUTOMATION ===\n"
-            "When the user needs to fill out forms or automate web workflows:\n"
-            "- browser_navigate to the form page -> browser_fill to fill fields -> browser_click to submit\n"
-            "- browser_get_text or browser_get_content to verify submission\n"
-            "Example: \"Fill out this contact form\" -> navigate -> fill -> click -> verify\n\n"
-            "=== USE CASE 4: AUTHENTICATION/SESSION MANAGEMENT ===\n"
-            "When the user needs to access authenticated content:\n"
-            "- browser_navigate to login page -> browser_fill to enter credentials -> browser_click to submit\n"
-            "- browser_get_text to verify login success -> browser_navigate to protected page\n"
-            "Example: \"Check my email\" -> navigate to login -> fill credentials -> access inbox\n\n"
-            "=== USE CASE 5: DYNAMIC CONTENT EXTRACTION ===\n"
-            "When the user needs data from SPAs that require JavaScript rendering:\n"
-            "- browser_navigate to the page -> browser_get_text or browser_get_content to extract data\n"
-            "- browser_evaluate to run custom JavaScript for data extraction\n"
-            "Example: \"Get the latest reviews\" -> navigate -> extract reviews from SPA\n\n"
-            "=== USE CASE 6: DATA COLLECTION/SCRAPING ===\n"
-            "When the user needs to collect data from multiple pages:\n"
-            "- search for the topic -> fetch multiple URLs -> extract data from each\n"
-            "- browser_navigate to each page -> browser_get_text to collect data\n"
-            "Example: \"Get all product prices from this site\" -> navigate -> extract -> repeat\n\n"
-            "=== USE CASE 7: PROGRESS MONITORING ===\n"
-            "When the user needs to monitor a page for changes over time:\n"
-            "- browser_navigate to the page -> browser_monitor to capture periodic screenshots\n"
-            "- Compare screenshots to detect changes\n"
-            "Example: \"Monitor this product page for price drops\" -> navigate -> monitor -> compare\n\n"
-            "=== USE CASE 8: INTERACTIVE DEBUGGING ===\n"
-            "When the user needs to debug a web application:\n"
-            "- browser_navigate to the page -> browser_screenshot to see the page\n"
-            "- browser_evaluate to run debugging scripts -> browser_get_text to verify\n"
-            "Example: \"Debug this form\" -> navigate -> screenshot -> evaluate -> fix\n\n"
-            "=== USE CASE 9: AVAILABILITY CHECKING ===\n"
-            "When the user needs to check product availability or appointment slots:\n"
-            "- browser_navigate to the availability page -> browser_get_text to check status\n"
-            "- browser_evaluate to check for availability indicators\n"
-            "Example: \"Is this product in stock?\" -> navigate -> check availability\n\n"
-            "=== USE CASE 10: COMPETITIVE INTELLIGENCE ===\n"
-            "When the user needs to monitor competitor websites:\n"
-            "- browser_navigate to competitor pages -> browser_screenshot to capture\n"
-            "- browser_monitor for ongoing monitoring -> compare changes over time\n"
-            "Example: \"What's my competitor's pricing?\" -> navigate -> extract -> compare\n\n"
+            "5. File Tools (create_file, file_read, file_list, file_delete): File I/O\n"
+            "   - create_file: Create files in PDF/SVG/HTML/JSON/CSV/XML/XLSX formats\n"
+            "   - file_read: Read file contents (text or base64 for binary)\n"
+            "   - file_list: List files and directories\n"
+            "   - file_delete: Delete a file\n\n"
+            "6. Math Tools (calculator): Advanced symbolic calculator\n"
+            "   - calculator: Evaluate math expressions using SymPy\n"
+            "   - Supports: arithmetic, trig, symbolic algebra, matrices, calculus, equation solving\n\n"
+            "7. Time Tools (time_now): Time and timezone utilities\n"
+            "   - time_now: Get current time in any timezone or convert between timezones\n\n"
+            "=== WORKFLOWS ===\n"
+            "1. API + Data Processing: http_request to fetch API data -> code_run to process/analyze\n"
+            "2. Search + Analysis: search -> fetch -> code_run to analyze the data\n"
+            "3. Code + Files: code_run to generate data -> create_file to save results\n"
+            "4. Browser + HTTP: browser for JS-heavy pages, http_request for API endpoints\n"
+            "5. Math + Code: calculator for symbolic math, code_run for numeric computation\n\n"
             "=== EXAMPLE SCENARIOS ===\n"
-            "- Researching a topic: search -> fetch -> browser fallback for JS-heavy pages\n"
-            "- User-specified URL analysis: fetch -> browser fallback\n"
-            "- Interactive web application: navigate -> click -> extract\n"
-            "- Form interaction: navigate -> fill -> click -> extract\n"
-            "- Stuck agent recovery: search -> fetch -> browser fallback\n"
-            "- Multi-step research with monitoring: navigate -> monitor -> compare\n"
-            "- Deep search with fallback: deep_search -> browser evaluate\n"
-            "- Real-time data: fetch -> extract -> answer\n"
-            "- Availability check: navigate -> get_text -> check status\n"
-            "- Price monitoring: navigate -> monitor -> compare over time"
-        ),
+            "- Call an API: http_request(method='GET', url='...') -> parse JSON response\n"
+            "- Analyze data: http_request to fetch -> code_run with pandas to analyze\n"
+            "- Solve equations: calculator(expression='solve(x**2-4, x)')\n"
+            "- Process web data: search -> fetch -> code_run to extract/transform\n"
+            "- Generate files: code_run to compute -> create_file to save as CSV/JSON\n"
+            "- Timezone work: time_now(timezone_name='Asia/Tokyo') or convert between zones\n"
+            "- Multi-step: http_request -> code_run -> create_file -> file_read to verify"),
     )
     return server
 
@@ -145,6 +115,11 @@ def register_tools(server: FastMCP) -> None:
     deep_search_handler(server)
     browser_handler(server)
     create_file_handler(server)
+    http_request_handler(server)
+    code_run_handler(server)
+    file_operations_handler(server)
+    time_now_handler(server)
+    calculator_handler(server)
 
 
 def register_resources(server: FastMCP) -> None:

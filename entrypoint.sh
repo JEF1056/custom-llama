@@ -90,7 +90,7 @@ SLOT_SAVE_PATH=${LLAMA_SLOT_SAVE_PATH:-}
 # Requires: MTP-capable GGUF (model must include nextn/MTP layers).
 # Compatible with MMPROJ/vision (MTP pauses during image processing, resumes for text).
 # RTX 3090 benchmark: ~47-55 TPS vs ~22-25 TPS without MTP (Qwen3.6-27B Q4_K_M, 164K ctx).
-# Requires MTP tensors in the GGUF — produce via: docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant Q3_K_L
+# Requires MTP tensors in the GGUF — produce via: docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant Q3_K_M
 SPEC_TYPE=${LLAMA_SPEC_TYPE:-}
 SPEC_DRAFT_N_MAX=${LLAMA_SPEC_DRAFT_N_MAX:-}
 
@@ -274,4 +274,5 @@ exec llama-server \
     ${SPEC_TYPE:+--spec-type "$SPEC_TYPE"} \
     ${SPEC_DRAFT_N_MAX:+--spec-draft-n-max "$SPEC_DRAFT_N_MAX"} \
     $MMFLAGS \
+    --jinja \
     "$@"

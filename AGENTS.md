@@ -1,4 +1,4 @@
-# custom-llama — Agent Instructions
+﻿# custom-llama — Agent Instructions
 
 ## Commands
 
@@ -34,6 +34,7 @@ docker compose run --rm llama-convert convert /models/model-Q8_0.gguf --quant Q4
 docker compose build && docker compose build llama-convert
 
 # Start all services:
+# Note: llama-convert needs --profile convert, cloudflared needs --profile cloudflare.
 docker compose up -d
 
 # Logs:
@@ -68,6 +69,8 @@ Cloudflare Edge (api.jessfan.com)
 | `llama-convert` | `convert` | No | Model download/quantize |
 | `mcp-search-server` | custom | No | Web search MCP tool |
 
+- **llama-server uses --webui-mcp-proxy** — it proxies MCP tool calls to mcp-search-server at port 3100. The MCP Search Server provides semantic web search with browser automation.
+
 ## Gotchas
 
 - **`docker compose restart` won't re-read config.** After changing `.env` or `docker-compose.override.yml`, use `docker compose up -d` instead.
@@ -80,13 +83,12 @@ Cloudflare Edge (api.jessfan.com)
 - **MCP Search Server uses a named volume** for `.cache/python` only — the full `.cache` dir (which contains Playwright browsers) must not be overwritten by an empty volume mount.
 - **`mcp-search-server` healthcheck** hits `/health` on port 3100, not the SSE endpoint.
 - **`LLAMA_GPU_LAYERS=99`** — llama.cpp clamps to the model's actual layer count; this is the correct way to "offload all layers".
-- **`LLAMA_CTX_SIZE=200000`** with `LLAMA_PARALLEL=2` means each slot gets 100K tokens of context.
+- **`LLAMA_KV_UNIFIED=on`** — shares the full context pool across all slots (`--kv-unified`). With this default (llama.cpp >= b4550), `LLAMA_PARALLEL` controls concurrency, not context division.
 - **`LLAMA_CACHE_TYPE_K=V=turbo3`** requires `LLAMA_FLASH_ATTN=on` — setting turbo3 without flash attention will fail.
 - **`LLAMA_CLEAR_IDLE=on`** requires `LLAMA_CACHE_RAM` to be set and non-zero — otherwise the flag is silently omitted by `entrypoint.sh`.
 - **`LLAMA_DIRECT_IO=on`** is recommended when `LLAMA_GPU_LAYERS=99` — it prevents the ~18 GB model from being cached in the OS page cache after it's already in VRAM.
 - **MTP requires an MTP-capable GGUF** — the model must have `nextn`/MTP head layers baked in. Models need either `mtp_capable: True` (native MTP weights) or `mtp_graft_from: "Repo/Name"` (graft MTP from base model) in `manage_models.py`. The `--mtp` flag is blocked with a hard error for models with neither.
 - **Both Qwopus fine-tunes need MTP grafting.** Neither `qwopus3.6-27b` nor `qwopus3.6-35b` ship MTP tensors in their safetensors — Unsloth's fine-tuning stripped them while leaving `mtp_num_hidden_layers: 1` in config.json. The `mtp_graft_from` field in MODELS causes `--mtp` to auto-download MTP tensors from the base model (`Qwen/Qwen3.6-27B` for the 27B dense, `Qwen/Qwen3.6-35B-A3B` for the 35B MoE) and inject them before conversion. The MTP head is architecturally independent of the fine-tuned trunk.
-- **`LLAMA_SPEC_TYPE=mtp` requires `LLAMA_PARALLEL=1`** — the server hard-errors on `n_parallel > 1` with MTP. `entrypoint.sh` auto-forces this with a warning.
 - **MTP + vision coexist** — MTP speculative decoding pauses during image/audio processing and resumes for text tokens. `handle_mtp_for_ubatch` detects embedding-only batches (`tokens==nullptr`) and resets its pending state so the MTP KV cache skips image positions cleanly.
 - **llama-cpp source** is now `JEF1056/llama-cpp-turboquant` (`llama-next` branch) — TurboQuant KV + upstream sync + MTP speculative decoding + HIP/FATTN fixes on top.
 
@@ -94,8 +96,8 @@ Cloudflare Edge (api.jessfan.com)
 
 | Variable | Default | Effect |
 |---|---|---|
-| `MODEL_NAME` | `qwopus3.6-35b` | Model to download via `manage_models.py` |
-| `QUANT` | `Q3_K_L` | Quantization format (or `TQ_QUANT` for TurboQuant) |
+| `MODEL_NAME` | `qwopus3.6-27b` | Model to download via `manage_models.py` |
+| `QUANT` | `Q3_K_M` | Quantization format (or `TQ_QUANT` for TurboQuant) |
 | `LLAMA_MODEL` | — | Direct path to a `.gguf` file (skips auto-download) |
 | `HF_TOKEN` | — | Required for gated HuggingFace repos |
 | `CONVERT_THREADS` | `cpu_count//2` | CPU threads for quantization (lower to prevent BSOD) |
@@ -107,12 +109,12 @@ Cloudflare Edge (api.jessfan.com)
 | `LLAMA_KV_UNIFIED` | `on` | Share full context pool across all slots (`--kv-unified`) |
 | `LLAMA_CACHE_RAM` | — | Host-RAM prompt cache in MiB (`--cache-ram`); `-1` = unlimited, `0` = off |
 | `LLAMA_CLEAR_IDLE` | `on` | Save idle slots to `--cache-ram` on each new task (`--clear-idle`); requires `LLAMA_CACHE_RAM` |
-| `LLAMA_SPEC_TYPE` | — | Speculative decoding type: `mtp` for ~2x speed; requires MTP-capable GGUF and `LLAMA_PARALLEL=1` |
+| `LLAMA_SPEC_TYPE` | — | Speculative decoding type: `mtp` for ~2x speed; requires an MTP-capable GGUF |
 | `LLAMA_SPEC_DRAFT_N_MAX` | `3` | Draft tokens per MTP step (3 → 86.7% acceptance on RTX 3090 at 164K ctx) |
 
 ## opencode.json
 
-The `opencode.json` at the repo root configures the LLM provider for OpenCode sessions — it points at `http://localhost:8080/v1` with the `qwenopus3.6-35b` model and a 100K context window. No additional instructions are needed beyond what's in this file.
+The `opencode.json` at the repo root configures the LLM provider for OpenCode sessions — it points at `http://localhost:8080/v1` with the `qwenopus3.6-27b` model and a 150K context window. No additional instructions are needed beyond what's in this file.
 
 ## 12 Rules
 

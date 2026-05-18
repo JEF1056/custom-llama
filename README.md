@@ -13,8 +13,8 @@ No Cloudflare or secrets needed — just the inference server on this machine.
 ```bash
 cp .env.default .env
 docker compose build llama-server llama-convert mcp-search-server
-docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant Q3_K_L --mtp
-docker compose up -d llama-server
+docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant Q3_K_M --mtp
+docker compose up -d llama-server mcp-search-server
 ```
 
 Port 8080 is not exposed by default. Create `docker-compose.override.yml` (gitignored) to open it on localhost:
@@ -39,7 +39,7 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
 
 > **Without MTP:** if you want a faster first run (skip the safetensors download), use the prebuilt GGUF instead.
 > Comment out `LLAMA_MODEL` and `LLAMA_SPEC_TYPE` in `.env`, then run:
-> `docker compose run --rm llama-convert download qwopus3.6-27b --quant Q3_K_L`
+> `docker compose run --rm llama-convert download qwopus3.6-27b --quant Q3_K_M`
 
 ---
 
@@ -49,9 +49,9 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
 |---|---|
 | Model | Qwopus3.6-27B-v1-preview |
 | Base | Qwen3.6-27B |
-| Quant | Q3_K_L (~10.5 GB) |
+| Quant | Q3_K_M (~9.5 GB) |
 | Architecture | Hybrid: 48× DeltaNet + 16× Gated Attention (64 layers total) |
-| KV cache layers | 16 of 64 (only Attention layers; DeltaNet uses fixed 898 MiB recurrent state) |
+| KV cache layers | 16 of 64 (only Attention layers; DeltaNet recurrent state ~5.6 MiB, GPU working buffers ~898 MiB) |
 | Context | 150K (native 262K; limited for VRAM) |
 | Capabilities | Reasoning, vision, tool use, MTP speculative decoding |
 | MTP speedup | ~2–2.5× tok/s vs. baseline (requires MTP-capable GGUF) |
@@ -60,11 +60,11 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
 
 | Component | Size |
 |---|---|
-| Model (Q3_K_L) + mmproj | ~11.4 GB |
-| DeltaNet recurrent state | ~0.9 GB |
+| Model (Q3_K_M) + mmproj | ~10.4 GB |
+| DeltaNet GPU working buffers | ~0.9 GB |
 | KV cache (turbo3, 150K ctx) | ~0.9 GB |
 | CUDA context + compute | ~0.6 GB |
-| **Total** | **~17.3 GB** (~6.7 GB headroom) |
+| **Total** | **~16.3 GB** (~7.7 GB headroom) |
 
 ---
 
@@ -82,8 +82,14 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
               │  cloudflared → llama-server :8080  │
               └───────────────┬────────────────────┘
                                 │ llama-net (internal)
-                          llama-server :8080
+                    ┌─────────────────────┐
+                    │ llama-server :8080  │
+                    │  │                   │
+                    │  └─ mcp-search-server :3100
+                    └─────────────────────┘
 ```
+
+> **Note:** `llama-server` uses `--webui-mcp-proxy` to forward MCP tool calls to `mcp-search-server` on port 3100.
 
 | Interface | URL / Command | Auth |
 |---|---|---|
@@ -152,13 +158,13 @@ docker compose build llama-convert
 
 # Option A (recommended): MTP-capable GGUF from safetensors — ~2–2.5× faster generation
 # Downloads ~28 GB safetensors, converts to fp16 GGUF, quantizes, cleans up.
-docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant Q3_K_L --mtp
-# Output: ./models/qwopus3.6-27b-Q3_K_L-mtp.gguf (~10.5 GB)
+docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant Q3_K_M --mtp
+# Output: ./models/qwopus3.6-27b-Q3_K_M-mtp.gguf (~9.5 GB)
 # .env.default already points LLAMA_MODEL at this file and sets LLAMA_SPEC_TYPE=mtp.
 
 # Option B (faster setup, no MTP): prebuilt GGUF from HuggingFace
 # Comment out LLAMA_MODEL and LLAMA_SPEC_TYPE in .env first.
-docker compose run --rm llama-convert download qwopus3.6-27b --quant Q3_K_L
+docker compose run --rm llama-convert download qwopus3.6-27b --quant Q3_K_M
 ```
 
 > **Gated models:** set `HF_TOKEN=your_token` in `.env`
@@ -168,6 +174,8 @@ docker compose run --rm llama-convert download qwopus3.6-27b --quant Q3_K_L
 ```bash
 docker compose up -d
 ```
+
+> **Note:** `docker compose up -d` starts `llama-server` and `mcp-search-server` by default. `cloudflared` requires `--profile cloudflare`, and `llama-convert` requires `--profile convert`.
 
 Check the logs:
 ```bash
@@ -218,10 +226,10 @@ response = client.chat.completions.create(
 docker compose run --rm llama-convert list
 
 # MTP-capable GGUF (recommended — from safetensors, includes nextn heads)
-docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant Q3_K_L --mtp
+docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant Q3_K_M --mtp
 
 # Standard prebuilt GGUF (faster setup, no MTP)
-docker compose run --rm llama-convert download qwopus3.6-27b --quant Q3_K_L
+docker compose run --rm llama-convert download qwopus3.6-27b --quant Q3_K_M
 
 # Re-quantize an existing GGUF already in ./models
 docker compose run --rm llama-convert convert /models/qwopus3.6-27b-fp16.gguf --quant Q4_K_M
@@ -244,7 +252,7 @@ docker compose run --rm llama-convert convert /models/qwopus3.6-27b-fp16.gguf --
 
 - **Model not loading:** Check `docker compose logs llama-server`. Common causes: model file missing (`LLAMA_MODEL` path mismatch), insufficient VRAM.
 - **MTP not working:** Confirm the GGUF was built with `--mtp`. Prebuilt GGUFs strip MTP heads. Verify `LLAMA_SPEC_TYPE=mtp` and `LLAMA_MODEL` point to the `-mtp.gguf` file.
-- **Slow generation (11 vs 20 tok/s):** Context may be filling up within a long conversation. MTP requires `LLAMA_PARALLEL=1` and a `-mtp.gguf` file.
+- **Slow generation (11 vs 20 tok/s):** Context may be filling up within a long conversation. MTP requires a `-mtp.gguf` file.
 - **Cloudflare Tunnel not connecting:** Verify `CF_TUNNEL_TOKEN` is correct. Check `docker compose logs cloudflared`.
 - **Cloudflare Access authentication failing:** Ensure the Access Application is configured for the correct domain and authentication method.
 - **GPU not detected:** Verify NVIDIA Container Toolkit is installed. Check `docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi`.
