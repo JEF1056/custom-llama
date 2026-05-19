@@ -84,7 +84,7 @@ def _wrap_code(code: str) -> str:
 
         def restricted_import(name, *args, **kwargs):
             if not _check_import_allowed(name):
-                raise ImportError(f"Import of '{name}' is not allowed in sandbox.")
+                raise ImportError(f"Import of '{{name}}' is not allowed in sandbox.")
             return original_import(name, *args, **kwargs)
 
         builtins.__import__ = restricted_import
@@ -95,8 +95,28 @@ def _wrap_code(code: str) -> str:
         sys.stdout = _stdout
         sys.stderr = _stderr
 
-        # Store _check_import_allowed in global scope for the import hook
-        _check_import_allowed = lambda name: {allowed_check}
+        # Import guard function for sandbox
+        _allowed_imports = {allowed_imports}
+        _blocked_imports = {blocked_imports}
+
+        def _check_import_allowed(module_name):
+            top_level = module_name.split(".")[0]
+            if top_level in _blocked_imports:
+                return False
+            if module_name in _allowed_imports:
+                return True
+            if top_level in _allowed_imports:
+                return True
+            try:
+                from importlib import util as _util
+                spec = _util.find_spec(module_name)
+                if spec and spec.origin:
+                    origin = spec.origin
+                    if "site-packages" not in origin and "dist-packages" not in origin:
+                        return True
+            except Exception:
+                pass
+            return False
 
         try:
             exec_result = None
@@ -121,15 +141,22 @@ def _wrap_code(code: str) -> str:
                 _json.dump(result, f, indent=2, ensure_ascii=False)
     """)
 
-    # Check if code is a single expression (can be eval'd) or statements
-    is_allowed_check = "_check_import_allowed(name)"
     code_escaped = json.dumps(code)
 
     return wrapper.format(
-        allowed_check=is_allowed_check,
+        allowed_imports=repr(_ALLOWED_IMPORTS),
+        blocked_imports=repr(_BLOCKED_IMPORTS),
         code_literal=code_escaped,
         output_file=json.dumps("/tmp/code_run_output.json"),
     )
+
+
+def _exec_wrapper(code: str) -> None:
+    """Execute wrapped code in subprocess (must be top-level for multiprocessing)."""
+    # Use same dict for globals+locals so _check_import_allowed is in global scope
+    # and accessible to restricted_import called via builtins.__import__
+    ns = {}
+    exec(compile(code, "<sandbox>", "exec"), ns, ns)  # type: ignore[arg-type]
 
 
 def _run_code_sandbox(code: str) -> dict[str, Any]:
@@ -141,7 +168,7 @@ def _run_code_sandbox(code: str) -> dict[str, Any]:
         os.remove(output_file)
 
     proc = multiprocessing.Process(
-        target=exec,  # type: ignore[arg-type]
+        target=_exec_wrapper,
         args=(wrapped,),
     )
     proc.start()

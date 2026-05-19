@@ -4,38 +4,38 @@ set -e
 # Default values
 HOST=${LLAMA_HOST:-0.0.0.0}
 PORT=${LLAMA_PORT:-8080}
-THREADS=${LLAMA_THREADS:-6}
-THREADS_BATCH=${LLAMA_THREADS_BATCH:-4}
+THREADS=${LLAMA_THREADS:-8}
+THREADS_BATCH=${LLAMA_THREADS_BATCH:-10}
 CTX_SIZE=${LLAMA_CTX_SIZE:-200000}
-BATCH_SIZE=${LLAMA_BATCH_SIZE:-4096}
+BATCH_SIZE=${LLAMA_BATCH_SIZE:-8192}
 UBATCH_SIZE=${LLAMA_UBATCH_SIZE:-2048}
 GPU_LAYERS=${LLAMA_GPU_LAYERS:-99}
 MAX_TOKENS=${LLAMA_MAX_TOKENS:--1}
 TOP_P=${LLAMA_TOP_P:-0.95}
 TEMP=${LLAMA_TEMP:-0.6}
-TOP_K=${LLAMA_TOP_K:-0}
+TOP_K=${LLAMA_TOP_K:-20}
 MIN_P=${LLAMA_MIN_P:-0.0}
 PRESENCE_PENALTY=${LLAMA_PRESENCE_PENALTY:-0.0}
 REPETITION_PENALTY=${LLAMA_REPETITION_PENALTY:-1.0}
 STOP=${LLAMA_STOP:-}
 DRY_MULTIPLIER=${LLAMA_DRY_MULTIPLIER:-0}
 DRY_BASE=${LLAMA_DRY_BASE:-1.75}
-DRY_ALLOWED_LENGTH=${LLAMA_DRY_ALLOWED_LENGTH:-2}
-DRY_PENALTY_LAST_N=${LLAMA_DRY_PENALTY_LAST_N:-512}
-REASONING_BUDGET=${LLAMA_REASONING_BUDGET:-0}
+DRY_ALLOWED_LENGTH=${LLAMA_DRY_ALLOWED_LENGTH:-128}
+DRY_PENALTY_LAST_N=${LLAMA_DRY_PENALTY_LAST_N:-2048}
+REASONING_BUDGET=${LLAMA_REASONING_BUDGET:-4096}
 
 # KV cache quantization settings
 # K cache type: f16 (default), q8_0, q4_0, q4_1, q5_0, q5_1, iq4_nl
 # V cache type: f16 (default), q8_0, q4_0, q4_1, q5_0, q5_1, iq4_nl
-CACHE_TYPE_K=${LLAMA_CACHE_TYPE_K:-f16}
-CACHE_TYPE_V=${LLAMA_CACHE_TYPE_V:-f16}
+CACHE_TYPE_K=${LLAMA_CACHE_TYPE_K:-turbo3}
+CACHE_TYPE_V=${LLAMA_CACHE_TYPE_V:-turbo4}
 
 # Flash Attention: boolean flag (-fa). Reduces KV memory 20-50% on CUDA.
 FLASH_ATTN=${LLAMA_FLASH_ATTN:-on}
 
 # Parallel inference slots (concurrent requests)
 # Does not increase VRAM usage — slots share the same model weights, only KV cache is duplicated per slot
-PARALLEL=${LLAMA_PARALLEL:-2}
+PARALLEL=${LLAMA_PARALLEL:-3}
 
 # Memory mapping (off = mmap enabled, which is efficient for large models)
 # Set to "on" to disable mmap (loads entire model into RAM first — faster but requires more RAM)
@@ -44,7 +44,7 @@ NO_MMAP=${LLAMA_NO_MMAP:-off}
 # Direct I/O: bypass OS page cache when loading the model file.
 # Recommended when all layers are GPU-offloaded — avoids caching ~9 GB of model
 # weights in RAM that are already resident in VRAM.
-DIRECT_IO=${LLAMA_DIRECT_IO:-off}
+DIRECT_IO=${LLAMA_DIRECT_IO:-on}
 
 # Reasoning mode (on = chain-of-thought output for reasoning models)
 # Per-model setting; enable for models trained with reasoning capabilities (e.g., DeepSeek-R1, QwQ)
@@ -93,6 +93,30 @@ SLOT_SAVE_PATH=${LLAMA_SLOT_SAVE_PATH:-}
 # Requires MTP tensors in the GGUF — produce via: docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant Q3_K_M
 SPEC_TYPE=${LLAMA_SPEC_TYPE:-}
 SPEC_DRAFT_N_MAX=${LLAMA_SPEC_DRAFT_N_MAX:-}
+SPEC_DRAFT_P_MIN=${LLAMA_SPEC_DRAFT_P_MIN:-}
+
+# KV cache reuse via shifting (--cache-reuse). When two requests share a common prefix,
+# the server reuses cached KV entries instead of recomputing. Min chunk size in tokens.
+CACHE_REUSE=${LLAMA_CACHE_REUSE:-}
+
+# RoPE scaling method for contexts beyond training length.
+# Options: linear, yarn, none. YaRN provides better quality at long contexts (100K+).
+ROPE_SCALING=${LLAMA_ROPE_SCALING:-}
+
+# Context checkpointing — how often to snapshot KV state during prefill.
+CHECKPOINT_EVERY_N=${LLAMA_CHECKPOINT_EVERY_N_TOKENS:-}
+CTX_CHECKPOINTS=${LLAMA_CTX_CHECKPOINTS:-}
+
+# TriAttention: periodically scores cached tokens and evicts the least important ones.
+# Requires a calibration file (generated from representative text).
+# --triattention-stats: path to calibration file
+# --triattention-budget: max tokens to keep in KV cache
+# --triattention-window: scoring window size
+# --triattention-log: enable logging
+TRIATTENTION_STATS=${LLAMA_TRIATTENTION_STATS:-}
+TRIATTENTION_BUDGET=${LLAMA_TRIATTENTION_BUDGET:-}
+TRIATTENTION_WINDOW=${LLAMA_TRIATTENTION_WINDOW:-}
+TRIATTENTION_LOG=${LLAMA_TRIATTENTION_LOG:-}
 
 # API key — when set, all requests to the server must include
 # Authorization: Bearer <key>. Leave empty for unauthenticated access
@@ -203,6 +227,18 @@ fi
 if [ -n "$SLOT_SAVE_PATH" ]; then
     echo "  Slot Save Path: $SLOT_SAVE_PATH"
 fi
+if [ -n "$CACHE_REUSE" ]; then
+    echo "  Cache Reuse: $CACHE_REUSE"
+fi
+if [ -n "$ROPE_SCALING" ]; then
+    echo "  RoPE Scaling: $ROPE_SCALING"
+fi
+if [ -n "$CHECKPOINT_EVERY_N" ]; then
+    echo "  Checkpoint Every N: $CHECKPOINT_EVERY_N"
+fi
+if [ -n "$CTX_CHECKPOINTS" ]; then
+    echo "  Context Checkpoints: $CTX_CHECKPOINTS"
+fi
 if [ -n "$API_KEY" ]; then
     echo "  API Key: (set)"
 fi
@@ -210,6 +246,9 @@ if [ -n "$SPEC_TYPE" ] && [ "$SPEC_TYPE" != "none" ]; then
     echo "  Spec Type: $SPEC_TYPE"
     if [ -n "$SPEC_DRAFT_N_MAX" ]; then
         echo "  Spec Draft N Max: $SPEC_DRAFT_N_MAX"
+    fi
+    if [ -n "$SPEC_DRAFT_P_MIN" ]; then
+        echo "  Spec Draft P Min: $SPEC_DRAFT_P_MIN"
     fi
     if [ "$SPEC_TYPE" = "mtp" ]; then
         if [ -n "$MMPROJ" ]; then
@@ -264,15 +303,21 @@ exec llama-server \
     $([ "$KV_UNIFIED" = "on" ] && echo "--kv-unified") \
     ${CACHE_RAM:+--cache-ram "$CACHE_RAM"} \
     $([ "$CLEAR_IDLE" = "on" ] && [ -n "$CACHE_RAM" ] && [ "$CACHE_RAM" != "0" ] && echo "--clear-idle") \
-    $([ "$CLEAR_IDLE" = "off" ] && [ -n "$CACHE_RAM" ] && [ "$CACHE_RAM" != "0" ] && echo "--no-clear-idle") \
-    ${LLAMA_CHECKPOINT_EVERY_N_TOKENS:+--checkpoint-every-n-tokens $LLAMA_CHECKPOINT_EVERY_N_TOKENS} \
-    ${LLAMA_CTX_CHECKPOINTS:+--ctx-checkpoints $LLAMA_CTX_CHECKPOINTS} \
+    ${CHECKPOINT_EVERY_N:+--checkpoint-every-n-tokens $CHECKPOINT_EVERY_N} \
+    ${CTX_CHECKPOINTS:+--ctx-checkpoints $CTX_CHECKPOINTS} \
     ${TS:+--tensor-split "$TS"} \
     ${NCMOE:+-ncmoe "$NCMOE"} \
     ${SLOT_SAVE_PATH:+--slot-save-path "$SLOT_SAVE_PATH"} \
     ${API_KEY:+--api-key "$API_KEY"} \
     ${SPEC_TYPE:+--spec-type "$SPEC_TYPE"} \
     ${SPEC_DRAFT_N_MAX:+--spec-draft-n-max "$SPEC_DRAFT_N_MAX"} \
+    ${SPEC_DRAFT_P_MIN:+--spec-draft-p-min "$SPEC_DRAFT_P_MIN"} \
+    ${CACHE_REUSE:+--cache-reuse "$CACHE_REUSE"} \
+    ${ROPE_SCALING:+--rope-scaling "$ROPE_SCALING"} \
+    ${TRIATTENTION_STATS:+--triattention-stats "$TRIATTENTION_STATS"} \
+    ${TRIATTENTION_BUDGET:+--triattention-budget "$TRIATTENTION_BUDGET"} \
+    ${TRIATTENTION_WINDOW:+--triattention-window "$TRIATTENTION_WINDOW"} \
+    $([ "$TRIATTENTION_LOG" = "on" ] && echo "--triattention-log") \
     $MMFLAGS \
     --jinja \
     "$@"

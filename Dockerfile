@@ -13,7 +13,7 @@ RUN apt-get update && \
   pkg-config && \
   rm -rf /var/lib/apt/lists/*
 
-RUN git clone --depth 1 --branch llama-next --recursive \
+RUN git clone --depth 1 --branch llama-next-experimental --recursive \
   https://github.com/JEF1056/llama-cpp-turboquant.git /llama.cpp
 
 WORKDIR /llama.cpp
@@ -101,7 +101,6 @@ HEALTHCHECK --interval=60s --timeout=15s --retries=3 --start-period=120s \
   CMD curl -f http://localhost:8080/health || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["--host", "0.0.0.0", "--port", "8080"]
 
 
 # =============================================================================

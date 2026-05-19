@@ -116,6 +116,16 @@ Cloudflare Edge (api.jessfan.com)
 
 The `opencode.json` at the repo root configures the LLM provider for OpenCode sessions — it points at `http://localhost:8080/v1` with the `qwenopus3.6-27b` model and a 150K context window. No additional instructions are needed beyond what's in this file.
 
+## Anti-Loop Discipline
+
+These rules prevent the agent from getting stuck re-reading files or repeating tool calls.
+
+- **Never read the same file twice in a single conversation.** If you already read a file, use what you have in context. If you need a specific section, use `grep` to find the relevant lines — do not re-read the whole file.
+- **Check context before calling Read.** Before invoking any file-read tool, check whether you already have the file contents in context.
+- **If you notice you're re-reading a file, stop.** Summarize what you already know, then proceed with the task instead of gathering more context.
+- **Prefer targeted searches over full reads.** Use `grep`/`glob` to locate specific code before reading entire files.
+- **Track which files you've read.** Keep a mental note of files already examined. If compaction prunes earlier turns, rely on summaries you've already written.
+
 ## 12 Rules
 
 These rules apply to every task unless explicitly overridden. Bias: caution over speed on non-trivial work.

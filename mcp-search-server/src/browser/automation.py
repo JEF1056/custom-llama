@@ -7,24 +7,175 @@ import random
 import time
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
+from playwright_stealth import Stealth
 
 from src.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Common timezones for fingerprint randomization
+TIMEZONES = [
+    "America/New_York",
+    "America/Los_Angeles",
+    "America/Chicago",
+    "America/Denver",
+    "Europe/London",
+    "Europe/Berlin",
+    "Europe/Paris",
+    "Asia/Tokyo",
+    "Asia/Shanghai",
+    "Australia/Sydney",
+]
+
+# Common locales for fingerprint randomization
+LOCALES = ["en-US", "en-GB", "en-CA", "de-DE", "fr-FR", "ja-JP", "zh-CN", "es-ES"]
+
 # Common user agents for rotation
 USER_AGENTS = [
+    # Chrome — Windows
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+    # Chrome — macOS
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    # Chrome — Linux
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7; rv/121.0) Gecko/20100101 Firefox/121.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv/121.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+    # Edge — Windows
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0",
+    # Edge — macOS
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+    # Firefox — macOS (Gecko)
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0",
+    # Firefox — Windows (Gecko)
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:135.0) Gecko/20100101 Firefox/135.0",
+    # Firefox — Linux (Gecko)
+    "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0",
 ]
+
+# JavaScript hardening script injected via add_init_script on every context.
+# Covers: navigator hardening, permissions spoofing, chrome.runtime shell,
+# __proto__ removal, getBoundingClientRect noise, and canvas/WebGL spoofing.
+HARDENING_SCRIPT = """
+Object.freeze;
+
+// ── Navigator hardening ──────────────────────────────────────────────
+// Remove webdriver flag that headless browsers expose
+delete Object.getPrototypeOf(navigator).webdriver;
+
+// PhantomJS / Nightmare fingerprints
+if (window.callPhantom) { delete window.callPhantom; }
+if (window._nightmare) { delete window._nightmare; }
+
+// ── Permissions hardening ────────────────────────────────────────────
+// Spoof Permissions API to always return granted for notifications
+const _origQuery = navigator.permissions && navigator.permissions.query;
+if (navigator.permissions) {
+    navigator.permissions.query = function (descriptor) {
+        if (descriptor && descriptor.name === "notifications") {
+            return Promise.resolve({
+                name: "notifications",
+                state: "granted",
+                onchange: null,
+                addEventListener: Function.prototype,
+                removeEventListener: Function.prototype,
+                dispatchEvent: Function.prototype,
+            });
+        }
+        return _origQuery ? _origQuery.call(navigator.permissions, descriptor) : Promise.reject(new Error("Not supported"));
+    };
+}
+
+// ── Chrome runtime spoofing ──────────────────────────────────────────
+// Inject a realistic chrome.runtime shell (non-functional stub)
+if (!window.chrome) {
+    window.chrome = {};
+}
+window.chrome.runtime = {
+    id: "aapnipglbcbfoncpnmpnpenhpkbpkfgi",
+    connect: function () { return { onMessage: { addListener: Function.prototype }, send: Function.prototype, disconnect: Function.prototype }; },
+    sendMessage: function (/* message, callback */) { /* no-op */ },
+    onMessage: {
+        addListener: Function.prototype,
+        removeListener: Function.prototype,
+        hasListener: Function.prototype,
+        hasListeners: function () { return false; },
+    },
+    getURL: function (path) { return "chrome-extension://" + window.chrome.runtime.id + "/" + path; },
+    getManifest: function () {
+        return {
+            name: "Chrome Extension",
+            version: "1.0",
+            manifest_version: 3,
+            permissions: ["storage"],
+        };
+    },
+    getBackgroundPage: function (cb) { /* no-op */ },
+    getPlatformInfo: function (cb) { if (cb) cb({ os: "win" }); },
+};
+
+// ── __proto__ removal ────────────────────────────────────────────────
+// Some detectors check for __proto__ on navigator
+delete navigator.__proto__;
+
+// ── getBoundingClientRect noise ──────────────────────────────────────
+// Add ±0.5px random noise to coordinates
+coreFunc = Element.prototype.getBoundingClientRect;
+Element.prototype.getBoundingClientRect = function () {
+    const original = coreFunc.call(this);
+    const noise = () => (Math.random() - 0.5) * 1.0;
+    return {
+        x: original.x + noise(),
+        y: original.y + noise(),
+        width: original.width,
+        height: original.height,
+        top: original.top + noise(),
+        right: original.right + noise(),
+        bottom: original.bottom + noise(),
+        left: original.left + noise(),
+    };
+};
+
+// ── Canvas spoofing ──────────────────────────────────────────────────
+// Add 1–5 pixels of noise to getImageData output
+const _origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
+CanvasRenderingContext2D.prototype.getImageData = function (sx, sy, sw, sh) {
+    const imageData = _origGetImageData.call(this, sx, sy, sw, sh);
+    const data = imageData.data;
+    const noiseLevel = Math.floor(Math.random() * 5) + 1; // 1-5
+    for (let i = 0; i < data.length; i += 4) {
+        if (Math.random() > 0.9) {
+            const noise = (Math.random() - 0.5) * noiseLevel;
+            data[i] = Math.min(255, Math.max(0, data[i] + noise));
+            data[i + 1] = Math.min(255, Math.max(0, data[i + 1] + noise));
+            data[i + 2] = Math.min(255, Math.max(0, data[i + 2] + noise));
+        }
+    }
+    return imageData;
+};
+
+// ── WebGL spoofing ───────────────────────────────────────────────────
+// Add 1–5 pixels of noise to readPixels output
+const _origReadPixels = WebGLRenderingContext.prototype.readPixels;
+WebGLRenderingContext.prototype.readPixels = function (x, y, w, h, format, type, pixels, offset) {
+    _origReadPixels.call(this, x, y, w, h, format, type, pixels, offset);
+    if (pixels && pixels.length) {
+        const noiseLevel = Math.floor(Math.random() * 5) + 1;
+        for (let i = 0; i < pixels.length; i++) {
+            if (Math.random() > 0.9) {
+                const noise = (Math.random() - 0.5) * noiseLevel;
+                pixels[i] = Math.min(255, Math.max(0, pixels[i] + noise));
+            }
+        }
+    }
+};
+"""
 
 
 @dataclass
@@ -91,18 +242,47 @@ class BrowserManager:
             ],
         )
         # Create default context
-        user_agent = random.choice(USER_AGENTS)
-        self._default_context = await self._browser.new_context(
-            viewport={"width": 1920, "height": 1080},
-            user_agent=user_agent,
-            ignore_https_errors=True,
-        )
+        self._default_context = await self._create_hardened_context()
         await self._default_context.set_extra_http_headers({
             "Accept-Language": "en-US,en;q=0.9",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         })
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
-        logger.info("Browser started with user agent: %s", user_agent[:50])
+        logger.info("Browser started")
+
+    async def _create_hardened_context(self) -> BrowserContext:
+        """Create a new browser context with randomized fingerprint properties.
+
+        Randomizes viewport dimensions, timezone, and locale to avoid
+        fingerprint-based detection.
+
+        Returns:
+            A new BrowserContext with randomized properties and stealth applied.
+        """
+        viewport = {
+            "width": random.randint(120, 192) * 10,
+            "height": random.randint(70, 108) * 10,
+        }
+        timezone = random.choice(TIMEZONES)
+        locale = random.choice(LOCALES)
+
+        context = await self._browser.new_context(
+            viewport=viewport,
+            user_agent=random.choice(USER_AGENTS),
+            ignore_https_errors=True,
+            timezone_id=timezone,
+            locale=locale,
+        )
+        await Stealth().apply_stealth_async(context)
+        await context.add_init_script(HARDENING_SCRIPT)
+        logger.info(
+            "Hardened context: viewport=%sx%s, tz=%s, locale=%s",
+            viewport["width"],
+            viewport["height"],
+            timezone,
+            locale,
+        )
+        return context
 
     async def stop(self) -> None:
         """Stop the browser and close all sessions."""
@@ -139,11 +319,7 @@ class BrowserManager:
             await self.start()
 
         session = BrowserSession()
-        session.context = await self._browser.new_context(
-            viewport={"width": 1920, "height": 1080},
-            user_agent=random.choice(USER_AGENTS),
-            ignore_https_errors=True,
-        )
+        session.context = await self._create_hardened_context()
         await session.context.set_extra_http_headers({
             "Accept-Language": "en-US,en;q=0.9",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif",
@@ -253,14 +429,49 @@ class BrowserManager:
             timeout=(timeout or settings.BROWSER_TIMEOUT) * 1000,
             wait_until=wait_until,
         )
+        # Simulate a scroll down and back up to avoid "always at top" fingerprint
+        await page.evaluate(
+            """() => {
+                const h = Math.floor(window.innerHeight * 0.3);
+                window.scrollTo(0, h);
+                setTimeout(() => window.scrollTo(0, 0), 300);
+            }"""
+        )
+        await asyncio.sleep(0.5)
         # Add random delay to avoid bot detection
         await self._add_delay()
         return page
 
     async def _add_delay(self) -> None:
-        """Add a random delay to simulate human behavior."""
-        delay = random.uniform(0.5, 2.0)
+        """Add a random delay to simulate human behavior.
+
+        Uses a bursty distribution: 60% quick (0.3–0.8s), 30% normal (1.0–2.5s),
+        10% slow/hesitation (3.0–5.0s).
+        """
+        r = random.random()
+        if r < 0.6:
+            delay = random.uniform(0.3, 0.8)
+        elif r < 0.9:
+            delay = random.uniform(1.0, 2.5)
+        else:
+            delay = random.uniform(3.0, 5.0)
         await asyncio.sleep(delay)
+
+    async def _simulate_mouse_movement(self, page: Page) -> None:
+        """Simulate a random mouse-movement event near the viewport center."""
+        await page.evaluate(
+            """() => {
+                const x = Math.floor(Math.random() * 200) + 100;
+                const y = Math.floor(Math.random() * 200) + 100;
+                const el = document.elementFromPoint(x, y);
+                if (el) {
+                    el.dispatchEvent(new MouseEvent('mousemove', {
+                        clientX: x, clientY: y,
+                        bubbles: true, cancelable: true,
+                    }));
+                }
+            }"""
+        )
 
     async def screenshot(
         self,
@@ -326,23 +537,44 @@ class BrowserManager:
         return ""
 
     async def click(self, page: Page, selector: str) -> None:
-        """Click an element.
+        """Click an element with scroll-into-view and mouse-movement simulation.
 
         Args:
             page: The page containing the element.
             selector: The CSS selector for the element.
         """
+        # Scroll element into view and add a small random offset
+        offset_x = random.randint(-3, 3)
+        offset_y = random.randint(-3, 3)
+        await page.evaluate(
+            """(args) => {
+                const [offsetX, offsetY, sel] = args;
+                const el = document.querySelector(sel);
+                if (el) {
+                    el.scrollIntoView({block: 'center', behavior: 'smooth'});
+                    el.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
+                }
+            }""",
+            [offset_x, offset_y, selector],
+        )
+
+        # Simulate mouse movement before clicking
+        await self._simulate_mouse_movement(page)
+
         await page.click(selector, timeout=5000)
         logger.info("Clicked element: %s", selector)
 
     async def fill(self, page: Page, selector: str, value: str) -> None:
-        """Fill an input field.
+        """Fill an input field with mouse-movement simulation.
 
         Args:
             page: The page containing the input.
             selector: The CSS selector for the input.
             value: The value to fill.
         """
+        # Simulate mouse movement before filling
+        await self._simulate_mouse_movement(page)
+
         await page.fill(selector, value, timeout=5000)
         logger.info("Filled element: %s with %s", selector, value)
 
