@@ -29,16 +29,54 @@ def _safe_eval(expr: str) -> Any:
         The evaluated result as a string
     """
     from sympy import (
-        symbols, Symbol, sin, cos, tan, asin, acos, atan,
-        sqrt, cbrt, log, exp, factorial, binomial,
-        pi, E, I, oo, oo as infinity,
-        integrate, diff, limit, solve, simplify, expand, factor,
-        Matrix, det,
-        Rational, Float, S, nsimplify,
-        N as N_func,  # N is a Python builtin, alias it
-        ceiling, floor,
-        gamma, lambdify, series,
+        E,
+        Float,
+        I,
+        Matrix,
+        Rational,
+        S,
+        acos,
+        asin,
+        atan,
+        binomial,
+        cbrt,
+        ceiling,
+        cos,
+        degree,
+        det,
+        diff,
+        exp,
+        expand,
+        factor,
+        factorial,
+        floor,
+        gamma,
+        integrate,
+        lambdify,
+        limit,
+        log,
+        nsimplify,
+        oo,
+        pi,
+        rad,
+        series,
+        simplify,
+        sin,
+        solve,
+        sqrt,
+        symbols,
+        tan,
     )
+    from sympy import (
+        N as N_func,
+    )
+
+    # log10 / log2 aren't top-level sympy — wrap them
+    def _log10(x):
+        return log(x, 10)
+
+    def _log2(x):
+        return log(x, 2)
 
     # Create a safe namespace
     namespace = {
@@ -53,7 +91,7 @@ def _safe_eval(expr: str) -> Any:
         "sin": sin, "cos": cos, "tan": tan,
         "asin": asin, "acos": acos, "atan": atan,
         "sqrt": sqrt, "cbrt": cbrt,
-        "log": log, "log10": log10, "exp": exp,
+        "log": log, "log10": _log10, "log2": _log2, "exp": exp,
         "factorial": factorial, "binomial": binomial,
         "abs": abs, "ceiling": ceiling, "floor": floor,
         "gamma": gamma,
@@ -68,12 +106,15 @@ def _safe_eval(expr: str) -> Any:
         "series": series, "nsimplify": nsimplify,
         "N": N_func,
         "Matrix": Matrix,
-        "det": det, "inv": inv,
-        "eigenvals": eigenvals, "eigenvects": eigenvects,
+        "det": det,
+        "inv": lambda m: m.inv(),
+        "eigenvals": lambda m: m.eigenvals(),
+        "eigenvects": lambda m: m.eigenvects(),
         "lambdify": lambdify,
         "symbols": symbols,
         "S": S,
-        "degree": degree, "radians": radians,
+        "degree": degree,
+        "radians": rad,
     }
 
     try:
@@ -86,7 +127,7 @@ def _safe_eval(expr: str) -> Any:
             return str(result)
         else:
             return str(result)
-    except Exception as e:
+    except Exception:
         # Try numeric evaluation as fallback
         try:
             from sympy import N as N_numeric

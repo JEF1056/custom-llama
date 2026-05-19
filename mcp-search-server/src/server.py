@@ -68,6 +68,7 @@ def create_server() -> FastMCP:
             "4. Browser Automation Tools (browser_*): Full Playwright automation\n"
             "   - browser_navigate: Navigate to a URL\n"
             "   - browser_screenshot: Take a screenshot (returns as MCP image)\n"
+            "   - browser_get_interactables: List all clickable/fillable elements with selectors\n"
             "   - browser_click: Click on an element\n"
             "   - browser_fill: Fill in a form field\n"
             "   - browser_evaluate: Execute JavaScript on the page\n"

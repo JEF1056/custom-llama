@@ -5,7 +5,6 @@ import base64
 import json
 import logging
 import os
-from typing import Any
 
 from mcp.server import FastMCP
 from mcp.types import ImageContent, TextContent
@@ -37,6 +36,34 @@ async def _ensure_page(session_id: str):
     page = await session.context.new_page()
     session.pages.append(page)
     return page
+
+
+async def _interactables_summary(page) -> str:
+    """Extract and format a summary of interactable elements on the page."""
+    try:
+        elements = await browser_manager.get_interactables(page)
+        visible = [e for e in elements if e.get("visible")]
+        if not visible:
+            return ""
+        lines = [
+            f"\n=== Interactable elements "
+            f"({len(visible)} visible / {len(elements)} total) ==="
+        ]
+        for el in visible[:40]:
+            tag = el.get("tag", "")
+            etype = el.get("type", "")
+            parts = [el.get("text", ""), el.get("name", ""),
+                     el.get("placeholder", "")]
+            text = (next((p for p in parts if p), f"<{tag}>"))[:80]
+            sel = el.get("selector", "")
+            line = f"  [{el['index']}] {etype} {tag}: "
+            line += f"\"{text}\" → selector: {sel}"
+            lines.append(line)
+        if len(visible) > 40:
+            lines.append(f"  ... and {len(visible) - 40} more visible elements")
+        return "\n".join(lines)
+    except Exception:
+        return ""
 
 
 def browser_handler(server: FastMCP) -> None:
@@ -116,6 +143,9 @@ def browser_handler(server: FastMCP) -> None:
             title = await page.title()
             current_url = page.url
 
+            # Extract interactable elements for the LLM
+            summary = await _interactables_summary(page)
+
             # Close page only for one-off (no session_id)
             if not session_id:
                 await page.close()
@@ -125,6 +155,7 @@ def browser_handler(server: FastMCP) -> None:
                 "url": current_url,
                 "title": title,
                 "session_id": session_id or "none",
+                "interactables_summary": summary,
             }
             return json.dumps(result, indent=2)
         except Exception as e:
@@ -188,6 +219,9 @@ def browser_handler(server: FastMCP) -> None:
                 session_id=session_id,
             )
 
+            # Extract interactable elements for the LLM
+            summary = await _interactables_summary(page)
+
             # Clean up page only for one-off (no session_id)
             if not session_id:
                 await page.close()
@@ -212,6 +246,8 @@ def browser_handler(server: FastMCP) -> None:
                 f"The screenshot is embedded above as an MCP image. "
                 f"You can also access it later via the resource URI."
             )
+            if summary:
+                info_text += summary
 
             return [image, TextContent(type="text", text=info_text)]
         except Exception as e:
@@ -229,6 +265,7 @@ def browser_handler(server: FastMCP) -> None:
         """Click an element on the current page.
 
         Requires session_id. Page must be loaded first. Use url= to navigate before clicking.
+        TIP: Call browser_get_interactables first to find the right selector instead of guessing.
 
         Args:
             selector: CSS selector for the element
@@ -272,6 +309,9 @@ def browser_handler(server: FastMCP) -> None:
             if wait_until:
                 await page.wait_for_load_state(wait_until)
 
+            # Extract interactable elements for the LLM
+            summary = await _interactables_summary(page)
+
             # Clean up page only for one-off
             if not session_id:
                 await page.close()
@@ -280,6 +320,7 @@ def browser_handler(server: FastMCP) -> None:
                 "status": "success",
                 "message": f"Clicked element: {selector}",
                 "session_id": session_id or "none",
+                "interactables_summary": summary,
             }
             return json.dumps(result, indent=2)
         except Exception as e:
@@ -296,6 +337,7 @@ def browser_handler(server: FastMCP) -> None:
         """Fill an input field on the current page.
 
         Requires session_id. Page must be loaded first. Use url= to navigate before filling.
+        TIP: Call browser_get_interactables first to find the right selector instead of guessing.
 
         Args:
             selector: CSS selector for the input
@@ -334,6 +376,9 @@ def browser_handler(server: FastMCP) -> None:
             # Fill the input
             await browser_manager.fill(page, selector, value)
 
+            # Extract interactable elements for the LLM
+            summary = await _interactables_summary(page)
+
             # Clean up page only for one-off
             if not session_id:
                 await page.close()
@@ -342,6 +387,7 @@ def browser_handler(server: FastMCP) -> None:
                 "status": "success",
                 "message": f"Filled element: {selector} with {value}",
                 "session_id": session_id or "none",
+                "interactables_summary": summary,
             }
             return json.dumps(result, indent=2)
         except Exception as e:
@@ -464,6 +510,108 @@ def browser_handler(server: FastMCP) -> None:
             }, indent=2)
         except Exception as e:
             logger.error("Browser get_text error: %s", str(e))
+            return json.dumps({"status": "error", "error": str(e)})
+
+    @server.tool()
+    async def browser_get_interactables(
+        url: str | None = None,
+        session_id: str | None = None,
+    ) -> str:
+        """Get a structured list of all interactable elements on the page.
+
+        Returns clickable (links, buttons) and fillable (inputs, textareas)
+        elements with their selectors, labels, text, and visibility state.
+        Use this BEFORE clicking/filling to find the right selector.
+
+        Requires session_id. Page must be loaded first. Use url= to navigate first.
+
+        Args:
+            url: Optional URL to navigate to first
+            session_id: Session ID (required)
+
+        Returns:
+            JSON string with list of interactable elements
+        """
+        try:
+            # Start browser if not running
+            if not browser_manager.is_running:
+                await browser_manager.start()
+
+            if session_id:
+                page = await _ensure_page(session_id)
+                if url:
+                    await page.goto(
+                        url,
+                        timeout=settings.BROWSER_TIMEOUT * 1000,
+                        wait_until="domcontentloaded",
+                    )
+            else:
+                context = await browser_manager.get_session(None)
+                if not context:
+                    return json.dumps({"status": "error", "error": "Browser not running"})
+                page = await context.new_page()
+                if url:
+                    await page.goto(
+                        url,
+                        timeout=settings.BROWSER_TIMEOUT * 1000,
+                        wait_until="domcontentloaded",
+                    )
+
+            # Get interactable elements
+            elements = await browser_manager.get_interactables(page)
+
+            # Clean up page only for one-off
+            if not session_id:
+                await page.close()
+
+            # Build a readable summary
+            visible = [e for e in elements if e.get("visible")]
+            hidden = [e for e in elements if not e.get("visible")]
+
+            lines = [
+                f"Found {len(elements)} interactable elements "
+                f"({len(visible)} visible, {len(hidden)} hidden):\n",
+            ]
+
+            if visible:
+                lines.append("=== VISIBLE ELEMENTS ===")
+                for el in visible:
+                    tag = el.get("tag", "")
+                    etype = el.get("type", "")
+                    text = el.get("text", "")[:80]
+                    sel = el.get("selector", "")
+                    name = el.get("name", "")
+                    placeholder = el.get("placeholder", "")
+                    label = text or name or placeholder or f"<{tag}>"
+                    lines.append(f"  [{el['index']}] {etype} {tag}: \"{label}\"")
+                    lines.append(f"      selector: {sel}")
+                lines.append("")
+
+            if hidden:
+                lines.append("=== HIDDEN ELEMENTS ===")
+                for el in hidden:
+                    tag = el.get("tag", "")
+                    etype = el.get("type", "")
+                    text = el.get("text", "")[:80]
+                    sel = el.get("selector", "")
+                    name = el.get("name", "")
+                    placeholder = el.get("placeholder", "")
+                    label = text or name or placeholder or f"<{tag}>"
+                    lines.append(f"  [{el['index']}] {etype} {tag}: \"{label}\"")
+                    lines.append(f"      selector: {sel}")
+
+            result = {
+                "status": "success",
+                "total": len(elements),
+                "visible_count": len(visible),
+                "hidden_count": len(hidden),
+                "elements": elements,
+                "summary": "\n".join(lines),
+                "session_id": session_id or "none",
+            }
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            logger.error("Browser get_interactables error: %s", str(e))
             return json.dumps({"status": "error", "error": str(e)})
 
     @server.tool()

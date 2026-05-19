@@ -4,8 +4,10 @@ import logging
 import re
 from typing import Optional
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from html2text import html2text
+
+from src.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,138 @@ class ContentExtractor:
     def __init__(self):
         """Initialize the content extractor."""
         self._soup = None
+        self._code_blocks: list[dict] = []
+
+    def _remove_boilerplate(self, soup: BeautifulSoup) -> None:
+        """Remove boilerplate elements from the BeautifulSoup tree.
+
+        Removes:
+        - Elements matching REMOVE_SELECTORS (script, style, noscript, iframe,
+          nav, footer, aside, header, form)
+        - Elements with common ad/boilerplate class names (ad, advertisement,
+          cookie-banner, sidebar, footer-widget)
+        - Elements with very low text-to-tag ratio (more than 3 nested tags
+          per 10 chars of text — heuristic for ad blocks)
+        """
+        # Step 1: Remove structural elements
+        for selector in REMOVE_SELECTORS:
+            for element in soup.find_all(selector):
+                element.decompose()
+
+        # Step 2: Remove elements with common ad/boilerplate class names
+        boilerplate_classes = ["ad", "advertisement", "cookie-banner",
+                               "sidebar", "footer-widget"]
+        for el in soup.find_all(class_=boilerplate_classes):
+            el.decompose()
+
+        # Step 3: Remove elements with very low text-to-tag ratio
+        # More than 3 nested tags per 10 chars of text is likely boilerplate.
+        # Skip top-level structural elements to avoid removing the document root.
+        structural_tags = {"html", "head", "body", "title"}
+        to_remove = []
+        for el in soup.find_all(True):
+            if el.name in structural_tags:
+                continue
+            text = el.get_text(strip=True)
+            text_len = len(text)
+            # Count descendant elements (not including the element itself)
+            nested_count = len(el.find_all(True))
+            if nested_count <= 0:
+                continue  # leaf element, skip
+            if text_len == 0:
+                # No text but has nested structure — likely boilerplate
+                to_remove.append(el)
+                continue
+            # Check ratio: more than 3 tags per 10 chars means tag_count / text_len > 0.3
+            if nested_count / text_len > 3 / 10:
+                to_remove.append(el)
+
+        for el in to_remove:
+            el.decompose()
+
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """Estimate the number of tokens in the given text.
+
+        Uses a heuristic of ~4 characters per token for English text.
+        Rounds up conservatively so that the estimate errs on the side
+        of truncating more rather than less.
+
+        Args:
+            text: The text to estimate tokens for.
+
+        Returns:
+            Estimated token count (conservative upper bound).
+        """
+        import math
+        return math.ceil(len(text) / 4)
+
+    def _find_main_content(self) -> Tag:
+        """Find the main content element in the page.
+
+        Strategy:
+            1. Look for <article> tag first (most semantic indicator)
+            2. Then <main> tag
+            3. Then the <body> itself if neither exists
+            4. As a fallback heuristic: find the element with the most text content
+               (largest get_text() length)
+
+        Returns:
+            The BeautifulSoup Tag representing the main content element.
+        """
+        if self._soup is None:
+            raise RuntimeError("No HTML parsed yet — call extract() or set _soup first")
+
+        # 1. Look for <article>
+        article = self._soup.find("article")
+        if article:
+            return article
+
+        # 2. Look for <main>
+        main = self._soup.find("main")
+        if main:
+            return main
+
+        # 3. Fall back to <body>
+        body = self._soup.find("body")
+        if body:
+            return body
+
+        # 4. Fallback heuristic: element with the most text content
+        best = self._soup
+        best_text_len = len(self._soup.get_text())
+        for tag in self._soup.find_all():
+            text_len = len(tag.get_text())
+            if text_len > best_text_len:
+                best = tag
+                best_text_len = text_len
+        return best
+
+    @staticmethod
+    def _extract_code_blocks(text: str, max_chars: int) -> list[dict]:
+        """Extract fenced code blocks from text.
+
+        Finds all ```...``` blocks, captures the optional language
+        identifier and the block content. Each block's content is capped
+        at ``max_chars`` with a ``[truncated]`` indicator if exceeded.
+
+        Args:
+            text: The text to extract code blocks from.
+            max_chars: Maximum characters per block's content.
+
+        Returns:
+            List of dicts with ``language`` (str, may be empty) and
+            ``content`` (str, possibly truncated) keys.
+        """
+        pattern = r"```(\w*)\n(.*?)```"
+        blocks: list[dict] = []
+        for match in re.finditer(pattern, text, flags=re.DOTALL):
+            language = match.group(1)
+            content = match.group(2).strip()
+            if len(content) > max_chars:
+                content = content[:max_chars] + "[truncated]"
+            blocks.append({"language": language, "content": content})
+        return blocks
 
     def extract(self, html: str, max_length: int = 4000, truncate: bool = True) -> dict:
         """Extract content from HTML.
@@ -61,28 +195,47 @@ class ContentExtractor:
                     result["headings"],
                     max_length,
                     total_text,
+                    token_budget=settings.FETCH_TOKEN_BUDGET,
                 )
 
         return result
 
-    def _summarize(self, content: str, headings: list[dict], max_length: int, original_length: int) -> str:
+    def _summarize(
+        self,
+        content: str,
+        headings: list[dict],
+        max_length: int,
+        original_length: int,
+        token_budget: int | None = None,
+    ) -> str:
         """Summarize content when it exceeds max_length.
 
-        Strategy:
-            1. Always keep the first ~200 chars (first meaningful paragraph)
-            2. Use headings to identify sections and keep ~100-150 chars per section
-            3. Remove code blocks and table content first
-            4. Add a summary indicator
+        When token_budget is provided, uses a three-phase progressive strategy:
+            Phase 1 — Budget check: if full content (with code blocks) fits
+                within the token budget, return it in full.
+            Phase 2 — Section-aware: split content by headings, keep full
+                sections that fit their proportional budget share, excerpt
+                those that don't, and reinsert code blocks at the end.
+            Phase 3 — Hard truncation: if the assembled result still exceeds
+                the budget, hard-truncate at the last paragraph boundary.
+
+        When token_budget is None, falls back to char-based summarization
+        (original behavior).
 
         Args:
             content: The full extracted text content.
             headings: List of heading dicts with 'level' and 'text' keys.
-            max_length: Target maximum length.
-            original_length: Length of the original content.
+            max_length: Target maximum length (char-based fallback).
+            original_length: Length of the original content (char-based fallback).
+            token_budget: Optional token budget for token-based summarization.
 
         Returns:
             Summarized content string.
         """
+        if token_budget is not None:
+            return self._summarize_by_tokens(content, headings, token_budget)
+
+        # --- Char-based fallback (original behavior) ---
         # Strip code blocks (between ``` markers)
         cleaned = re.sub(r"```.*?```", "", content, flags=re.DOTALL)
 
@@ -124,6 +277,236 @@ class ContentExtractor:
             result = result[:max_length - 3].rsplit(" ", 1)[0] + "..."
 
         return result
+
+    def _summarize_by_tokens(self, content: str, headings: list[dict], token_budget: int) -> str:
+        """Summarize content using token-based progressive strategy.
+
+        Phase 1: Budget check — return full content if it fits.
+        Phase 2: Section-aware — split by headings, keep/excerpt sections.
+        Phase 3: Hard truncation — truncate text at paragraph boundary.
+
+        Code blocks are preserved by reserving their token cost upfront
+        so that Phases 2 and 3 only operate on the text budget.
+
+        Args:
+            content: The full extracted text content (code blocks stripped).
+            headings: List of heading dicts with 'level' and 'text' keys.
+            token_budget: Maximum token budget for the summarized output.
+
+        Returns:
+            Summarized content string with header.
+        """
+        # Compute original token count (text + code block contents)
+        original_tokens = self._estimate_tokens(content) + sum(
+            self._estimate_tokens(cb["content"]) for cb in self._code_blocks
+        )
+
+        # Reconstruct full content with code blocks appended
+        full_content = self._reconstruct_with_code_blocks(content)
+
+        # Phase 1: Budget check — if full content fits, return it
+        if self._estimate_tokens(full_content) <= token_budget:
+            return full_content
+
+        # Compute header tokens
+        header = (
+            f"[Summarized — original was {original_tokens} tokens, "
+            f"budget {token_budget} tokens]\n"
+        )
+        header_tokens = self._estimate_tokens(header)
+
+        # Compute code block overhead (separator + formatted blocks)
+        code_block_tokens = 0
+        if self._code_blocks:
+            code_block_tokens += self._estimate_tokens("\n---\nCode blocks:\n")
+            for cb in self._code_blocks:
+                code_block_tokens += self._estimate_tokens(
+                    f"```{cb['language']}\n{cb['content']}\n```"
+                )
+
+        # Text budget: total minus header and code blocks
+        text_budget = token_budget - header_tokens - code_block_tokens
+
+        # Phase 2: Section-aware summarization (text only)
+        sections = self._split_content_by_headings(content, headings)
+        total_section_tokens = sum(
+            self._estimate_tokens(s["text"]) for s in sections
+        )
+
+        text_parts: list[str] = []
+        remaining_budget = text_budget
+
+        for section in sections:
+            section_tokens = self._estimate_tokens(section["text"])
+
+            # Proportional share of remaining budget
+            if total_section_tokens > 0:
+                proportional_share = (section_tokens / total_section_tokens) * remaining_budget
+            else:
+                proportional_share = remaining_budget
+
+            if section_tokens <= proportional_share:
+                # Keep full section
+                text_parts.append(section["text"])
+                remaining_budget -= section_tokens
+            else:
+                # Excerpt: take first ~50% of section
+                excerpt = self._excerpt_section_text(section)
+                excerpt_tokens = self._estimate_tokens(excerpt)
+                text_parts.append(excerpt)
+                remaining_budget -= excerpt_tokens
+
+        text_result = "\n".join(text_parts)
+
+        # Check if text fits within text_budget
+        text_tokens = self._estimate_tokens(text_result)
+        if text_tokens <= text_budget:
+            # Assemble: header + text + code blocks
+            if self._code_blocks:
+                text_result += "\n---\nCode blocks:\n"
+                for cb in self._code_blocks:
+                    lang = cb["language"]
+                    text_result += f"```{lang}\n{cb['content']}\n```\n"
+            return header + text_result
+
+        # Phase 3: Hard truncation of text only (preserves code blocks)
+        truncated_text = self._hard_truncate_to_budget(text_result, text_budget)
+
+        # Assemble: header + truncated text + code blocks
+        if self._code_blocks:
+            truncated_text += "\n---\nCode blocks:\n"
+            for cb in self._code_blocks:
+                lang = cb["language"]
+                truncated_text += f"```{lang}\n{cb['content']}\n```\n"
+
+        return header + truncated_text
+
+    def _reconstruct_with_code_blocks(self, content: str) -> str:
+        """Reconstruct content with code blocks appended at the end.
+
+        Args:
+            content: Text content with code blocks stripped.
+
+        Returns:
+            Content with code blocks reinserted after a separator.
+        """
+        if not self._code_blocks:
+            return content
+
+        parts = [content, "", "---", "Code blocks:"]
+        for cb in self._code_blocks:
+            lang = cb["language"]
+            parts.append(f"```{lang}")
+            parts.append(cb["content"])
+            parts.append("```")
+
+        return "\n".join(parts)
+
+    def _split_content_by_headings(self, content: str, headings: list[dict]) -> list[dict]:
+        """Split content into sections based on heading positions.
+
+        Searches for headings sequentially to ensure correct ordering
+        and avoid matching heading text that appears in body content.
+
+        Args:
+            content: Text content.
+            headings: List of heading dicts with 'level' and 'text' keys.
+
+        Returns:
+            List of section dicts with 'heading', 'text', and 'level' keys.
+            If no headings are found, returns a single section with the
+            full content.
+        """
+        sections: list[dict] = []
+        search_start = 0
+        positions: list[tuple[int, dict]] = []
+
+        for heading in headings:
+            idx = content.find(heading["text"], search_start)
+            if idx != -1:
+                positions.append((idx, heading))
+                search_start = idx + len(heading["text"])
+
+        # Pre-heading content
+        if positions:
+            pre_text = content[:positions[0][0]].strip()
+            if pre_text:
+                sections.append({"heading": None, "text": pre_text, "level": 0})
+
+        # Sections between headings
+        for i, (pos, heading) in enumerate(positions):
+            next_pos = positions[i + 1][0] if i + 1 < len(positions) else len(content)
+            section_text = content[pos:next_pos].strip()
+            sections.append({
+                "heading": heading["text"],
+                "text": section_text,
+                "level": heading["level"],
+            })
+
+        # If no headings found, treat entire content as one section
+        if not sections:
+            sections.append({"heading": None, "text": content.strip(), "level": 0})
+
+        return sections
+
+    def _excerpt_section_text(self, section: dict) -> str:
+        """Extract an excerpt from a section (up to ~50% of its length).
+
+        Takes the first N lines up to approximately half the section's
+        character length. The heading line is naturally included as the
+        first line of the section text.
+
+        Args:
+            section: Section dict with 'heading', 'text', and 'level' keys.
+
+        Returns:
+            Excerpt text with [truncated] indicator if shortened.
+        """
+        text = section["text"]
+        lines = [line for line in text.split("\n") if line.strip()]
+
+        target_len = len(text) // 2
+        current_len = 0
+        excerpt_lines: list[str] = []
+
+        for line in lines:
+            if current_len + len(line) > target_len and current_len > 0:
+                break
+            excerpt_lines.append(line)
+            current_len += len(line)
+
+        if current_len < len(text):
+            excerpt_lines.append("[truncated]")
+
+        return "\n".join(excerpt_lines)
+
+    def _hard_truncate_to_budget(self, text: str, token_budget: int) -> str:
+        """Hard-truncate text at the last paragraph boundary to fit within budget.
+
+        Uses a conservative estimate of 3.5 chars per token to ensure
+        the result stays within the token budget even after adding the
+        [truncated] indicator.
+
+        Args:
+            text: Text to truncate.
+            token_budget: Maximum token budget.
+
+        Returns:
+            Truncated text with [truncated] indicator.
+        """
+        if self._estimate_tokens(text) <= token_budget:
+            return text
+
+        # Conservative target: 3.5 chars per token (leaves room for [truncated])
+        target_chars = int(token_budget * 3.5) - 20
+
+        truncated = text[:target_chars]
+        # Find last paragraph boundary (newline)
+        last_newline = truncated.rfind("\n")
+        if last_newline > target_chars // 2:
+            truncated = truncated[:last_newline]
+
+        return truncated.rstrip() + "\n\n[truncated]"
 
     def _extract_section_excerpt(self, content: str, heading_text: str, excerpt_len: int = 120) -> str:
         """Extract a brief excerpt from the section following a heading.
@@ -176,22 +559,50 @@ class ContentExtractor:
     def _extract_text(self) -> str:
         """Extract text content from the page.
 
+        Pipeline:
+            1. Remove boilerplate from soup
+            2. Find main content area
+            3. Extract text from main area
+            4. Extract code blocks and store in self._code_blocks
+            5. Strip code blocks from text body
+            6. Clean up whitespace
+
         Returns:
-            Cleaned text content.
+            Cleaned text content with code blocks removed from body.
         """
         if self._soup is None:
             return ""
 
-        # Remove script and style elements
-        for element in self._soup.find_all(["script", "style", "noscript"]):
-            element.decompose()
+        self._code_blocks = []
 
-        # Get text content
-        text = self._soup.get_text(separator="\n", strip=True)
+        # Step 1: Remove boilerplate
+        self._remove_boilerplate(self._soup)
 
-        # Clean up whitespace
+        # Step 2: Find main content area
+        main = self._find_main_content()
+
+        # Step 3: Extract text from main area
+        text = main.get_text(separator="\n", strip=True)
+
+        # Step 4: Extract code blocks and store
+        self._code_blocks = self._extract_code_blocks(text, max_chars=4000)
+
+        # Step 5: Strip code blocks from text body
+        text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+
+        # Step 6: Clean up whitespace
         lines = [line.strip() for line in text.split("\n") if line.strip()]
-        return "\n".join(lines)
+        result = "\n".join(lines)
+
+        # Step 7: Re-insert code blocks at the end
+        if self._code_blocks:
+            code_text = "\n\n".join(
+                f"```{b['language']}\n{b['content']}\n```"
+                for b in self._code_blocks
+            )
+            result = result + "\n\n" + code_text if result else code_text
+
+        return result
 
     def _extract_links(self) -> list[dict]:
         """Extract links from the page.

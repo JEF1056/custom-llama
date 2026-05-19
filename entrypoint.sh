@@ -268,7 +268,6 @@ fi
 
 # Execute llama-server with arguments
 exec llama-server \
-    --webui-mcp-proxy \
     --host "$HOST" \
     --port "$PORT" \
     --model "$MODEL" \
@@ -302,7 +301,6 @@ exec llama-server \
     $([ "$NO_KV_OFFLOAD" = "on" ] && echo "--no-kv-offload") \
     $([ "$KV_UNIFIED" = "on" ] && echo "--kv-unified") \
     ${CACHE_RAM:+--cache-ram "$CACHE_RAM"} \
-    $([ "$CLEAR_IDLE" = "on" ] && [ -n "$CACHE_RAM" ] && [ "$CACHE_RAM" != "0" ] && echo "--clear-idle") \
     ${CHECKPOINT_EVERY_N:+--checkpoint-every-n-tokens $CHECKPOINT_EVERY_N} \
     ${CTX_CHECKPOINTS:+--ctx-checkpoints $CTX_CHECKPOINTS} \
     ${TS:+--tensor-split "$TS"} \

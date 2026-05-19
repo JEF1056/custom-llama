@@ -10,7 +10,7 @@
       "name": "llama.cpp Server",
       "options": {
         "baseURL": "http://localhost:8080/v1",
-        "includeUsage": false
+        "includeUsage": true
       },
       "models": {
         "qwenopus3.6-27b": {

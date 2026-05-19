@@ -31,7 +31,9 @@ class Settings(BaseModel):
     MAX_RESULTS: int = Field(default=10, description="Maximum number of search results")
 
     # Fetch settings
-    FETCH_MAX_LENGTH: int = Field(default=4000, description="Max content length for fetch tool before summarization")
+    FETCH_MAX_LENGTH: int = Field(default=16000, description="Max content length for fetch tool before summarization")
+    FETCH_TOKEN_BUDGET: int = Field(default=4000, description="Token budget for fetch tool content")
+    CODE_BLOCK_MAX_CHARS: int = Field(default=2000, description="Max characters per code block in fetch tool output")
 
     # File output settings
     FILE_OUTPUT_DIR: str = Field(default="/app/mcp-files", description="Directory for files created by create_file tool")

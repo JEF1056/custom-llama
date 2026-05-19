@@ -506,6 +506,112 @@ class BrowserManager:
 
         return screenshot_bytes, path
 
+    async def get_interactables(self, page: Page) -> list[dict[str, Any]]:
+        """Extract all interactable elements from the page.
+
+        Returns a structured list of clickable and fillable elements with
+        selectors, labels, text, type, and visibility state so the LLM
+        can pick the right target without guessing.
+
+        Args:
+            page: The page to scan.
+
+        Returns:
+            List of dicts with keys: index, tag, type, text, name, id,
+            placeholder, selector, visible.
+        """
+        elements = await page.evaluate(
+            """() => {
+                const results = [];
+                let idx = 0;
+
+                // Build a unique CSS selector for an element
+                function buildSelector(el) {
+                    if (el.id) return '#' + CSS.escape(el.id);
+                    const parts = [];
+                    let node = el;
+                    while (node && node.nodeType === Node.ELEMENT_NODE) {
+                        let sel = node.tagName.toLowerCase();
+                        if (node.className && typeof node.className === 'string') {
+                            const cls = node.className.trim().split(/\\s+/).slice(0, 2).map(c => '.' + CSS.escape(c)).join('');
+                            sel += cls;
+                        }
+                        parts.unshift(sel);
+                        if (parts.join(' > ').length > 80) break;
+                        node = node.parentElement;
+                    }
+                    return parts.join(' > ');
+                }
+
+                function isVisible(el) {
+                    if (!el) return false;
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 && rect.height > 0
+                        && style.display !== 'none'
+                        && style.visibility !== 'hidden'
+                        && style.opacity !== '0'
+                        && !el.hasAttribute('disabled');
+                }
+
+                // Collect clickable elements
+                const clickSelectors = [
+                    'a[href]', 'button', 'input[type="submit"]',
+                    'input[type="button"]', 'input[type="reset"]',
+                    '[role="button"]', '[role="link"]',
+                    'summary', 'details summary',
+                ];
+                for (const sel of clickSelectors) {
+                    for (const el of document.querySelectorAll(sel)) {
+                        if (!el.closest('details') || el.tagName === 'SUMMARY') {
+                            results.push({
+                                index: idx++,
+                                tag: el.tagName.toLowerCase(),
+                                type: 'clickable',
+                                text: (el.textContent || '').trim().substring(0, 120),
+                                name: el.getAttribute('name') || '',
+                                id: el.id || '',
+                                placeholder: el.getAttribute('placeholder') || '',
+                                href: el.getAttribute('href') || '',
+                                selector: buildSelector(el),
+                                visible: isVisible(el),
+                            });
+                        }
+                    }
+                }
+
+                // Collect fillable elements
+                const fillSelectors = [
+                    'input[type="text"]', 'input[type="search"]',
+                    'input[type="email"]', 'input[type="password"]',
+                    'input[type="number"]', 'input[type="tel"]',
+                    'input[type="url"]', 'input:not([type])',
+                    'textarea', '[contenteditable="true"]',
+                    'select',
+                ];
+                for (const sel of fillSelectors) {
+                    for (const el of document.querySelectorAll(sel)) {
+                        results.push({
+                            index: idx++,
+                            tag: el.tagName.toLowerCase(),
+                            type: 'fillable',
+                            text: (el.textContent || '').trim().substring(0, 120),
+                            name: el.getAttribute('name') || '',
+                            id: el.id || '',
+                            placeholder: el.getAttribute('placeholder') || '',
+                            value: el.value || '',
+                            selector: buildSelector(el),
+                            visible: isVisible(el),
+                        });
+                    }
+                }
+
+                return results;
+            }"""
+        )
+        logger.info("Extracted %d interactable elements", len(elements))
+        return elements
+
     async def get_content(self, page: Page) -> str:
         """Get the page content.
 
@@ -539,43 +645,101 @@ class BrowserManager:
     async def click(self, page: Page, selector: str) -> None:
         """Click an element with scroll-into-view and mouse-movement simulation.
 
+        Tries visible elements first, then falls back to force-click if needed.
+
         Args:
             page: The page containing the element.
             selector: The CSS selector for the element.
         """
-        # Scroll element into view and add a small random offset
-        offset_x = random.randint(-3, 3)
-        offset_y = random.randint(-3, 3)
-        await page.evaluate(
-            """(args) => {
-                const [offsetX, offsetY, sel] = args;
-                const el = document.querySelector(sel);
-                if (el) {
-                    el.scrollIntoView({block: 'center', behavior: 'smooth'});
-                    el.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
+        # Scroll a VISIBLE matching element into view
+        scrolled = await page.evaluate(
+            """(sel) => {
+                const els = document.querySelectorAll(sel);
+                for (const el of els) {
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    if (rect.width > 0 && rect.height > 0
+                        && style.display !== 'none'
+                        && style.visibility !== 'hidden'
+                        && style.opacity !== '0') {
+                        el.scrollIntoView({block: 'center', behavior: 'smooth'});
+                        return true;
+                    }
                 }
+                // Fallback: scroll the first match even if hidden
+                if (els.length > 0) {
+                    els[0].scrollIntoView({block: 'center', behavior: 'smooth'});
+                }
+                return false;
             }""",
-            [offset_x, offset_y, selector],
+            selector,
         )
 
         # Simulate mouse movement before clicking
         await self._simulate_mouse_movement(page)
 
-        await page.click(selector, timeout=5000)
-        logger.info("Clicked element: %s", selector)
+        # Try clicking — prefer visible elements
+        try:
+            locator = page.locator(selector)
+            visible_count = await locator.filter(visible=True).count()
+            if visible_count > 0:
+                await locator.filter(visible=True).first.click(timeout=5000)
+            else:
+                await locator.first.click(timeout=5000)
+        except Exception:
+            # Last resort: force-click the first match
+            await page.locator(selector).first.click(timeout=5000, force=True)
+
+        logger.info("Clicked element: %s (visible=%s)", selector, scrolled)
 
     async def fill(self, page: Page, selector: str, value: str) -> None:
         """Fill an input field with mouse-movement simulation.
+
+        Tries visible elements first, then falls back to force-fill if needed.
 
         Args:
             page: The page containing the input.
             selector: The CSS selector for the input.
             value: The value to fill.
         """
+        # Scroll a VISIBLE matching element into view
+        await page.evaluate(
+            """(sel) => {
+                const els = document.querySelectorAll(sel);
+                for (const el of els) {
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    if (rect.width > 0 && rect.height > 0
+                        && style.display !== 'none'
+                        && style.visibility !== 'hidden'
+                        && style.opacity !== '0') {
+                        el.scrollIntoView({block: 'center', behavior: 'smooth'});
+                        return true;
+                    }
+                }
+                if (els.length > 0) {
+                    els[0].scrollIntoView({block: 'center', behavior: 'smooth'});
+                }
+                return false;
+            }""",
+            selector,
+        )
+
         # Simulate mouse movement before filling
         await self._simulate_mouse_movement(page)
 
-        await page.fill(selector, value, timeout=5000)
+        # Try filling — prefer visible elements
+        try:
+            locator = page.locator(selector)
+            visible_count = await locator.filter(visible=True).count()
+            if visible_count > 0:
+                await locator.filter(visible=True).first.fill(value, timeout=5000)
+            else:
+                await locator.first.fill(value, timeout=5000)
+        except Exception:
+            # Last resort: force-fill the first match
+            await page.locator(selector).first.fill(value, timeout=5000, force=True)
+
         logger.info("Filled element: %s with %s", selector, value)
 
     async def evaluate(self, page: Page, script: str) -> Any:

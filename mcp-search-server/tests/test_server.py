@@ -474,15 +474,363 @@ def test_content_extractor():
     assert "alert" not in result["content"]
 
 
-def test_content_extractor_truncation():
-    """Test content extractor truncation."""
+def test_content_extractor_boilerplate_removal():
+    """Test that boilerplate elements are removed from the soup."""
     from src.extractor.content import ContentExtractor
 
     extractor = ContentExtractor()
-    html = "<html><body><p>" + "x" * 5000 + "</p></body></html>"
+    html = """<html><head><title>Test</title></head>
+    <body>
+      <nav><a href="/">Nav link</a></nav>
+      <aside>Sidebar content</aside>
+      <footer>Footer text</footer>
+      <main><p>Main content</p></main>
+      <div class="ad"><span>Ad text</span></div>
+      <div class="cookie-banner">Accept cookies</div>
+      <div class="sidebar">Sidebar widget</div>
+      <div class="footer-widget">Widget</div>
+      <div class="advertisement">Ad content</div>
+    </body></html>"""
+    result = extractor.extract(html)
+    content = result["content"]
+
+    # Structural elements should be removed
+    assert "Nav link" not in content
+    assert "Sidebar content" not in content
+    assert "Footer text" not in content
+
+    # Ad/boilerplate class elements should be removed
+    assert "Ad text" not in content
+    assert "Accept cookies" not in content
+    assert "Sidebar widget" not in content
+    assert "Widget" not in content
+    assert "Ad content" not in content
+
+    # Main content should be preserved
+    assert "Main content" in content
+
+
+def test_content_extractor_truncation():
+    """Test content extractor truncation with token budget."""
+    from src.extractor.content import ContentExtractor
+    from src.config import settings
+
+    extractor = ContentExtractor()
+    # Content must exceed both max_length (char trigger) and token budget (~4 chars/token)
+    # 4000 tokens * 4 = ~16000 chars; use 20000 to exceed budget
+    html = "<html><body><p>" + "x" * 20000 + "</p></body></html>"
     result = extractor.extract(html, max_length=100, truncate=True)
-    assert len(result["content"]) <= 100
     assert "Summarized" in result["content"]
+    # Verify output respects token budget
+    from src.extractor.content import ContentExtractor as CE
+    estimated_tokens = CE._estimate_tokens(result["content"])
+    assert estimated_tokens <= settings.FETCH_TOKEN_BUDGET
+    # Result should fit within the token budget (~4000 tokens ≈ ~16000 chars)
+    from src.config import settings
+    assert len(result["content"]) <= settings.FETCH_TOKEN_BUDGET * 4
+
+
+def test_summarize_token_budget_within_budget_returns_full():
+    """Phase 1: content within token budget returns full content with code blocks."""
+    from src.extractor.content import ContentExtractor
+
+    extractor = ContentExtractor()
+    # Small content that fits within budget
+    html = "<html><body><p>Short paragraph.</p><pre><code>```python\nprint('hi')\n```</code></pre></body></html>"
+    extractor._soup = None  # reset
+    result = extractor.extract(html, max_length=100, truncate=True)
+    # Content is small, should not be summarized
+    assert "Summarized" not in result["content"]
+
+
+def test_summarize_token_budget_exceeding_stays_within():
+    """Phase 2/3: content exceeding token budget stays within budget."""
+    from src.extractor.content import ContentExtractor
+
+    extractor = ContentExtractor()
+    # Build large content with headings
+    paragraphs = "\n\n".join(f"Paragraph {i}: " + "word " * 50 for i in range(30))
+    content = f"# Introduction\n\n{paragraphs}\n\n## Details\n\n" + "\n\n".join(
+        f"Detail paragraph {i}: " + "text " * 40 for i in range(20)
+    )
+    headings = [
+        {"level": 1, "text": "Introduction", "id": ""},
+        {"level": 2, "text": "Details", "id": ""},
+    ]
+    # Simulate code blocks being extracted
+    extractor._code_blocks = [
+        {"language": "python", "content": "def hello():\n    print('world')\n" * 10}
+    ]
+
+    token_budget = 500
+    summarized = extractor._summarize(
+        content, headings, max_length=16000, original_length=len(content),
+        token_budget=token_budget,
+    )
+
+    assert "Summarized" in summarized
+    assert f"budget {token_budget} tokens" in summarized
+    assert extractor._estimate_tokens(summarized) <= token_budget
+
+
+def test_summarize_token_budget_preserves_code_blocks():
+    """Summarized output preserves code blocks when exceeding budget."""
+    from src.extractor.content import ContentExtractor
+
+    extractor = ContentExtractor()
+    paragraphs = "\n\n".join(f"Section {i} content: " + "data " * 60 for i in range(20))
+    content = f"# Main\n\n{paragraphs}"
+    headings = [{"level": 1, "text": "Main", "id": ""}]
+    extractor._code_blocks = [
+        {"language": "javascript", "content": "const x = 42;\nconsole.log(x);"},
+        {"language": "python", "content": "import os\nprint(os.getcwd())"},
+    ]
+
+    token_budget = 400
+    summarized = extractor._summarize(
+        content, headings, max_length=16000, original_length=len(content),
+        token_budget=token_budget,
+    )
+
+    # Code blocks should be preserved
+    assert "```javascript" in summarized
+    assert "```python" in summarized
+    assert "const x = 42" in summarized
+    assert "import os" in summarized
+    # Should stay within budget
+    assert extractor._estimate_tokens(summarized) <= token_budget
+
+
+def test_summarize_char_fallback_when_no_token_budget():
+    """When token_budget is None, falls back to char-based summarization."""
+    from src.extractor.content import ContentExtractor
+
+    extractor = ContentExtractor()
+    content = "Some content " * 500
+    headings = []
+
+    result = extractor._summarize(
+        content, headings, max_length=100, original_length=len(content),
+        token_budget=None,
+    )
+
+    assert "Summarized" in result
+    assert "chars" in result  # char-based header format
+    assert len(result) <= 100
+
+
+def test_summarize_token_budget_header_format():
+    """Header uses token-based format when token_budget is provided."""
+    from src.extractor.content import ContentExtractor
+
+    extractor = ContentExtractor()
+    content = "Word " * 2000
+    headings = []
+    extractor._code_blocks = []
+
+    token_budget = 200
+    result = extractor._summarize(
+        content, headings, max_length=16000, original_length=len(content),
+        token_budget=token_budget,
+    )
+
+    assert "[Summarized — original was" in result
+    assert "tokens, budget" in result
+    assert "chars" not in result  # should NOT use char-based format
+
+
+def test_extract_main_content_targeting():
+    """Verifies nav/aside/footer text is excluded when main content is targeted."""
+    from src.extractor.content import ContentExtractor
+
+    extractor = ContentExtractor()
+    html = """<html><head><title>Page</title></head>
+    <body>
+      <nav><a href="/home">Home</a><a href="/about">About</a></nav>
+      <aside>Related articles sidebar</aside>
+      <main>
+        <h1>Article Title</h1>
+        <p>This is the actual article content.</p>
+        <p>It has multiple paragraphs of real text.</p>
+      </main>
+      <footer>Copyright 2026. All rights reserved.</footer>
+    </body></html>"""
+    result = extractor.extract(html)
+    content = result["content"]
+
+    # Main content should be present
+    assert "Article Title" in content
+    assert "actual article content" in content
+    assert "multiple paragraphs" in content
+
+    # Structural boilerplate should be excluded
+    assert "Home" not in content
+    assert "About" not in content
+    assert "Related articles sidebar" not in content
+    assert "Copyright 2026" not in content
+
+
+def test_extract_preserves_code_blocks():
+    """Verifies code blocks from <pre><code> appear in output."""
+    from src.extractor.content import ContentExtractor
+
+    extractor = ContentExtractor()
+    html = """<html><head><title>Code Page</title></head>
+    <body><main>
+      <p>Here is some code:</p>
+      <pre><code>```python
+def hello():
+    print("Hello, world!")
+```</code></pre>
+      <p>And another:</p>
+      <pre><code>```javascript
+const x = 42;
+console.log(x);
+```</code></pre>
+    </main></body></html>"""
+    result = extractor.extract(html)
+
+    # Code blocks should be extracted into _code_blocks
+    assert len(extractor._code_blocks) == 2
+    assert extractor._code_blocks[0]["language"] == "python"
+    assert "hello" in extractor._code_blocks[0]["content"]
+    assert extractor._code_blocks[1]["language"] == "javascript"
+    assert "console.log" in extractor._code_blocks[1]["content"]
+
+    # Reconstructed content should include the code blocks
+    full = extractor._reconstruct_with_code_blocks(result["content"])
+    assert "```python" in full
+    assert "```javascript" in full
+
+
+def test_token_estimation():
+    """Verifies _estimate_tokens returns reasonable values."""
+    from src.extractor.content import ContentExtractor
+    import math
+
+    extractor = ContentExtractor()
+
+    # Empty string
+    assert extractor._estimate_tokens("") == 0
+
+    # "Hello world" = 11 chars → ceil(11/4) = 3
+    assert extractor._estimate_tokens("Hello world") == 3
+
+    # Exactly 4 chars → 1 token
+    assert extractor._estimate_tokens("abcd") == 1
+
+    # 5 chars → 2 tokens
+    assert extractor._estimate_tokens("abcde") == 2
+
+    # Large text: ~4 chars per token heuristic
+    text = "x" * 16000
+    assert extractor._estimate_tokens(text) == 4000
+
+    # Verify formula matches implementation
+    for length in [0, 1, 3, 4, 5, 100, 1000, 10000]:
+        text = "a" * length
+        expected = math.ceil(length / 4)
+        assert extractor._estimate_tokens(text) == expected
+
+
+def test_summarize_within_budget():
+    """Verifies content within budget is returned in full (no summarization header)."""
+    from src.extractor.content import ContentExtractor
+
+    extractor = ContentExtractor()
+    # Small content that easily fits within a generous budget
+    content = "This is a short paragraph that should fit within the token budget without any summarization."
+    headings = [{"level": 1, "text": "Short", "id": ""}]
+    extractor._code_blocks = []
+
+    token_budget = 1000  # generous budget
+    result = extractor._summarize(
+        content, headings, max_length=16000, original_length=len(content),
+        token_budget=token_budget,
+    )
+
+    # Should NOT have summarization header — content returned in full
+    assert "Summarized" not in result
+    assert "short paragraph" in result
+
+
+def test_summarize_exceeds_budget():
+    """Verifies content exceeding budget is summarized and stays within budget."""
+    from src.extractor.content import ContentExtractor
+
+    extractor = ContentExtractor()
+    # Build content that clearly exceeds a small budget
+    paragraphs = "\n\n".join(
+        f"Paragraph {i}: " + "word " * 100 for i in range(20)
+    )
+    content = paragraphs
+    headings = []
+    extractor._code_blocks = []
+
+    token_budget = 200  # small budget that content will exceed
+    result = extractor._summarize(
+        content, headings, max_length=16000, original_length=len(content),
+        token_budget=token_budget,
+    )
+
+    # Should have summarization header
+    assert "Summarized" in result
+    assert "budget" in result
+    # Must stay within budget
+    assert extractor._estimate_tokens(result) <= token_budget
+
+
+def test_summarize_preserves_code_blocks():
+    """Verifies code blocks survive summarization when budget is exceeded."""
+    from src.extractor.content import ContentExtractor
+
+    extractor = ContentExtractor()
+    # Large text content to trigger summarization
+    content = "\n\n".join(f"Section {i}: " + "data " * 80 for i in range(15))
+    headings = []
+    extractor._code_blocks = [
+        {"language": "python", "content": "def foo():\n    return 42"},
+        {"language": "bash", "content": "echo 'hello world'"},
+    ]
+
+    token_budget = 300
+    result = extractor._summarize(
+        content, headings, max_length=16000, original_length=len(content),
+        token_budget=token_budget,
+    )
+
+    # Code blocks must be present in output
+    assert "```python" in result
+    assert "```bash" in result
+    assert "def foo()" in result
+    assert "echo 'hello world'" in result
+    # Must stay within budget
+    assert extractor._estimate_tokens(result) <= token_budget
+
+
+def test_code_block_truncation():
+    """Verifies oversized code blocks are truncated with [truncated] suffix."""
+    from src.extractor.content import ContentExtractor
+
+    extractor = ContentExtractor()
+    # Create a code block that exceeds max_chars
+    long_code = "line_of_code()  # " * 500  # ~9500 chars
+    text = f"```python\n{long_code}\n```"
+
+    max_chars = 1000
+    blocks = extractor._extract_code_blocks(text, max_chars=max_chars)
+
+    assert len(blocks) == 1
+    assert blocks[0]["language"] == "python"
+    assert len(blocks[0]["content"]) <= max_chars + len("[truncated]")
+    assert "[truncated]" in blocks[0]["content"]
+
+    # Small code block should NOT be truncated
+    short_text = "```js\nconst x = 1;\n```"
+    short_blocks = extractor._extract_code_blocks(short_text, max_chars=1000)
+    assert len(short_blocks) == 1
+    assert "[truncated]" not in short_blocks[0]["content"]
+    assert "const x = 1" in short_blocks[0]["content"]
 
 
 def test_all_tools_registered():
@@ -496,6 +844,7 @@ def test_all_tools_registered():
     expected = {
         "search", "fetch", "deep_search",
         "browser_create_session", "browser_navigate", "browser_screenshot",
+        "browser_get_interactables",
         "browser_click", "browser_fill", "browser_evaluate",
         "browser_get_text", "browser_get_content", "browser_monitor",
         "browser_close", "browser_list_sessions",
