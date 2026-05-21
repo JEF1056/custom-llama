@@ -13,7 +13,7 @@ RUN apt-get update && \
   pkg-config && \
   rm -rf /var/lib/apt/lists/*
 
-RUN git clone --depth 1 --branch llama-next-experimental --recursive \
+RUN git clone --depth 1 --branch llama-next --recursive \
   https://github.com/JEF1056/llama-cpp-turboquant.git /llama.cpp
 
 WORKDIR /llama.cpp

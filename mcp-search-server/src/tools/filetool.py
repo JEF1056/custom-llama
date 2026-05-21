@@ -19,7 +19,6 @@ FORMAT_MAP = {
     "json": (".json", "application/json"),
     "csv":  (".csv",  "text/csv"),
     "xml":  (".xml",  "application/xml"),
-    "xlsx": (".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
 }
 
 
@@ -103,9 +102,6 @@ def create_file_handler(server: FastMCP) -> None:
         - ``json`` — Write JSON text. Saved with ``.json`` extension.
         - ``csv``  — Write CSV text. Saved with ``.csv`` extension.
         - ``xml``  — Write XML markup. Saved with ``.xml`` extension.
-        - ``xlsx `` — Write Excel XML (SpreadsheetML). Saved with ``.xlsx``
-                     extension. The LLM can include formulas using ``<f>``
-                     tags inside cells for advanced equations.
 
         For binary formats not listed above (images, archives, etc.),
         provide base64-encoded content with ``encoding='base64'``.
@@ -121,7 +117,7 @@ def create_file_handler(server: FastMCP) -> None:
                      (BT/ET) and the tool wraps the structure.
             content_type: MIME type of the file (auto-set when format is given)
             encoding: Encoding of the content - 'utf-8' for text, 'base64' for binary
-            format: Optional format hint (pdf, svg, html, json, csv, xml, xlsx).
+            format: Optional format hint (pdf, svg, html, json, csv, xml).
                     Auto-sets file extension and content type.
 
         Returns:
@@ -197,13 +193,14 @@ def create_file_handler(server: FastMCP) -> None:
             info_text = (
                 f"File created successfully.\n"
                 f"  Resource URI: {resource_uri}\n"
+                f"  Download URL: {settings.FILE_BASE_URL}/files/{filename}\n"
                 f"  Size: {file_size} bytes\n"
                 f"  Type: {content_type}\n"
                 f"  Encoding: {encoding}\n"
                 f"  Format: {format if format else '(none)'}\n"
                 f"\n"
                 f"The file content is embedded above as an MCP resource. "
-                f"You can also access it later via the resource URI."
+                f"You can also access it later via the resource URI or download URL."
             )
 
             return [embedded, TextContent(type="text", text=info_text)]

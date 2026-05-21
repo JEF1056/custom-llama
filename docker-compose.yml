@@ -179,20 +179,24 @@ services:
       start_period: 300s  # allow up to 5 min for large model to load from disk
 
   # ---------------------------------------------------------------------------
-  # Cloudflare Tunnel — exposes llama-server publicly at api.jessfan.com with
-  # Cloudflare Access authentication. Makes an outbound connection to Cloudflare.
+  # Cloudflare Tunnel — exposes both llama-server and mcp-search-server publicly:
+  #   - api.jessfan.com → http://llama-server:8080
+  #   - files.jessfan.com → http://mcp-search-server:3100
+  # Both use Cloudflare Access authentication. Makes an outbound connection to Cloudflare.
   #
   # One-time setup in Cloudflare Zero Trust → Networks → Tunnels:
   #   1. Create tunnel → Docker → copy token to CF_TUNNEL_TOKEN in .env
   #   2. Add Public Hostname: api.jessfan.com → http://llama-server:8080
-  #   (Cloudflare creates the CNAME DNS record automatically.)
+  #   3. Add Public Hostname: files.jessfan.com → http://mcp-search-server:3100
+  #   (Cloudflare creates the CNAME DNS records automatically.)
   #
   # Cloudflare Access setup (Zero Trust → Access → Applications):
   #   1. Create Application for api.jessfan.com
-  #   2. Choose authentication method:
+  #   2. Create Application for files.jessfan.com
+  #   3. Choose authentication method for each:
   #      - Google OAuth (same credentials as chat.jessfan.com)
   #      - Email/Password (users get a one-time code via email)
-  #   3. Set "Who can access" to your email or "Anyone with the domain"
+  #   4. Set "Who can access" to your email or "Anyone with the domain"
   # ---------------------------------------------------------------------------
   cloudflared:
     image: cloudflare/cloudflared:latest
@@ -205,8 +209,7 @@ services:
     restart: unless-stopped
     depends_on:
       - llama-server
-    profiles:
-      - cloudflare
+      - mcp-search-server
 
   # ---------------------------------------------------------------------------
   # MCP Search Server — semantic web search with browser automation
@@ -231,6 +234,7 @@ services:
     environment:
       MCP_SERVER_HOST: ${MCP_SERVER_HOST:-0.0.0.0}
       MCP_SERVER_PORT: ${MCP_SERVER_PORT:-3100}
+      FILE_BASE_URL: ${FILE_BASE_URL:-https://files.jessfan.com}
       SEARCH_ENGINE: ${SEARCH_ENGINE:-duckduckgo}
       SEARCH_API_KEY: ${SEARCH_API_KEY:-}
       BROWSER_TIMEOUT: ${BROWSER_TIMEOUT:-30}

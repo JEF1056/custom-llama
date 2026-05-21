@@ -9,7 +9,7 @@ from mcp.server.fastmcp import FastMCP
 from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import FileResponse, Response
 from starlette.routing import Route
 
 from src.config import settings
@@ -21,8 +21,15 @@ from src.tools.fetch import fetch_handler
 from src.tools.file_ops import file_operations_handler
 from src.tools.filetool import create_file_handler
 from src.tools.http_request import http_request_handler
+from src.tools.pptx_create import pptx_create_handler
+from src.tools.pptx_edit import pptx_edit_handler
+from src.tools.pptx_read import pptx_read_handler
+from src.tools.pptx_slide_image import pptx_slide_image_handler
 from src.tools.search import search_handler
 from src.tools.time_now import time_now_handler
+from src.tools.xlsx_create import xlsx_create_handler
+from src.tools.xlsx_edit import xlsx_edit_handler
+from src.tools.xlsx_read import xlsx_read_handler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -77,22 +84,45 @@ def create_server() -> FastMCP:
             "   - browser_monitor: Monitor page changes over time\n"
             "   - browser_close: Close the browser session\n"
             "   - browser_list_sessions: List active browser sessions\n\n"
-            "5. File Tools (create_file, file_read, file_list, file_delete): File I/O\n"
-            "   - create_file: Create files in PDF/SVG/HTML/JSON/CSV/XML/XLSX formats\n"
+            "5. File Tools (create_file, file_upload, file_read, file_list, file_delete):\n"
+            "   File I/O operations\n"
+            "   - create_file: Create files in PDF/SVG/HTML/JSON/CSV/XML formats\n"
+            "   - file_upload: Upload a file (base64 content) to the output directory\n"
             "   - file_read: Read file contents (text or base64 for binary)\n"
             "   - file_list: List files and directories\n"
-            "   - file_delete: Delete a file\n\n"
+            "   - file_delete: Delete a file\n"
+            "   - Files accessible via download URL: FILE_BASE_URL/files/{filename}\n\n"
             "6. Math Tools (calculator): Advanced symbolic calculator\n"
             "   - calculator: Evaluate math expressions using SymPy\n"
             "   - Supports: arithmetic, trig, symbolic algebra, matrices, calculus, equation solving\n\n"
             "7. Time Tools (time_now): Time and timezone utilities\n"
             "   - time_now: Get current time in any timezone or convert between timezones\n\n"
+            "8. Document Tools (xlsx_create, xlsx_read, xlsx_edit, pptx_create, pptx_read, pptx_edit, pptx_slide_image): Spreadsheet & Presentation I/O\n"
+            "   - xlsx_create: Create Excel spreadsheets (formulas, formatting, charts)\n"
+            "   - xlsx_read: Read existing spreadsheets and return structured JSON\n"
+            "   - xlsx_edit: Edit existing spreadsheets (update cells, add rows, format, add sheets)\n"
+            "   - pptx_create: Create PowerPoint presentations (text, images, charts, themes)\n"
+            "   - pptx_read: Read existing presentations and return structured slide data\n"
+            "   - pptx_edit: Edit existing presentations (add/update/delete slides, text, tables, notes)\n"
+            "   - pptx_slide_image: Render a slide as a PNG image for visual inspection\n\n"
+            "=== ITERATIVE DOCUMENT WORKFLOW ===\n"
+            "The preferred approach for creating spreadsheets and presentations is iterative:\n"
+            "1. Create a small initial version (e.g. headers + a few rows, or title + one slide)\n"
+            "2. Read the file to verify structure (xlsx_read / pptx_read)\n"
+            "3. Edit incrementally (xlsx_edit / pptx_edit) — add data, fix values, apply formatting\n"
+            "4. For presentations, use pptx_slide_image to visually verify slide rendering\n"
+            "5. Repeat steps 2-4 until the document is complete\n"
+            "This approach is more reliable than trying to build everything in one create call.\n\n"
             "=== WORKFLOWS ===\n"
             "1. API + Data Processing: http_request to fetch API data -> code_run to process/analyze\n"
             "2. Search + Analysis: search -> fetch -> code_run to analyze the data\n"
-            "3. Code + Files: code_run to generate data -> create_file to save results\n"
+            "3. Code + Files: code_run -> create_file/xlsx_create to save results\n"
             "4. Browser + HTTP: browser for JS-heavy pages, http_request for API endpoints\n"
-            "5. Math + Code: calculator for symbolic math, code_run for numeric computation\n\n"
+            "5. Math + Code: calculator for symbolic math, code_run for numeric computation\n"
+            "6. Data + Documents: code_run to compute -> xlsx_create to save as spreadsheet\n"
+            "7. Presentations: code_run to generate charts -> pptx_create to embed as slides\n"
+            "8. Iterative spreadsheets: xlsx_create (minimal) -> xlsx_edit (add data/format) -> xlsx_read (verify)\n"
+            "9. Iterative presentations: pptx_create (title + 1 slide) -> pptx_edit (add slides) -> pptx_slide_image (verify)\n\n"
             "=== EXAMPLE SCENARIOS ===\n"
             "- Call an API: http_request(method='GET', url='...') -> parse JSON response\n"
             "- Analyze data: http_request to fetch -> code_run with pandas to analyze\n"
@@ -100,7 +130,14 @@ def create_server() -> FastMCP:
             "- Process web data: search -> fetch -> code_run to extract/transform\n"
             "- Generate files: code_run to compute -> create_file to save as CSV/JSON\n"
             "- Timezone work: time_now(timezone_name='Asia/Tokyo') or convert between zones\n"
-            "- Multi-step: http_request -> code_run -> create_file -> file_read to verify"),
+            "- Multi-step: http_request -> code_run -> create_file -> file_read to verify\n"
+            "- Spreadsheets: code_run with pandas -> xlsx_create to generate formatted report\n"
+            "- Presentations: code_run with matplotlib -> pptx_create to build slide deck\n"
+            "- Data pipeline: search -> fetch -> code_run -> xlsx_create -> xlsx_read to verify\n"
+            "- Iterative spreadsheet: xlsx_create(headers) -> xlsx_edit(append_rows) -> xlsx_edit(format_range) -> xlsx_read to verify\n"
+            "- Iterative presentation: pptx_create(title slide) -> pptx_edit(add_slide x3) -> pptx_slide_image(slide_index=1) to verify\n"
+            "- Fix spreadsheet data: xlsx_read to inspect -> xlsx_edit(update_cell) to correct values\n"
+            "- Refine presentation: pptx_read to inspect structure -> pptx_edit(update_slide_content) to fix text"),
     )
     return server
 
@@ -121,6 +158,13 @@ def register_tools(server: FastMCP) -> None:
     file_operations_handler(server)
     time_now_handler(server)
     calculator_handler(server)
+    xlsx_create_handler(server)
+    xlsx_read_handler(server)
+    xlsx_edit_handler(server)
+    pptx_create_handler(server)
+    pptx_read_handler(server)
+    pptx_edit_handler(server)
+    pptx_slide_image_handler(server)
 
 
 def register_resources(server: FastMCP) -> None:
@@ -158,6 +202,19 @@ def healthcheck(request: Request) -> Response:
     return Response(content="OK", media_type="text/plain", status_code=200)
 
 
+async def serve_file(request: Request) -> Response:
+    """Serve a file from the output directory.
+
+    Exposes files created by MCP tools (create_file, xlsx_create, pptx_create, etc.)
+    as downloadable resources via the FILE_BASE_URL.
+    """
+    filename = request.path_params["filename"]
+    file_path = Path(settings.FILE_OUTPUT_DIR) / filename
+    if not file_path.exists() or not file_path.is_file():
+        return Response(content="Not found", status_code=404)
+    return FileResponse(str(file_path))
+
+
 def create_app(server: FastMCP) -> Starlette:
     """Create a Starlette app with SSE and Streamable HTTP transports.
 
@@ -179,6 +236,7 @@ def create_app(server: FastMCP) -> Starlette:
     http_routes = list(server.streamable_http_app().routes)
 
     healthcheck_route = Route("/health", endpoint=healthcheck, methods=["GET"])
+    file_route = Route("/files/{filename}", endpoint=serve_file, methods=["GET"])
 
     @contextlib.asynccontextmanager
     async def lifespan(app: Starlette):
@@ -188,7 +246,7 @@ def create_app(server: FastMCP) -> Starlette:
 
     app = Starlette(
         debug=server.settings.debug,
-        routes=sse_routes + http_routes + [healthcheck_route],
+        routes=sse_routes + http_routes + [healthcheck_route, file_route],
         lifespan=lifespan,
     )
     app.add_middleware(
@@ -213,6 +271,7 @@ async def run_server(server: FastMCP) -> None:
     logger.info("SSE message handler:       POST /messages/")
     logger.info("Streamable HTTP transport: POST /mcp  (recommended)")
     logger.info("Healthcheck:               GET  /health")
+    logger.info("File download:             GET  /files/{filename}")
 
     # Start the Starlette app directly with uvicorn so that the CORS middleware is applied
     import uvicorn

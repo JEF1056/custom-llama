@@ -3,12 +3,13 @@
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import Field
+from pydantic_settings import BaseSettings
 
 load_dotenv()
 
 
-class Settings(BaseModel):
+class Settings(BaseSettings):
     """Server configuration settings."""
 
     # Server settings
@@ -37,6 +38,7 @@ class Settings(BaseModel):
 
     # File output settings
     FILE_OUTPUT_DIR: str = Field(default="/app/mcp-files", description="Directory for files created by create_file tool")
+    FILE_BASE_URL: str = Field(default="https://files.jessfan.com", description="Base URL for downloading files from the MCP server")
 
     # Cache settings
     CACHE_ENABLED: bool = Field(default=True, description="Enable caching")

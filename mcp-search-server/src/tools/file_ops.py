@@ -1,5 +1,6 @@
 """File operations tools for MCP server."""
 
+import base64
 import json
 import logging
 from pathlib import Path
@@ -174,6 +175,52 @@ def file_operations_handler(server: FastMCP) -> None:
             return json.dumps({
                 "status": "error",
                 "error": f"Failed to delete file: {str(e)}",
+            }, indent=2)
+
+    @server.tool()
+    async def file_upload(filename: str, content: str, encoding: str = "utf-8") -> str:
+        """Upload a file to the MCP server's output directory.
+
+        Writes content to the MCP server's output directory.
+        Supports both text (UTF-8) and binary (base64) content.
+
+        Args:
+            filename: Name of the file to create (no path separators allowed)
+            content: File content as a string. For binary files, provide
+                     base64-encoded data with encoding='base64'.
+            encoding: Encoding of the content - 'utf-8' for text, 'base64' for binary
+
+        Returns:
+            JSON string with success/failure status and download URL.
+        """
+        # Validate filename
+        if "/" in filename or ".." in filename:
+            return json.dumps({
+                "status": "error",
+                "error": "Filename must not contain path separators or '..'",
+            }, indent=2)
+
+        file_path = Path(settings.FILE_OUTPUT_DIR) / filename
+
+        try:
+            if encoding == "base64":
+                raw = base64.b64decode(content)
+                file_path.write_bytes(raw)
+            else:
+                file_path.write_text(content, encoding="utf-8")
+
+            file_size = file_path.stat().st_size
+            download_url = f"{settings.FILE_BASE_URL}/files/{filename}"
+            return json.dumps({
+                "status": "success",
+                "filename": filename,
+                "size": file_size,
+                "download_url": download_url,
+            }, indent=2)
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "error": f"Failed to write file: {str(e)}",
             }, indent=2)
 
     logger.info("Registered file operations tools")

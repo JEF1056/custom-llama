@@ -848,8 +848,341 @@ def test_all_tools_registered():
         "browser_click", "browser_fill", "browser_evaluate",
         "browser_get_text", "browser_get_content", "browser_monitor",
         "browser_close", "browser_list_sessions",
-        "create_file", "file_read", "file_list", "file_delete",
+        "create_file", "xlsx_create", "file_read", "file_list", "file_delete",
         "http_request", "code_run", "time_now", "calculator",
     }
     for name in expected:
         assert name in tool_names, f"Tool {name} not registered"
+
+
+def test_xlsx_create_tool_registered():
+    """Test that xlsx_create tool is registered."""
+    from src.server import create_server, register_tools
+
+    server = create_server()
+    register_tools(server)
+    tool_names = [t.name for t in server._tool_manager.list_tools()]
+    assert "xlsx_create" in tool_names
+
+
+def test_xlsx_create_basic():
+    """Test xlsx_create creates a valid workbook with one sheet."""
+    import asyncio
+    import base64
+    from io import BytesIO
+    from openpyxl import load_workbook
+    from mcp.types import EmbeddedResource
+    from src.tools.xlsx_create import xlsx_create_handler
+
+    class FakeServer:
+        def __init__(self):
+            self.tools = {}
+
+        def tool(self, *args, **kwargs):
+            def decorator(fn):
+                self.tools[fn.__name__] = fn
+                return fn
+            return decorator
+
+    server = FakeServer()
+    xlsx_create_handler(server)
+    fn = server.tools["xlsx_create"]
+
+    result = asyncio.run(fn(
+        filename="test_basic.xlsx",
+        sheets=[{
+            "name": "Data",
+            "headers": ["Name", "Age", "City"],
+            "rows": [
+                ["Alice", 30, "New York"],
+                ["Bob", 25, "London"],
+            ],
+        }],
+    ))
+
+    assert len(result) == 2
+    embedded = result[0]
+    assert isinstance(embedded, EmbeddedResource)
+    assert embedded.resource.mimeType == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    # Verify the file is a valid .xlsx
+    b64 = embedded.resource.blob
+    wb = load_workbook(BytesIO(base64.b64decode(b64)))
+    assert "Data" in wb.sheetnames
+    ws = wb["Data"]
+    assert ws.cell(row=1, column=1).value == "Name"
+    assert ws.cell(row=2, column=1).value == "Alice"
+    assert ws.cell(row=2, column=2).value == 30
+    assert ws.cell(row=3, column=3).value == "London"
+
+
+def test_xlsx_create_formulas():
+    """Test xlsx_create stores formulas correctly."""
+    import asyncio
+    import base64
+    from io import BytesIO
+    from openpyxl import load_workbook
+    from src.tools.xlsx_create import xlsx_create_handler
+
+    class FakeServer:
+        def __init__(self):
+            self.tools = {}
+
+        def tool(self, *args, **kwargs):
+            def decorator(fn):
+                self.tools[fn.__name__] = fn
+                return fn
+            return decorator
+
+    server = FakeServer()
+    xlsx_create_handler(server)
+    fn = server.tools["xlsx_create"]
+
+    result = asyncio.run(fn(
+        filename="test_formulas.xlsx",
+        sheets=[{
+            "name": "Calc",
+            "headers": ["A", "B", "Sum"],
+            "rows": [
+                [10, 20, "=A2+B2"],
+                [5, 15, "=A3+B3"],
+            ],
+        }],
+    ))
+
+    embedded = result[0]
+    wb = load_workbook(BytesIO(base64.b64decode(embedded.resource.blob)))
+    ws = wb["Calc"]
+    # Formulas should be stored as-is (starting with =)
+    assert ws.cell(row=2, column=3).value == "=A2+B2"
+    assert ws.cell(row=3, column=3).value == "=A3+B3"
+
+
+def test_xlsx_create_multiple_sheets():
+    """Test xlsx_create with multiple sheets."""
+    import asyncio
+    import base64
+    from io import BytesIO
+    from openpyxl import load_workbook
+    from src.tools.xlsx_create import xlsx_create_handler
+
+    class FakeServer:
+        def __init__(self):
+            self.tools = {}
+
+        def tool(self, *args, **kwargs):
+            def decorator(fn):
+                self.tools[fn.__name__] = fn
+                return fn
+            return decorator
+
+    server = FakeServer()
+    xlsx_create_handler(server)
+    fn = server.tools["xlsx_create"]
+
+    result = asyncio.run(fn(
+        filename="test_multi.xlsx",
+        sheets=[
+            {
+                "name": "Sheet1",
+                "headers": ["X"],
+                "rows": [[1], [2]],
+            },
+            {
+                "name": "Sheet2",
+                "headers": ["Y"],
+                "rows": [[3], [4]],
+            },
+        ],
+    ))
+
+    embedded = result[0]
+    wb = load_workbook(BytesIO(base64.b64decode(embedded.resource.blob)))
+    assert "Sheet1" in wb.sheetnames
+    assert "Sheet2" in wb.sheetnames
+    assert wb["Sheet1"].cell(row=2, column=1).value == 1
+    assert wb["Sheet1"].cell(row=3, column=1).value == 2
+    assert wb["Sheet2"].cell(row=2, column=1).value == 3
+    assert wb["Sheet2"].cell(row=3, column=1).value == 4
+
+
+def test_xlsx_create_path_traversal_blocked():
+    """Test that path traversal is blocked in xlsx_create."""
+    import asyncio
+    from src.tools.xlsx_create import xlsx_create_handler
+
+    class FakeServer:
+        def __init__(self):
+            self.tools = {}
+
+        def tool(self, *args, **kwargs):
+            def decorator(fn):
+                self.tools[fn.__name__] = fn
+                return fn
+            return decorator
+
+    server = FakeServer()
+    xlsx_create_handler(server)
+    fn = server.tools["xlsx_create"]
+
+    # Test with path separator
+    result = asyncio.run(fn(filename="../etc/passwd.xlsx", sheets=[{"headers": ["A"], "rows": []}]))
+    assert len(result) == 1
+    assert "Error" in result[0].text
+
+    # Test with backslash
+    result = asyncio.run(fn(filename="foo\\bar.xlsx", sheets=[{"headers": ["A"], "rows": []}]))
+    assert len(result) == 1
+    assert "Error" in result[0].text
+
+    # Test with ..
+    result = asyncio.run(fn(filename="..\\secret.xlsx", sheets=[{"headers": ["A"], "rows": []}]))
+    assert len(result) == 1
+    assert "Error" in result[0].text
+
+
+def test_xlsx_create_invalid_sheet_name():
+    """Test that invalid sheet names are rejected."""
+    import asyncio
+    from src.tools.xlsx_create import xlsx_create_handler
+
+    class FakeServer:
+        def __init__(self):
+            self.tools = {}
+
+        def tool(self, *args, **kwargs):
+            def decorator(fn):
+                self.tools[fn.__name__] = fn
+                return fn
+            return decorator
+
+    server = FakeServer()
+    xlsx_create_handler(server)
+    fn = server.tools["xlsx_create"]
+
+    # Sheet name with invalid character
+    result = asyncio.run(fn(
+        filename="test.xlsx",
+        sheets=[{"name": "Bad:Name", "headers": ["A"], "rows": []}],
+    ))
+    assert len(result) == 1
+    assert "Error" in result[0].text
+
+    # Sheet name too long
+    result = asyncio.run(fn(
+        filename="test.xlsx",
+        sheets=[{"name": "A" * 32, "headers": ["A"], "rows": []}],
+    ))
+    assert len(result) == 1
+    assert "Error" in result[0].text
+
+    # Duplicate sheet names
+    result = asyncio.run(fn(
+        filename="test.xlsx",
+        sheets=[
+            {"name": "Dup", "headers": ["A"], "rows": []},
+            {"name": "Dup", "headers": ["B"], "rows": []},
+        ],
+    ))
+    assert len(result) == 1
+    assert "Error" in result[0].text
+
+
+def test_xlsx_create_chart():
+    """Test xlsx_create with a bar chart."""
+    import asyncio
+    import base64
+    from io import BytesIO
+    from openpyxl import load_workbook
+    from src.tools.xlsx_create import xlsx_create_handler
+
+    class FakeServer:
+        def __init__(self):
+            self.tools = {}
+
+        def tool(self, *args, **kwargs):
+            def decorator(fn):
+                self.tools[fn.__name__] = fn
+                return fn
+            return decorator
+
+    server = FakeServer()
+    xlsx_create_handler(server)
+    fn = server.tools["xlsx_create"]
+
+    result = asyncio.run(fn(
+        filename="test_chart.xlsx",
+        sheets=[{
+            "name": "Data",
+            "headers": ["Category", "Value"],
+            "rows": [
+                ["A", 10],
+                ["B", 20],
+                ["C", 15],
+            ],
+        }],
+        charts=[{
+            "type": "bar",
+            "title": "Test Chart",
+            "data_range": "A1:B4",
+            "position": "D1",
+        }],
+    ))
+
+    embedded = result[0]
+    wb = load_workbook(BytesIO(base64.b64decode(embedded.resource.blob)))
+    ws = wb["Data"]
+    # Chart should be added to the worksheet
+    assert len(ws._charts) == 1
+    chart = ws._charts[0]
+    # Title is a Title object — verify it has text content
+    assert chart.title is not None
+    assert chart.title.tx is not None
+
+
+def test_xlsx_create_formatting():
+    """Test xlsx_create with formatting rules."""
+    import asyncio
+    import base64
+    from io import BytesIO
+    from openpyxl import load_workbook
+    from src.tools.xlsx_create import xlsx_create_handler
+
+    class FakeServer:
+        def __init__(self):
+            self.tools = {}
+
+        def tool(self, *args, **kwargs):
+            def decorator(fn):
+                self.tools[fn.__name__] = fn
+                return fn
+            return decorator
+
+    server = FakeServer()
+    xlsx_create_handler(server)
+    fn = server.tools["xlsx_create"]
+
+    result = asyncio.run(fn(
+        filename="test_format.xlsx",
+        sheets=[{
+            "name": "Data",
+            "headers": ["Name", "Value"],
+            "rows": [
+                ["Alice", 100],
+                ["Bob", 200],
+            ],
+        }],
+        formatting=[{
+            "range": "A1:B1",
+            "bold": True,
+            "fill": "4472C4",
+            "font_color": "FFFFFF",
+        }],
+    ))
+
+    embedded = result[0]
+    wb = load_workbook(BytesIO(base64.b64decode(embedded.resource.blob)))
+    ws = wb["Data"]
+    # Header cells should have formatting applied
+    assert ws.cell(row=1, column=1).font.bold is True
+    assert ws.cell(row=1, column=1).fill.start_color.rgb == "004472C4" or ws.cell(row=1, column=1).fill.start_color.rgb == "4472C4"
