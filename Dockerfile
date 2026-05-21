@@ -90,6 +90,7 @@ ENV LD_LIBRARY_PATH=/opt/llama/lib:/usr/local/cuda/lib64:/usr/local/nvidia/lib64
 ENV PATH=/usr/local/bin:$PATH
 
 COPY entrypoint.sh /entrypoint.sh
+COPY scripts/webui-config.json /etc/llama-server/webui-config.json
 RUN chmod +x /entrypoint.sh && sed -i 's/\r$//' /entrypoint.sh && \
   if [ ! -x "/usr/local/bin/llama-server" ]; then \
   echo "ERROR: /usr/local/bin/llama-server is missing or not executable" && exit 1; \

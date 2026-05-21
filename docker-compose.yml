@@ -144,6 +144,9 @@ services:
       LLAMA_TRIATTENTION_WINDOW: ${LLAMA_TRIATTENTION_WINDOW:-}
       LLAMA_TRIATTENTION_LOG: ${LLAMA_TRIATTENTION_LOG:-}
 
+      # WebUI config file — supplies default MCP server + agentic turn limit
+      LLAMA_WEBUI_CONFIG_FILE: ${LLAMA_WEBUI_CONFIG_FILE:-}
+
       # CUDA performance
       GGML_CUDA_GRAPH_OPT: ${GGML_CUDA_GRAPH_OPT:-}
       CUDA_SCALE_LAUNCH_QUEUES: ${CUDA_SCALE_LAUNCH_QUEUES:-}

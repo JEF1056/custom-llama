@@ -2,12 +2,19 @@
 
 import logging
 import re
-from typing import Optional
+from typing import Literal
 
 from bs4 import BeautifulSoup, Tag
 from html2text import html2text
 
 from src.config import settings
+
+# Truncation mode controls what gets summarized
+# - "always": truncate both main text and code blocks (default)
+# - "never": no truncation at all
+# - "main_only": truncate main text only, preserve code blocks in full
+# - "code_only": truncate code blocks only, preserve main text in full
+TruncationMode = Literal["always", "never", "main_only", "code_only"]
 
 logger = logging.getLogger(__name__)
 
@@ -134,16 +141,17 @@ class ContentExtractor:
         return best
 
     @staticmethod
-    def _extract_code_blocks(text: str, max_chars: int) -> list[dict]:
+    def _extract_code_blocks(text: str, max_chars: int | None) -> list[dict]:
         """Extract fenced code blocks from text.
 
         Finds all ```...``` blocks, captures the optional language
         identifier and the block content. Each block's content is capped
         at ``max_chars`` with a ``[truncated]`` indicator if exceeded.
+        If ``max_chars`` is ``None``, code blocks are preserved in full.
 
         Args:
             text: The text to extract code blocks from.
-            max_chars: Maximum characters per block's content.
+            max_chars: Maximum characters per block's content. ``None`` disables truncation.
 
         Returns:
             List of dicts with ``language`` (str, may be empty) and
@@ -154,32 +162,65 @@ class ContentExtractor:
         for match in re.finditer(pattern, text, flags=re.DOTALL):
             language = match.group(1)
             content = match.group(2).strip()
-            if len(content) > max_chars:
+            if max_chars is not None and len(content) > max_chars:
                 content = content[:max_chars] + "[truncated]"
             blocks.append({"language": language, "content": content})
         return blocks
 
-    def extract(self, html: str, max_length: int = 4000, truncate: bool = True) -> dict:
+    def extract(
+        self,
+        html: str,
+        max_length: int = 4000,
+        truncate: TruncationMode | bool = "always",
+        code_block_max_chars: int | None = None,
+    ) -> dict:
         """Extract content from HTML.
 
         Args:
             html: The HTML content to extract from.
             max_length: Maximum total text length before summarization is applied.
-            truncate: When True, summarize content that exceeds max_length. When False, return full content.
+            truncate: Truncation mode. One of:
+                - "always": truncate both main text and code blocks (default)
+                - "never": no truncation at all
+                - "main_only": truncate main text only, preserve code blocks in full
+                - "code_only": truncate code blocks only, preserve main text in full
+                - True/False: backward-compatible aliases for "always"/"never"
+            code_block_max_chars: Override max chars per code block. ``None`` uses config default.
 
         Returns:
             A dictionary containing extracted content with keys:
                 - title: Page title
-                - content: Main text content (summarized if it exceeds max_length and truncate is True)
+                - content: Main text content (summarized if exceeding max_length)
                 - links: List of links
                 - images: List of images
                 - headings: Structured headings
                 - tables: Structured tables
         """
+        # Normalize bool to TruncationMode
+        if truncate is True:
+            mode: TruncationMode = "always"
+        elif truncate is False:
+            mode = "never"
+        else:
+            mode = truncate
+
+        # Determine code block truncation settings
+        if mode in ("always", "code_only"):
+            cb_max = (
+                code_block_max_chars
+                if code_block_max_chars is not None
+                else settings.CODE_BLOCK_MAX_CHARS
+            )
+        else:
+            cb_max = None  # no truncation for code blocks
+
+        # Determine whether to summarize main text
+        summarize_main = mode in ("always", "main_only")
+
         self._soup = BeautifulSoup(html, "html.parser")
         result = {
             "title": self._extract_title(),
-            "content": self._extract_text(),
+            "content": self._extract_text(cb_max),
             "links": self._extract_links(),
             "images": self._extract_images(),
             "headings": self._extract_headings(),
@@ -187,7 +228,7 @@ class ContentExtractor:
         }
 
         # Check if summarization is needed
-        if truncate:
+        if summarize_main:
             total_text = len(result["content"])
             if total_text > max_length:
                 result["content"] = self._summarize(
@@ -480,6 +521,51 @@ class ContentExtractor:
 
         return "\n".join(excerpt_lines)
 
+    def _extract_sections(
+        self,
+        content: str,
+        headings: list[dict],
+        section_names: list[str],
+    ) -> str:
+        """Extract only the specified sections from content.
+
+        Splits content by headings, keeps only the sections whose heading
+        text matches one of the requested section names. Pre-heading content
+        (before the first heading) is included if any section is requested.
+
+        Args:
+            content: Full extracted text content.
+            headings: List of heading dicts with 'level' and 'text' keys.
+            section_names: List of heading texts to include.
+
+        Returns:
+            Text containing only the requested sections.
+        """
+        sections = self._split_content_by_headings(content, headings)
+
+        # Build a set of requested heading texts (case-insensitive)
+        requested = {name.lower().strip() for name in section_names}
+
+        parts: list[str] = []
+        for section in sections:
+            heading = section["heading"]
+            if heading is None:
+                # Pre-heading content: include it if any section is requested
+                if requested and section["text"].strip():
+                    parts.append(section["text"].strip())
+            elif heading.lower().strip() in requested:
+                # Reconstruct heading with markdown prefix
+                level = section["level"]
+                prefix = "#" * level
+                parts.append(f"{prefix} {heading}")
+                parts.append(section["text"])  # includes heading line already
+
+        if not parts:
+            # Fallback: if no sections matched, return original content
+            return content
+
+        return "\n\n".join(parts)
+
     def _hard_truncate_to_budget(self, text: str, token_budget: int) -> str:
         """Hard-truncate text at the last paragraph boundary to fit within budget.
 
@@ -556,7 +642,7 @@ class ContentExtractor:
 
         return ""
 
-    def _extract_text(self) -> str:
+    def _extract_text(self, code_block_max_chars: int | None = None) -> str:
         """Extract text content from the page.
 
         Pipeline:

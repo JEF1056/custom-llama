@@ -50,8 +50,8 @@
     "bash": {
       "*": "allow"
     },
+    "*": "allow",
     "webfetch": "deny",
-    "webserarch": "deny",
-    "*": "allow"
+    "websearch": "deny"
   }
 }

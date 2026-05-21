@@ -126,6 +126,12 @@ These rules prevent the agent from getting stuck re-reading files or repeating t
 - **Prefer targeted searches over full reads.** Use `grep`/`glob` to locate specific code before reading entire files.
 - **Track which files you've read.** Keep a mental note of files already examined. If compaction prunes earlier turns, rely on summaries you've already written.
 
+## Git operations
+Prefer to use `gh` (github CLI) and `git` commands for git operations where possible, instead of searching the web.
+
+## MCP Vs Builtin tools
+Prefer MCP tools over builtin tools, like webfetch and websearch, or using shell, when available.
+
 ## 12 Rules
 
 These rules apply to every task unless explicitly overridden. Bias: caution over speed on non-trivial work.

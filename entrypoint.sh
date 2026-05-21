@@ -33,6 +33,10 @@ CACHE_TYPE_V=${LLAMA_CACHE_TYPE_V:-turbo4}
 # Flash Attention: boolean flag (-fa). Reduces KV memory 20-50% on CUDA.
 FLASH_ATTN=${LLAMA_FLASH_ATTN:-on}
 
+# WebUI config file path (--webui-config-file). Supplies default MCP server
+# URL and agentic turn limit to the WebUI.
+WEBUI_CONFIG_FILE=${LLAMA_WEBUI_CONFIG_FILE:-}
+
 # Parallel inference slots (concurrent requests)
 # Does not increase VRAM usage — slots share the same model weights, only KV cache is duplicated per slot
 PARALLEL=${LLAMA_PARALLEL:-3}
@@ -316,6 +320,7 @@ exec llama-server \
     ${TRIATTENTION_BUDGET:+--triattention-budget "$TRIATTENTION_BUDGET"} \
     ${TRIATTENTION_WINDOW:+--triattention-window "$TRIATTENTION_WINDOW"} \
     $([ "$TRIATTENTION_LOG" = "on" ] && echo "--triattention-log") \
+    ${WEBUI_CONFIG_FILE:+--webui-config-file "$WEBUI_CONFIG_FILE"} \
     $MMFLAGS \
     --jinja \
     "$@"

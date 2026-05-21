@@ -1,0 +1,4 @@
+{
+  "mcpServers": "[{\"url\":\"http://mcp-search-server:3100\",\"transport\":\"streamable_http\"}]",
+  "agenticMaxTurns": 100
+}

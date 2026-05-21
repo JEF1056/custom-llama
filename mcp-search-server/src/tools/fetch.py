@@ -7,7 +7,7 @@ from mcp.server import FastMCP
 
 from src.browser.automation import browser_manager
 from src.config import settings
-from src.extractor.content import ContentExtractor
+from src.extractor.content import ContentExtractor, TruncationMode
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,12 @@ def fetch_handler(server: FastMCP) -> None:
     """Register the fetch tool."""
 
     @server.tool()
-    async def fetch(url: str, truncate: bool = True) -> str:
+    async def fetch(
+        url: str,
+        truncate: TruncationMode = "always",
+        code_block_max_chars: int | None = None,
+        sections: list[str] | None = None,
+    ) -> str:
         """Fetch and extract text content from a URL.
 
         Renders JavaScript via a headless browser. For multi-step interactions
@@ -24,9 +29,15 @@ def fetch_handler(server: FastMCP) -> None:
 
         Args:
             url: URL to fetch
-            truncate: When True (default), content exceeding the max length is summarized.
-                      When False, the full extracted content is returned without truncation.
-                      Only set to False if the full content is truly needed — it can be very large.
+            truncate: Truncation mode for both main text and code blocks.
+                - "always": truncate both main text and code blocks (default)
+                - "never": no truncation at all — return full content
+                - "main_only": truncate main text, preserve code blocks in full
+                - "code_only": truncate code blocks, preserve main text in full
+            code_block_max_chars: Override max characters per code block.
+            sections: Optional list of heading texts to extract only specific sections.
+                When provided, only the content under those headings is returned.
+                Use this to read a page in chunks, like reading a file by line ranges.
 
         Returns:
             JSON string of extracted content
@@ -44,7 +55,18 @@ def fetch_handler(server: FastMCP) -> None:
 
             # Extract content
             extractor = ContentExtractor()
-            content = extractor.extract(html, max_length=settings.FETCH_MAX_LENGTH, truncate=truncate)
+            content = extractor.extract(
+                html,
+                max_length=settings.FETCH_MAX_LENGTH,
+                truncate=truncate,
+                code_block_max_chars=code_block_max_chars,
+            )
+
+            # Filter to specific sections if requested
+            if sections:
+                content["content"] = extractor._extract_sections(
+                    content["content"], content["headings"], sections
+                )
 
             # Clean up page
             await page.close()
