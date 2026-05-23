@@ -98,6 +98,10 @@ SLOT_SAVE_PATH=${LLAMA_SLOT_SAVE_PATH:-}
 SPEC_TYPE=${LLAMA_SPEC_TYPE:-}
 SPEC_DRAFT_N_MAX=${LLAMA_SPEC_DRAFT_N_MAX:-}
 SPEC_DRAFT_P_MIN=${LLAMA_SPEC_DRAFT_P_MIN:-}
+# KV cache quantization for the draft/MTP context (--spec-draft-type-k / --spec-draft-type-v).
+# Defaults to f16 if unset. Set to match main model's KV types to save VRAM.
+SPEC_DRAFT_TYPE_K=${LLAMA_SPEC_DRAFT_TYPE_K:-}
+SPEC_DRAFT_TYPE_V=${LLAMA_SPEC_DRAFT_TYPE_V:-}
 
 # KV cache reuse via shifting (--cache-reuse). When two requests share a common prefix,
 # the server reuses cached KV entries instead of recomputing. Min chunk size in tokens.
@@ -309,6 +313,8 @@ exec llama-server \
     ${SPEC_TYPE:+--spec-type "$SPEC_TYPE"} \
     ${SPEC_DRAFT_N_MAX:+--spec-draft-n-max "$SPEC_DRAFT_N_MAX"} \
     ${SPEC_DRAFT_P_MIN:+--spec-draft-p-min "$SPEC_DRAFT_P_MIN"} \
+    ${SPEC_DRAFT_TYPE_K:+--spec-draft-type-k "$SPEC_DRAFT_TYPE_K"} \
+    ${SPEC_DRAFT_TYPE_V:+--spec-draft-type-v "$SPEC_DRAFT_TYPE_V"} \
     ${CACHE_REUSE:+--cache-reuse "$CACHE_REUSE"} \
     ${ROPE_SCALING:+--rope-scaling "$ROPE_SCALING"} \
     ${TRIATTENTION_STATS:+--triattention-stats "$TRIATTENTION_STATS"} \
