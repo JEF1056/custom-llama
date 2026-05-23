@@ -112,6 +112,7 @@ CACHE_REUSE=${LLAMA_CACHE_REUSE:-}
 ROPE_SCALING=${LLAMA_ROPE_SCALING:-}
 
 CTX_CHECKPOINTS=${LLAMA_CTX_CHECKPOINTS:-}
+CHECKPOINT_EVERY_N_TOKENS=${LLAMA_CHECKPOINT_EVERY_N_TOKENS:-}
 
 # TriAttention: periodically scores cached tokens and evicts the least important ones.
 # Requires a calibration file (generated from representative text).
@@ -306,6 +307,7 @@ exec llama-server \
     $([ "$CLEAR_IDLE" != "on" ] && echo "--no-cache-idle-slots") \
     ${CACHE_RAM:+--cache-ram "$CACHE_RAM"} \
     ${CTX_CHECKPOINTS:+--ctx-checkpoints $CTX_CHECKPOINTS} \
+    ${CHECKPOINT_EVERY_N_TOKENS:+--checkpoint-every-n-tokens $CHECKPOINT_EVERY_N_TOKENS} \
     ${TS:+--tensor-split "$TS"} \
     ${NCMOE:+-ncmoe "$NCMOE"} \
     ${SLOT_SAVE_PATH:+--slot-save-path "$SLOT_SAVE_PATH"} \
