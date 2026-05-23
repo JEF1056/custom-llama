@@ -309,8 +309,8 @@ exec llama-server \
     $([ "$KV_UNIFIED" = "on" ] && echo "--kv-unified") \
     $([ "$CLEAR_IDLE" != "on" ] && echo "--no-cache-idle-slots") \
     ${CACHE_RAM:+--cache-ram "$CACHE_RAM"} \
-    ${CTX_CHECKPOINTS:+--ctx-checkpoints $CTX_CHECKPOINTS} \
-    ${CHECKPOINT_EVERY_N_TOKENS:+--checkpoint-every-n-tokens $CHECKPOINT_EVERY_N_TOKENS} \
+    ${CTX_CHECKPOINTS:+--ctx-checkpoints "$CTX_CHECKPOINTS"} \
+    ${CHECKPOINT_EVERY_N_TOKENS:+--checkpoint-every-n-tokens "$CHECKPOINT_EVERY_N_TOKENS"} \
     ${TS:+--tensor-split "$TS"} \
     ${NCMOE:+-ncmoe "$NCMOE"} \
     ${SLOT_SAVE_PATH:+--slot-save-path "$SLOT_SAVE_PATH"} \
