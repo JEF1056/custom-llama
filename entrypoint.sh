@@ -260,11 +260,11 @@ if [ -n "$SPEC_TYPE" ] && [ "$SPEC_TYPE" != "none" ]; then
     if [ -n "$SPEC_DRAFT_P_MIN" ]; then
         echo "  Spec Draft P Min: $SPEC_DRAFT_P_MIN"
     fi
-    if [ "$SPEC_TYPE" = "mtp" ]; then
+    case "$SPEC_TYPE" in *draft-mtp*)
         if [ -n "$MMPROJ" ]; then
-            echo "NOTE: MTP + multimodal active — MTP will pause during image/audio processing and resume for text tokens."
+            echo "NOTE: MTP + multimodal active — MTP draft context has no vision encoder and skips image embeddings (see PR #22728). Speculation quality may be reduced for responses that reference image content."
         fi
-    fi
+    ;; esac
 fi
 if [ "$SPEC_DEFAULT" = "on" ]; then
     echo "  Spec Default (ngram-mod): enabled"
