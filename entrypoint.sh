@@ -296,6 +296,8 @@ exec llama-server \
     -ctk "$CACHE_TYPE_K" \
     -ctv "$CACHE_TYPE_V" \
     --flash-attn "$FLASH_ATTN" \
+    # --stop is not a valid llama-server flag; stop sequences go in API requests
+    # ${STOP:+--stop "$STOP"} \
     ${PARALLEL:+--parallel "$PARALLEL"} \
     $([ "$NO_MMAP" = "on" ] && echo "--no-mmap") \
     $([ "$DIRECT_IO" = "on" ] && echo "--direct-io") \
