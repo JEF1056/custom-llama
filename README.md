@@ -73,7 +73,7 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
 ```
               ┌──────────────────────────────────┐
               │         Cloudflare Edge           │
-              │  api.jessfan.com                  │
+              │  chat.jessfan.com                 │
               └──────────────┬────────────────────┘
                              │ Cloudflare Tunnel (outbound)
                              │ Cloudflare Access (auth required)
@@ -89,12 +89,12 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
                     └─────────────────────┘
 ```
 
-> **Note:** `llama-server` uses `--webui-mcp-proxy` to forward MCP tool calls to `mcp-search-server` on port 3100.
+> **Note:** `mcp-search-server` provides semantic web search with browser automation via MCP. Accessible at `http://mcp-search-server:3100` on the internal `llama-net` network.
 
 | Interface | URL / Command | Auth |
 |---|---|---|
 | **Local** | `http://localhost:8080/v1` | None (requires `docker-compose.override.yml`) |
-| **API (Cloudflare Access)** | `https://api.jessfan.com/v1` | Google OAuth / Email (see below) |
+| **API (Cloudflare Access)** | `https://chat.jessfan.com/v1` | Google OAuth / Email (see below) |
 
 ---
 

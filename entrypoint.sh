@@ -107,8 +107,6 @@ CACHE_REUSE=${LLAMA_CACHE_REUSE:-}
 # Options: linear, yarn, none. YaRN provides better quality at long contexts (100K+).
 ROPE_SCALING=${LLAMA_ROPE_SCALING:-}
 
-# Context checkpointing — how often to snapshot KV state during prefill.
-CHECKPOINT_EVERY_N=${LLAMA_CHECKPOINT_EVERY_N_TOKENS:-}
 CTX_CHECKPOINTS=${LLAMA_CTX_CHECKPOINTS:-}
 
 # TriAttention: periodically scores cached tokens and evicts the least important ones.
@@ -237,9 +235,6 @@ fi
 if [ -n "$ROPE_SCALING" ]; then
     echo "  RoPE Scaling: $ROPE_SCALING"
 fi
-if [ -n "$CHECKPOINT_EVERY_N" ]; then
-    echo "  Checkpoint Every N: $CHECKPOINT_EVERY_N"
-fi
 if [ -n "$CTX_CHECKPOINTS" ]; then
     echo "  Context Checkpoints: $CTX_CHECKPOINTS"
 fi
@@ -305,7 +300,6 @@ exec llama-server \
     $([ "$NO_KV_OFFLOAD" = "on" ] && echo "--no-kv-offload") \
     $([ "$KV_UNIFIED" = "on" ] && echo "--kv-unified") \
     ${CACHE_RAM:+--cache-ram "$CACHE_RAM"} \
-    ${CHECKPOINT_EVERY_N:+--checkpoint-every-n-tokens $CHECKPOINT_EVERY_N} \
     ${CTX_CHECKPOINTS:+--ctx-checkpoints $CTX_CHECKPOINTS} \
     ${TS:+--tensor-split "$TS"} \
     ${NCMOE:+-ncmoe "$NCMOE"} \

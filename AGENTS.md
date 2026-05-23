@@ -55,7 +55,7 @@ cd mcp-search-server && ruff check src/
 ## Architecture
 
 ```
-Cloudflare Edge (api.jessfan.com)
+Cloudflare Edge (chat.jessfan.com)
     └─ Cloudflare Tunnel (outbound)
        └─ llama-server :8080  (llama-net internal)
           └─ cloudflared (also on llama-net)
@@ -69,7 +69,7 @@ Cloudflare Edge (api.jessfan.com)
 | `llama-convert` | `convert` | No | Model download/quantize |
 | `mcp-search-server` | custom | No | Web search MCP tool |
 
-- **llama-server uses --webui-mcp-proxy** — it proxies MCP tool calls to mcp-search-server at port 3100. The MCP Search Server provides semantic web search with browser automation.
+- **mcp-search-server** — provides semantic web search with browser automation via MCP. Accessible at `http://mcp-search-server:3100` on the internal `llama-net` network.
 
 ## Gotchas
 

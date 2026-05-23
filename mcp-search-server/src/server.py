@@ -2,11 +2,14 @@
 
 import asyncio
 import contextlib
+import json
 import logging
+import time
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 from starlette.applications import Starlette
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, Response
@@ -33,6 +36,83 @@ from src.tools.xlsx_read import xlsx_read_handler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
+    """API key authentication middleware with per-IP rate limiting on failures.
+
+    Reads MCP_API_KEY from settings.  When the key is empty, auth is skipped
+    entirely (backward-compatible).  When set, requires
+    `Authorization: Bearer <key>` on /mcp, /files/*, and /messages/ endpoints.
+    The /health and GET /sse endpoints bypass auth.
+
+    Rate limiting: 5 failures within 60 s per client IP → HTTP 429.
+    Client IP is taken from the CF-Connecting-IP header (Cloudflare tunnel),
+    falling back to request.client.host.
+    """
+
+    RATE_LIMIT_WINDOW = 60  # seconds
+    RATE_LIMIT_MAX = 5  # failures before 429
+
+    def __init__(self, app):
+        super().__init__(app)
+        self._failures: dict[str, list[float]] = {}
+
+    def _get_client_ip(self, request: Request) -> str:
+        return request.headers.get("CF-Connecting-IP", request.client.host)
+
+    def _record_failure(self, ip: str) -> tuple[int, int]:
+        """Record an auth failure and return (count, is_rate_limited)."""
+        now = time.time()
+        if ip not in self._failures:
+            self._failures[ip] = []
+        # Prune entries older than the window
+        self._failures[ip] = [
+            t for t in self._failures[ip] if now - t < self.RATE_LIMIT_WINDOW
+        ]
+        self._failures[ip].append(now)
+        count = len(self._failures[ip])
+        return count, count > self.RATE_LIMIT_MAX
+
+    async def dispatch(self, request: Request, call_next):
+        # Skip auth entirely when no key is configured
+        if not settings.MCP_API_KEY:
+            return await call_next(request)
+
+        path = request.scope["path"]
+
+        # Public endpoints — no auth
+        if path == "/health":
+            return await call_next(request)
+        if path == "/sse" and request.method == "GET":
+            return await call_next(request)
+
+        # Protected endpoints
+        if path == "/mcp" or path.startswith("/files/") or path == "/messages/":
+            auth_header = request.headers.get("Authorization", "")
+            if not auth_header.startswith("Bearer "):
+                return Response(
+                    content=json.dumps({"error": "Unauthorized"}),
+                    status_code=401,
+                    media_type="application/json",
+                )
+            token = auth_header[7:]
+            if token != settings.MCP_API_KEY:
+                ip = self._get_client_ip(request)
+                count, rate_limited = self._record_failure(ip)
+                if rate_limited:
+                    return Response(
+                        content=json.dumps({"error": "Too many requests"}),
+                        status_code=429,
+                        media_type="application/json",
+                    )
+                return Response(
+                    content=json.dumps({"error": "Unauthorized"}),
+                    status_code=401,
+                    media_type="application/json",
+                )
+
+        return await call_next(request)
 
 
 def create_server() -> FastMCP:
@@ -229,6 +309,9 @@ def create_app(server: FastMCP) -> Starlette:
     Returns:
         Starlette app serving both transports plus a /health endpoint.
     """
+    if not settings.MCP_API_KEY:
+        logger.warning("MCP_API_KEY is not set — auth is disabled")
+
     # SSE transport: GET /sse + POST /messages/
     sse_routes = list(server.sse_app().routes)
 
@@ -255,6 +338,7 @@ def create_app(server: FastMCP) -> Starlette:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(ApiKeyAuthMiddleware)
     return app
 
 

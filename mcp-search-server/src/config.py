@@ -38,7 +38,8 @@ class Settings(BaseSettings):
 
     # File output settings
     FILE_OUTPUT_DIR: str = Field(default="/app/mcp-files", description="Directory for files created by create_file tool")
-    FILE_BASE_URL: str = Field(default="https://files.jessfan.com", description="Base URL for downloading files from the MCP server")
+    FILE_BASE_URL: str = Field(default="https://mcp.jessfan.com", description="Base URL for downloading files from the MCP server")
+    MCP_API_KEY: str = Field(default="", description="MCP server API key")
 
     # Cache settings
     CACHE_ENABLED: bool = Field(default=True, description="Enable caching")
