@@ -130,7 +130,7 @@ def main():
         print("\n(Dry run — no changes written)")
         return
 
-    # Rebuild the .env file: keep original structure, swap variable values
+    # Rebuild the .env file: only variable assignments, no comments
     out_lines: list[str] = []
     seen_keys: set[str] = set()
 
@@ -141,7 +141,7 @@ def main():
             line = raw_lines[i]
             m = VAR_RE.match(line)
             if not m:
-                out_lines.append(line)
+                # Skip comments and blank lines
                 i += 1
                 continue
 
@@ -176,8 +176,6 @@ def main():
         # Append new variables at the end
         new_keys = sorted(merged.keys() - seen_keys)
         if new_keys:
-            out_lines.append("")
-            out_lines.append("# ── Added by sync-env ─────────────────────────────────────────────")
             for key in new_keys:
                 out_lines.append(f"{key}={merged[key]}")
     else:
