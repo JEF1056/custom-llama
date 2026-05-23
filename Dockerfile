@@ -144,6 +144,7 @@ RUN apt-get update && \
 
 # Pull the HF→GGUF conversion script and its support package from the builder.
 COPY --from=builder /llama.cpp/convert_hf_to_gguf.py /scripts/convert_hf_to_gguf.py
+COPY --from=builder /llama.cpp/conversion/ /scripts/conversion/
 COPY --from=builder /llama.cpp/gguf-py/ /scripts/gguf-py/
 
 RUN python3 -m pip install --no-cache-dir \
