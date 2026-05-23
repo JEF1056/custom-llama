@@ -121,15 +121,6 @@ ROPE_SCALING=${LLAMA_ROPE_SCALING:-}
 CTX_CHECKPOINTS=${LLAMA_CTX_CHECKPOINTS:-}
 CHECKPOINT_EVERY_N_TOKENS=${LLAMA_CHECKPOINT_EVERY_N_TOKENS:-}
 
-# TriAttention: KV eviction via token importance scoring.
-# NOTE: --triattention-* flags only exist in the llama-next-triattention-merge branch.
-# They do NOT exist in llama-exp (current Dockerfile target). Passing them to llama-exp
-# will cause an "unknown argument" error. Leave all LLAMA_TRIATTENTION_* unset unless
-# you switch DOCKERFILE to build from llama-next-triattention-merge.
-TRIATTENTION_STATS=${LLAMA_TRIATTENTION_STATS:-}
-TRIATTENTION_BUDGET=${LLAMA_TRIATTENTION_BUDGET:-}
-TRIATTENTION_WINDOW=${LLAMA_TRIATTENTION_WINDOW:-}
-TRIATTENTION_LOG=${LLAMA_TRIATTENTION_LOG:-}
 
 # API key — when set, all requests to the server must include
 # Authorization: Bearer <key>. Leave empty for unauthenticated access
@@ -330,10 +321,6 @@ exec llama-server \
     $([ "$SPEC_DEFAULT" = "on" ] && echo "--spec-default") \
     ${CACHE_REUSE:+--cache-reuse "$CACHE_REUSE"} \
     ${ROPE_SCALING:+--rope-scaling "$ROPE_SCALING"} \
-    ${TRIATTENTION_STATS:+--triattention-stats "$TRIATTENTION_STATS"} \
-    ${TRIATTENTION_BUDGET:+--triattention-budget "$TRIATTENTION_BUDGET"} \
-    ${TRIATTENTION_WINDOW:+--triattention-window "$TRIATTENTION_WINDOW"} \
-    $([ "$TRIATTENTION_LOG" = "on" ] && echo "--triattention-log") \
     ${WEBUI_CONFIG_FILE:+--webui-config-file "$WEBUI_CONFIG_FILE"} \
     $MMFLAGS \
     --jinja \
