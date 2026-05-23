@@ -304,6 +304,7 @@ exec llama-server \
     $([ "$PRESERVE_THINKING" = "on" ] && echo '--chat-template-kwargs {"preserve_thinking":true}') \
     $([ "$NO_KV_OFFLOAD" = "on" ] && echo "--no-kv-offload") \
     $([ "$KV_UNIFIED" = "on" ] && echo "--kv-unified") \
+    $([ "$CLEAR_IDLE" != "on" ] && echo "--no-cache-idle-slots") \
     ${CACHE_RAM:+--cache-ram "$CACHE_RAM"} \
     ${CHECKPOINT_EVERY_N:+--checkpoint-every-n-tokens $CHECKPOINT_EVERY_N} \
     ${CTX_CHECKPOINTS:+--ctx-checkpoints $CTX_CHECKPOINTS} \
