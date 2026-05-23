@@ -17,6 +17,9 @@ TOP_K=${LLAMA_TOP_K:-20}
 MIN_P=${LLAMA_MIN_P:-0.0}
 PRESENCE_PENALTY=${LLAMA_PRESENCE_PENALTY:-0.0}
 REPETITION_PENALTY=${LLAMA_REPETITION_PENALTY:-1.0}
+# NOTE: LLAMA_STOP / --stop is not a valid llama-server CLI flag.
+# Stop sequences are per-request via the OpenAI API "stop" field.
+# Kept as a no-op var to avoid breaking existing .env files.
 STOP=${LLAMA_STOP:-}
 DRY_MULTIPLIER=${LLAMA_DRY_MULTIPLIER:-0}
 DRY_BASE=${LLAMA_DRY_BASE:-1.75}
@@ -114,12 +117,11 @@ ROPE_SCALING=${LLAMA_ROPE_SCALING:-}
 CTX_CHECKPOINTS=${LLAMA_CTX_CHECKPOINTS:-}
 CHECKPOINT_EVERY_N_TOKENS=${LLAMA_CHECKPOINT_EVERY_N_TOKENS:-}
 
-# TriAttention: periodically scores cached tokens and evicts the least important ones.
-# Requires a calibration file (generated from representative text).
-# --triattention-stats: path to calibration file
-# --triattention-budget: max tokens to keep in KV cache
-# --triattention-window: scoring window size
-# --triattention-log: enable logging
+# TriAttention: KV eviction via token importance scoring.
+# NOTE: --triattention-* flags only exist in the llama-next-triattention-merge branch.
+# They do NOT exist in llama-exp (current Dockerfile target). Passing them to llama-exp
+# will cause an "unknown argument" error. Leave all LLAMA_TRIATTENTION_* unset unless
+# you switch DOCKERFILE to build from llama-next-triattention-merge.
 TRIATTENTION_STATS=${LLAMA_TRIATTENTION_STATS:-}
 TRIATTENTION_BUDGET=${LLAMA_TRIATTENTION_BUDGET:-}
 TRIATTENTION_WINDOW=${LLAMA_TRIATTENTION_WINDOW:-}
@@ -296,7 +298,8 @@ exec llama-server \
     -ctk "$CACHE_TYPE_K" \
     -ctv "$CACHE_TYPE_V" \
     --flash-attn "$FLASH_ATTN" \
-    ${STOP:+--stop "$STOP"} \
+    # --stop is not a valid llama-server flag; stop sequences go in API requests
+    # ${STOP:+--stop "$STOP"} \
     ${PARALLEL:+--parallel "$PARALLEL"} \
     $([ "$NO_MMAP" = "on" ] && echo "--no-mmap") \
     $([ "$DIRECT_IO" = "on" ] && echo "--direct-io") \
