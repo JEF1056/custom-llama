@@ -20,7 +20,7 @@ services:
   #     docker compose run --rm llama-convert download qwen3.6-27b --quant TQ2_0
   #
   #   Safetensors-only repo (convert → fp16 GGUF → quantize):
-  #     docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant TQ2_0
+  #     docker compose run --rm llama-convert convert-st qwen3.6-35b-a3b --quant TQ2_0
   #
   #   Re-quantize an existing GGUF already in ./models:
   #     docker compose run --rm llama-convert convert /models/model-Q8_0.gguf --quant Q4_K_M

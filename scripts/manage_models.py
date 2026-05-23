@@ -92,8 +92,10 @@ MODELS = {
     },
     "qwen3.6-27b": {
         "hf_repo": "unsloth/Qwen3.6-27B-GGUF",
+        "fp16_repo": "Qwen/Qwen3.6-27B",
         "description": "Qwen 3.6 27B (~14GB)",
         "size_gb": 14,
+        "mmproj": "mmproj-F16.gguf"
     },
     "qwen3.5-27b": {
         "hf_repo": "unsloth/Qwen3.5-27B-GGUF",
@@ -102,8 +104,10 @@ MODELS = {
     },
     "qwen3.6-35b-a3b": {
         "hf_repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+        "fp16_repo": "Qwen/Qwen3.6-35B-A3B",
         "description": "Qwen 3.6 35B-A3B (~17GB)",
         "size_gb": 17,
+        "mmproj": "mmproj-F16.gguf"
     },
     "qwopus3.6-35b": {
         "hf_repo": "Jackrong/Qwopus3.6-35B-A3B-v1-GGUF",
@@ -111,7 +115,6 @@ MODELS = {
         "description": "Qwopus 3.6 35B-A3B-v1 (~17GB)",
         "size_gb": 17,
         "mmproj": "mmproj.gguf",
-        "mtp_graft_from": "Qwen/Qwen3.6-35B-A3B",
     },
     "qwopus3.6-27b": {
         "hf_repo": "Jackrong/Qwopus3.6-27B-v1-preview-GGUF",
@@ -119,7 +122,6 @@ MODELS = {
         "description": "Qwopus 3.6 27B-v1-preview (~14GB)",
         "size_gb": 14,
         "mmproj": "mmproj.gguf",
-        "mtp_graft_from": "Qwen/Qwen3.6-27B",
     },
     "minimax-m2.7": {
         "hf_repo": "unsloth/MiniMax-M2.7-GGUF",
@@ -877,177 +879,6 @@ def _gguf_read_header(gguf_path: Path) -> dict:
     return result
 
 
-def _detect_mtp_graft(st_dir: Path, model_info: dict) -> str | None:
-    """Determine which base model to graft MTP tensors from.
-
-    Returns the base model repo ID, or None if this is a base model
-    (``mtp_capable=True``).
-
-    MTP head layers are never fine-tuned in practice: LoRA targets only
-    ``q/k/v/o_proj`` and FFN modules, and even full-parameter SFT rarely
-    trains MTP heads.  The base model's MTP weights are always correct for
-    any downstream fine-tune — grafting is safe and idempotent (replaces
-    corrupted/missing weights, or overwrites identical ones).
-
-    Resolution order:
-    1. ``mtp_capable: True``  → base model, no graft needed.
-    2. ``mtp_graft_from``     → explicit override.
-    3. ``config._name_or_path`` → set by transformers to the training source repo.
-    """
-    if model_info.get("mtp_capable"):
-        print("  mtp_capable=True — base model, using its own MTP weights.")
-        return None
-
-    if repo := model_info.get("mtp_graft_from"):
-        print(f"  mtp_graft_from={repo}")
-        return repo
-
-    config_path = st_dir / "config.json"
-    if not config_path.exists():
-        print("  Error: No config.json — cannot resolve base model for MTP graft.")
-        print("  Set mtp_graft_from in the MODELS dict.")
-        sys.exit(1)
-
-    with open(config_path) as f:
-        config = json.load(f)
-
-    name_or_path = config.get("_name_or_path", "")
-    if "/" in name_or_path and not name_or_path.startswith(("/", ".")):
-        print(f"  Resolved base model from config._name_or_path: {name_or_path}")
-        return name_or_path
-
-    print("  Error: Cannot resolve base model for MTP graft.")
-    print("  config._name_or_path is not a HuggingFace repo ID.")
-    print("  Set mtp_graft_from in the MODELS dict.")
-    sys.exit(1)
-
-
-def _graft_mtp_tensors(st_dir: Path, base_repo: str) -> None:
-    """Unconditionally graft MTP head tensors from a base model.
-
-    MTP heads are never fine-tuned (LoRA targets only q/k/v/o_proj + FFN;
-    full-param SFT rarely trains MTP).  The base model's MTP weights are
-    always correct.  This function is idempotent:
-    - If the fine-tune has no MTP tensors → adds them.
-    - If the fine-tune has corrupted/phantom MTP entries → replaces them.
-    - If the fine-tune somehow has correct MTP tensors → overwrites with
-      identical data (harmless).
-    """
-    try:
-        from safetensors.torch import load_file, save_file
-        from huggingface_hub import hf_hub_download
-    except ImportError:
-        print("Error: safetensors and huggingface_hub are required for MTP grafting.")
-        sys.exit(1)
-
-    index_path = st_dir / "model.safetensors.index.json"
-    if not index_path.exists():
-        print(f"  Error: {index_path} not found — cannot graft MTP tensors.")
-        sys.exit(1)
-
-    with open(index_path) as f:
-        index = json.load(f)
-
-    weight_map = index["weight_map"]
-    print(f"\n  ⚙ Grafting MTP tensors from {base_repo}")
-    hf_token = os.environ.get("HF_TOKEN") or None
-
-    # Download only the shards that contain MTP tensors from the base model,
-    # then extract just the mtp.* tensors.
-    print(f"  Fetching base model index from {base_repo}...")
-    base_index_path = hf_hub_download(
-        repo_id=base_repo,
-        filename="model.safetensors.index.json",
-        token=hf_token,
-    )
-    with open(base_index_path) as f:
-        base_index = json.load(f)
-    base_map = base_index["weight_map"]
-
-    base_mtp_keys = sorted(k for k in base_map if k.startswith("mtp."))
-    if not base_mtp_keys:
-        print(f"  Error: base model {base_repo} has no mtp.* tensors either.")
-        sys.exit(1)
-
-    base_shards_needed = sorted({base_map[k] for k in base_mtp_keys})
-    print(f"  Base model has {len(base_mtp_keys)} MTP tensor(s) across "
-          f"{len(base_shards_needed)} shard(s):")
-    for sn in base_shards_needed:
-        count = sum(1 for k in base_mtp_keys if base_map[k] == sn)
-        print(f"    {sn}  ({count} tensor(s))")
-
-    grafted_tensors = {}
-    for i, shard_name in enumerate(base_shards_needed, 1):
-        print(f"\n  [{i}/{len(base_shards_needed)}] Downloading {base_repo}/{shard_name} ...")
-        shard_path = hf_hub_download(
-            repo_id=base_repo,
-            filename=shard_name,
-            token=hf_token,
-        )
-        shard_size = Path(shard_path).stat().st_size
-        print(f"  [{i}/{len(base_shards_needed)}] Downloaded {_fmt_bytes(shard_size)} → loading tensors...")
-        shard_data = load_file(shard_path)
-        for k in base_mtp_keys:
-            if base_map[k] == shard_name and k in shard_data:
-                t = shard_data[k]
-                grafted_tensors[k] = t
-                print(f"    ✓ {k:<50s}  {str(t.dtype):>10s}  shape={list(t.shape)}")
-
-    missing = set(base_mtp_keys) - set(grafted_tensors)
-    if missing:
-        print(f"\n  ⚠ Warning: could not find {len(missing)} expected MTP tensor(s):")
-        for m in sorted(missing):
-            print(f"    ✗ {m}")
-
-    total_params = sum(t.numel() for t in grafted_tensors.values())
-    total_bytes = sum(t.numel() * t.element_size() for t in grafted_tensors.values())
-    print(f"\n  Extracted {len(grafted_tensors)} MTP tensor(s): "
-          f"{total_params:,} params, {_fmt_bytes(total_bytes)}")
-
-    # Write grafted tensors into a new shard and update the index
-    graft_shard_name = "model-mtp-grafted.safetensors"
-    graft_path = st_dir / graft_shard_name
-    save_file(grafted_tensors, str(graft_path))
-    print(f"  Wrote {graft_shard_name} ({_fmt_bytes(graft_path.stat().st_size)})")
-
-    for k in grafted_tensors:
-        weight_map[k] = graft_shard_name
-    with open(index_path, "w") as f:
-        json.dump(index, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-    print("  Updated safetensors index")
-
-    # Ensure config.json has mtp_num_hidden_layers — the converter relies on
-    # this to extend block_count and emit nextn metadata.  Fine-tunes may have
-    # it set to 0 or missing entirely even though the field exists in the base.
-    # The field can live at the top level or nested under text_config.
-    config_path = st_dir / "config.json"
-    if config_path.exists():
-        with open(config_path) as f:
-            config = json.load(f)
-        text_cfg = config.get("text_config", config)
-        local_mtp = text_cfg.get("mtp_num_hidden_layers", 0)
-        if local_mtp < 1:
-            base_config_path = hf_hub_download(
-                repo_id=base_repo,
-                filename="config.json",
-                token=hf_token,
-            )
-            with open(base_config_path) as f:
-                base_config = json.load(f)
-            base_text_cfg = base_config.get("text_config", base_config)
-            base_mtp = base_text_cfg.get("mtp_num_hidden_layers", 1)
-            text_cfg["mtp_num_hidden_layers"] = base_mtp
-            with open(config_path, "w") as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
-                f.write("\n")
-            print(f"  Patched config.json: mtp_num_hidden_layers={base_mtp}")
-        else:
-            print(f"  config.json already has mtp_num_hidden_layers={local_mtp}")
-
-    print("  MTP graft complete ✓")
-
-
 def convert_safetensors(
     model_name: str,
     quant: str,
@@ -1061,23 +892,17 @@ def convert_safetensors(
     Pipeline
     --------
     1.  Download the safetensors repo (fp16_repo, or hf_repo if fp16_repo absent).
-    1b. If ``mtp=True``, unconditionally graft MTP head tensors from the
-        base model (unless ``mtp_capable=True``).  MTP heads are never
-        fine-tuned, so grafting is always safe — it replaces corrupted/missing
-        weights or overwrites identical ones.  The base repo is resolved from
-        ``mtp_graft_from`` or ``config._name_or_path``.
     2.  Run convert_hf_to_gguf.py → fp16 GGUF (includes MTP tensors when present).
     3.  Run llama-quantize → target quant GGUF.
     4.  Clean up the safetensors download and the fp16 intermediate.
 
     When ``mtp=True``:
     - The prebuilt-GGUF shortcut is skipped (prebuilts strip MTP tensors).
-    - Fine-tunes auto-graft MTP tensors from the base model.
     - Output is named ``{model_name}-{quant}-mtp.gguf``.
     - Enable with ``LLAMA_SPEC_TYPE=mtp`` in .env.
 
     Args:
-        model_name: Key from the MODELS dict (e.g. "qwopus3.6-27b")
+        model_name: Key from the MODELS dict (e.g. "qwen3.5-27b")
         quant: Target quantization (e.g. "TQ2_0", "Q4_K_M", "IQ4_XS")
         output_dir: Directory where the final GGUF should be placed
         mtp: When True, produce a GGUF with MTP tensors included.
@@ -1183,18 +1008,7 @@ def convert_safetensors(
         )
 
         # -------------------------------------------------------------- #
-        # 1b. Graft MTP tensors from base model (if needed)
-        # -------------------------------------------------------------- #
-        graft_repo = None
-        if mtp:
-            _section("Checking MTP tensor status")
-            graft_repo = _detect_mtp_graft(st_dir, model_info)
-        if graft_repo:
-            _section(f"Grafting MTP tensors from {graft_repo}")
-            _graft_mtp_tensors(st_dir, graft_repo)
-
-        # -------------------------------------------------------------- #
-        # 1c. Convert safetensors → fp16 GGUF
+        # 1b. Convert safetensors → fp16 GGUF
         # -------------------------------------------------------------- #
         _section("Converting safetensors → fp16 GGUF")
         print(f"  Source : {st_dir}")
@@ -1493,7 +1307,7 @@ def main():
         ),
     )
     cst_parser.add_argument(
-        "model", help="Model name (e.g. qwopus3.6-35b)"
+        "model", help="Model name (e.g. qwen3.5-27b)"
     )
     cst_parser.add_argument(
         "-q",

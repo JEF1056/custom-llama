@@ -3,7 +3,7 @@
   "plugin": [
     "@opencode_weave/weave"
   ],
-  "model": "llama/qwenopus3.6-27b",
+  "model": "llama/qwen3.5-27b",
   "provider": {
     "llama": {
       "npm": "@ai-sdk/openai-compatible",
@@ -13,8 +13,8 @@
         "includeUsage": true
       },
       "models": {
-        "qwenopus3.6-27b": {
-          "name": "Qwopus3.6",
+        "qwen3.5-27b": {
+          "name": "Qwen3.5-27B",
           "limit": {
             "context": 75000,
             "output": 50000

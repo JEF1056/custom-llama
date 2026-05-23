@@ -12,14 +12,11 @@ docker compose run --rm llama-convert download qwen3.5-27b --quant Q4_K_M
 docker compose run --rm llama-convert download qwen3.6-27b --quant TQ2_0
 
 # Safetensors-only repo (convert → fp16 GGUF → quantize):
-docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant TQ2_0
+docker compose run --rm llama-convert convert-st qwen3.6-35b-a3b --quant TQ2_0
 
-# MTP-capable GGUF (auto-grafts MTP head from base model):
-docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_NL --mtp
-docker compose run --rm llama-convert convert-st qwopus3.6-35b --quant Q3_K_L --mtp
-# ↑ Both auto-graft MTP from their respective base models:
-#   qwopus3.6-27b ← Qwen/Qwen3.6-27B    (15 MTP tensors, dense)
-#   qwopus3.6-35b ← Qwen/Qwen3.6-35B-A3B (19 MTP tensors, MoE)
+# MTP-capable GGUF (Qwen models have native MTP weights — no grafting needed):
+docker compose run --rm llama-convert convert-st qwen3.5-27b --quant IQ4_NL --mtp
+docker compose run --rm llama-convert convert-st qwen3.6-35b-a3b --quant Q3_K_L --mtp
 # Then set in .env: LLAMA_MODEL=/models/{model}-Q3_K_L-mtp.gguf
 #                   LLAMA_SPEC_TYPE=mtp  LLAMA_SPEC_DRAFT_N_MAX=3
 
@@ -87,8 +84,7 @@ Cloudflare Edge (chat.jessfan.com)
 - **`LLAMA_CACHE_TYPE_K=V=turbo3`** requires `LLAMA_FLASH_ATTN=on` — setting turbo3 without flash attention will fail.
 - **`LLAMA_CLEAR_IDLE=on`** requires `LLAMA_CACHE_RAM` to be set and non-zero — otherwise the flag is silently omitted by `entrypoint.sh`.
 - **`LLAMA_DIRECT_IO=on`** is recommended when `LLAMA_GPU_LAYERS=99` — it prevents the ~18 GB model from being cached in the OS page cache after it's already in VRAM.
-- **MTP requires an MTP-capable GGUF** — the model must have `nextn`/MTP head layers baked in. Models need either `mtp_capable: True` (native MTP weights) or `mtp_graft_from: "Repo/Name"` (graft MTP from base model) in `manage_models.py`. The `--mtp` flag is blocked with a hard error for models with neither.
-- **Both Qwopus fine-tunes need MTP grafting.** Neither `qwopus3.6-27b` nor `qwopus3.6-35b` ship MTP tensors in their safetensors — Unsloth's fine-tuning stripped them while leaving `mtp_num_hidden_layers: 1` in config.json. The `mtp_graft_from` field in MODELS causes `--mtp` to auto-download MTP tensors from the base model (`Qwen/Qwen3.6-27B` for the 27B dense, `Qwen/Qwen3.6-35B-A3B` for the 35B MoE) and inject them before conversion. The MTP head is architecturally independent of the fine-tuned trunk.
+- **MTP requires an MTP-capable GGUF** — the model must have `nextn`/MTP head layers baked in. Qwen models have `mtp_capable: True` (native MTP weights) so no grafting is needed. The `--mtp` flag in `convert-st` preserves these layers during conversion.
 - **MTP + vision coexist** — MTP speculative decoding pauses during image/audio processing and resumes for text tokens. `handle_mtp_for_ubatch` detects embedding-only batches (`tokens==nullptr`) and resets its pending state so the MTP KV cache skips image positions cleanly.
 - **llama-cpp source** is now `JEF1056/llama-cpp-turboquant` (`llama-next` branch) — TurboQuant KV + upstream sync + MTP speculative decoding + HIP/FATTN fixes on top.
 
@@ -96,7 +92,7 @@ Cloudflare Edge (chat.jessfan.com)
 
 | Variable | Default | Effect |
 |---|---|---|
-| `MODEL_NAME` | `qwopus3.6-27b` | Model to download via `manage_models.py` |
+| `MODEL_NAME` | `qwen3.5-27b` | Model to download via `manage_models.py` |
 | `QUANT` | `IQ4_NL` | Quantization format (or `TQ_QUANT` for TurboQuant) |
 | `LLAMA_MODEL` | — | Direct path to a `.gguf` file (skips auto-download) |
 | `HF_TOKEN` | — | Required for gated HuggingFace repos |
@@ -114,7 +110,7 @@ Cloudflare Edge (chat.jessfan.com)
 
 ## opencode.json
 
-The `opencode.json` at the repo root configures the LLM provider for OpenCode sessions — it points at `http://localhost:8080/v1` with the `qwenopus3.6-27b` model and a 150K context window. No additional instructions are needed beyond what's in this file.
+The `opencode.json` at the repo root configures the LLM provider for OpenCode sessions — it points at `http://localhost:8080/v1` with the `qwen3.5-27b` model and a 150K context window. No additional instructions are needed beyond what's in this file.
 
 ## Anti-Loop Discipline
 
