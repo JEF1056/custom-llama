@@ -11,9 +11,9 @@ A self-hosted LLM inference server built around [llama.cpp (TurboQuant + MTP for
 No Cloudflare or secrets needed — just the inference server on this machine.
 
 ```bash
-cp .env.default .env
+python sync-env.py
 docker compose build llama-server llama-convert mcp-search-server
-docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant Q3_K_M --mtp
+docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_NL --mtp
 docker compose up -d llama-server mcp-search-server
 ```
 
@@ -39,7 +39,7 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
 
 > **Without MTP:** if you want a faster first run (skip the safetensors download), use the prebuilt GGUF instead.
 > Comment out `LLAMA_MODEL` and `LLAMA_SPEC_TYPE` in `.env`, then run:
-> `docker compose run --rm llama-convert download qwopus3.6-27b --quant Q3_K_M`
+> `docker compose run --rm llama-convert download qwopus3.6-27b --quant IQ4_NL`
 
 ---
 
@@ -49,7 +49,7 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
 |---|---|
 | Model | Qwopus3.6-27B-v1-preview |
 | Base | Qwen3.6-27B |
-| Quant | Q3_K_M (~9.5 GB) |
+| Quant | IQ4_NL (~10.5 GB) |
 | Architecture | Hybrid: 48× DeltaNet + 16× Gated Attention (64 layers total) |
 | KV cache layers | 16 of 64 (only Attention layers; DeltaNet recurrent state ~5.6 MiB, GPU working buffers ~898 MiB) |
 | Context | 150K (native 262K; limited for VRAM) |
@@ -60,7 +60,7 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
 
 | Component | Size |
 |---|---|
-| Model (Q3_K_M) + mmproj | ~10.4 GB |
+| Model (IQ4_NL) + mmproj | ~10.4 GB |
 | DeltaNet GPU working buffers | ~0.9 GB |
 | KV cache (turbo3, 150K ctx) | ~0.9 GB |
 | CUDA context + compute | ~0.6 GB |
@@ -158,13 +158,13 @@ docker compose build llama-convert
 
 # Option A (recommended): MTP-capable GGUF from safetensors — ~2–2.5× faster generation
 # Downloads ~28 GB safetensors, converts to fp16 GGUF, quantizes, cleans up.
-docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant Q3_K_M --mtp
-# Output: ./models/qwopus3.6-27b-Q3_K_M-mtp.gguf (~9.5 GB)
+docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_NL --mtp --keep-intermediate
+# Output: ./models/qwopus3.6-27b-IQ4_NL-mtp.gguf (~10.5 GB)
 # .env.default already points LLAMA_MODEL at this file and sets LLAMA_SPEC_TYPE=mtp.
 
 # Option B (faster setup, no MTP): prebuilt GGUF from HuggingFace
 # Comment out LLAMA_MODEL and LLAMA_SPEC_TYPE in .env first.
-docker compose run --rm llama-convert download qwopus3.6-27b --quant Q3_K_M
+docker compose run --rm llama-convert download qwopus3.6-27b --quant IQ4_NL
 ```
 
 > **Gated models:** set `HF_TOKEN=your_token` in `.env`
@@ -226,10 +226,10 @@ response = client.chat.completions.create(
 docker compose run --rm llama-convert list
 
 # MTP-capable GGUF (recommended — from safetensors, includes nextn heads)
-docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant Q3_K_M --mtp
+docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_NL --mtp
 
 # Standard prebuilt GGUF (faster setup, no MTP)
-docker compose run --rm llama-convert download qwopus3.6-27b --quant Q3_K_M
+docker compose run --rm llama-convert download qwopus3.6-27b --quant IQ4_NL
 
 # Re-quantize an existing GGUF already in ./models
 docker compose run --rm llama-convert convert /models/qwopus3.6-27b-fp16.gguf --quant Q4_K_M

@@ -97,7 +97,7 @@ SLOT_SAVE_PATH=${LLAMA_SLOT_SAVE_PATH:-}
 # Requires: MTP-capable GGUF (model must include nextn/MTP layers).
 # Compatible with MMPROJ/vision (MTP pauses during image processing, resumes for text).
 # RTX 3090 benchmark: ~47-55 TPS vs ~22-25 TPS without MTP (Qwen3.6-27B Q4_K_M, 164K ctx).
-# Requires MTP tensors in the GGUF — produce via: docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant Q3_K_M
+# Requires MTP tensors in the GGUF — produce via: docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_NL
 SPEC_TYPE=${LLAMA_SPEC_TYPE:-}
 SPEC_DRAFT_N_MAX=${LLAMA_SPEC_DRAFT_N_MAX:-}
 SPEC_DRAFT_P_MIN=${LLAMA_SPEC_DRAFT_P_MIN:-}
@@ -105,6 +105,10 @@ SPEC_DRAFT_P_MIN=${LLAMA_SPEC_DRAFT_P_MIN:-}
 # Defaults to f16 if unset. Set to match main model's KV types to save VRAM.
 SPEC_DRAFT_TYPE_K=${LLAMA_SPEC_DRAFT_TYPE_K:-}
 SPEC_DRAFT_TYPE_V=${LLAMA_SPEC_DRAFT_TYPE_V:-}
+
+# ngram-mod speculative decoding alongside MTP (--spec-default).
+# Provides a fast secondary draft path for tokens MTP doesn't predict.
+SPEC_DEFAULT=${LLAMA_SPEC_DEFAULT:-}
 
 # KV cache reuse via shifting (--cache-reuse). When two requests share a common prefix,
 # the server reuses cached KV entries instead of recomputing. Min chunk size in tokens.
@@ -262,6 +266,9 @@ if [ -n "$SPEC_TYPE" ] && [ "$SPEC_TYPE" != "none" ]; then
         fi
     fi
 fi
+if [ "$SPEC_DEFAULT" = "on" ]; then
+    echo "  Spec Default (ngram-mod): enabled"
+fi
 
 # Build multimodal flags
 MMFLAGS=""
@@ -320,6 +327,7 @@ exec llama-server \
     ${SPEC_DRAFT_P_MIN:+--spec-draft-p-min "$SPEC_DRAFT_P_MIN"} \
     ${SPEC_DRAFT_TYPE_K:+--spec-draft-type-k "$SPEC_DRAFT_TYPE_K"} \
     ${SPEC_DRAFT_TYPE_V:+--spec-draft-type-v "$SPEC_DRAFT_TYPE_V"} \
+    $([ "$SPEC_DEFAULT" = "on" ] && echo "--spec-default") \
     ${CACHE_REUSE:+--cache-reuse "$CACHE_REUSE"} \
     ${ROPE_SCALING:+--rope-scaling "$ROPE_SCALING"} \
     ${TRIATTENTION_STATS:+--triattention-stats "$TRIATTENTION_STATS"} \
