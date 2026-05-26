@@ -2,7 +2,7 @@
 """Merge .env.default into .env, adding/updating non-secret variables only.
 
 Supports multiline values (quoted across multiple lines).
-Auto-generates token variables (LLAMA_API_KEY, MCP_API_KEY) if empty.
+Auto-generates token variables (SGLANG_API_KEY, MCP_API_KEY) if empty.
 
 Usage:
     python sync-env.py              # use defaults, auto-generate empty tokens
@@ -26,12 +26,12 @@ DEFAULT_SECRETS = [
     "HF_TOKEN",
     "SEARCH_API_KEY",
     "MCP_API_KEY",
-    "LLAMA_API_KEY",
+    "SGLANG_API_KEY",
 ]
 
 # Variables that are auto-generated as random tokens.
 # These are treated as secrets but get a generated value if empty.
-AUTO_GENERATE_TOKENS = frozenset({"LLAMA_API_KEY", "MCP_API_KEY"})
+AUTO_GENERATE_TOKENS = frozenset({"SGLANG_API_KEY", "MCP_API_KEY"})
 
 # KEY=VALUE on a single line (value may be quoted, empty, or contain = signs)
 VAR_RE = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
@@ -212,7 +212,7 @@ def main():
     parser.add_argument("--default-file", default=".env.default")
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--regenerate", action="store_true",
-                        help="Force regenerate auto-generated token variables (LLAMA_API_KEY, MCP_API_KEY)")
+                        help="Force regenerate auto-generated token variables (SGLANG_API_KEY, MCP_API_KEY)")
     args = parser.parse_args()
 
     # Build secret set

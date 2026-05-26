@@ -1,5 +1,5 @@
 networks:
-  # Shared network for llama-server and MCP server to communicate.
+  # Shared network for sglang-server and MCP server to communicate.
   # Note: NOT internal — cloudflared needs internet access to connect to Cloudflare.
   llama-net:
 
@@ -14,25 +14,27 @@ services:
   # Then prepare a model (output lands in ./models via the shared volume):
   #
   #   Pre-built GGUF on HuggingFace:
-  #     docker compose run --rm llama-convert download qwen3.5-27b --quant Q4_K_M
+  #     docker compose run --rm llama-convert download qwen3.5-4b --quant Q4_K_M
   #
   #   No pre-built quant but fp16 GGUF exists (quantized locally):
-  #     docker compose run --rm llama-convert download qwen3.6-27b --quant TQ2_0
+  #     docker compose run --rm llama-convert download qwen3.6-27b --quant IQ4_XS
   #
   #   Safetensors-only repo (convert → fp16 GGUF → quantize):
-  #     docker compose run --rm llama-convert convert-st qwen3.6-35b-a3b --quant TQ2_0
+  #     docker compose run --rm llama-convert convert-st qwen3.6-27b --quant IQ4_XS --mtp
   #
   #   Re-quantize an existing GGUF already in ./models:
   #     docker compose run --rm llama-convert convert /models/model-Q8_0.gguf --quant Q4_K_M
   #
+  #   List all available models:
+  #     docker compose run --rm llama-convert list
+  #
   # After preparation, start the server as normal:
-  #   docker compose up llama-server
+  #   docker compose up sglang-server
   # ---------------------------------------------------------------------------
   llama-convert:
     build:
       context: .
-      dockerfile: Dockerfile
-      target: convert
+      dockerfile: Dockerfile.convert
     image: llama-convert:latest
     container_name: llama-convert
     profiles: ["convert"]
@@ -58,17 +60,19 @@ services:
     # No GPU needed — conversion and quantization run on CPU.
 
   # ---------------------------------------------------------------------------
-  # llama.cpp inference server (TurboQuant fork)
+  # SGLang inference server — JEF1056/sglang-turboquant + TurboQuant PR #23135
   # Exposed publicly via Cloudflare Tunnel at chat.jessfan.com with
   # Cloudflare Access authentication.
+  #
+  # Pre-requisite: merge sgl-project/sglang PR #23135 into JEF1056/sglang-turboquant
+  # on GitHub before running `docker compose build sglang-server`.
   # ---------------------------------------------------------------------------
-  llama-server:
+  sglang-server:
     build:
       context: .
       dockerfile: Dockerfile
-      target: runtime
-    image: llama-server:latest
-    container_name: llama-server
+    image: sglang-server:latest
+    container_name: sglang-server
 
     # No host port mapping — accessible only via Cloudflare Tunnel.
 
@@ -77,120 +81,58 @@ services:
 
     gpus: all
 
+    # Required for large model shared memory and inter-GPU communication.
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
 
-      LLAMA_HOST: ${LLAMA_HOST:-0.0.0.0}
-      LLAMA_PORT: ${LLAMA_PORT:-8080}
+      SGLANG_HOST: ${SGLANG_HOST:-0.0.0.0}
+      SGLANG_PORT: ${SGLANG_PORT:-30000}
+      SGLANG_API_KEY: ${SGLANG_API_KEY:-}
 
-      LLAMA_THREADS: ${LLAMA_THREADS:-8}
-      LLAMA_THREADS_BATCH: ${LLAMA_THREADS_BATCH:-10}
-      LLAMA_CTX_SIZE: ${LLAMA_CTX_SIZE:-200000}
-      LLAMA_BATCH_SIZE: ${LLAMA_BATCH_SIZE:-8192}
-      LLAMA_UBATCH_SIZE: ${LLAMA_UBATCH_SIZE:-2048}
-      LLAMA_GPU_LAYERS: ${LLAMA_GPU_LAYERS:-99}
-      LLAMA_MAX_TOKENS: ${LLAMA_MAX_TOKENS:--1}
-      LLAMA_TOP_P: ${LLAMA_TOP_P:-0.95}
-      LLAMA_TEMP: ${LLAMA_TEMP:-0.6}
-      LLAMA_TOP_K: ${LLAMA_TOP_K:-20}
-      LLAMA_MIN_P: ${LLAMA_MIN_P:-0.0}
-      LLAMA_PRESENCE_PENALTY: ${LLAMA_PRESENCE_PENALTY:-0.0}
-      LLAMA_REPETITION_PENALTY: ${LLAMA_REPETITION_PENALTY:-1.0}
-      LLAMA_STOP: ${LLAMA_STOP:-}
+      SGLANG_MODEL_PATH: ${SGLANG_MODEL_PATH:-}
+      SGLANG_TOKENIZER_PATH: ${SGLANG_TOKENIZER_PATH:-}
+      SGLANG_SERVED_MODEL_NAME: ${SGLANG_SERVED_MODEL_NAME:-}
 
-      LLAMA_MODEL: ${LLAMA_MODEL:-}
-      LLAMA_MMPROJ: ${LLAMA_MMPROJ:-}
-      LLAMA_IMAGE: ${LLAMA_IMAGE:-}
+      SGLANG_CONTEXT_LENGTH: ${SGLANG_CONTEXT_LENGTH:-131072}
+      SGLANG_MEM_FRACTION_STATIC: ${SGLANG_MEM_FRACTION_STATIC:-0.85}
+      SGLANG_MAX_RUNNING_REQUESTS: ${SGLANG_MAX_RUNNING_REQUESTS:-3}
+      SGLANG_TP_SIZE: ${SGLANG_TP_SIZE:-1}
+      SGLANG_DTYPE: ${SGLANG_DTYPE:-auto}
+      SGLANG_KV_CACHE_DTYPE: ${SGLANG_KV_CACHE_DTYPE:-auto}
+      SGLANG_CHUNKED_PREFILL_SIZE: ${SGLANG_CHUNKED_PREFILL_SIZE:-}
 
-      MODEL_NAME: ${MODEL_NAME:-}
-      QUANT: ${QUANT:-}
-      TQ_QUANT: ${TQ_QUANT:-}
-
-      LLAMA_CACHE_TYPE_K: ${LLAMA_CACHE_TYPE_K:-turbo3}
-      LLAMA_CACHE_TYPE_V: ${LLAMA_CACHE_TYPE_V:-turbo4}
-      LLAMA_FLASH_ATTN: ${LLAMA_FLASH_ATTN:-on}
-
-      LLAMA_PARALLEL: ${LLAMA_PARALLEL:-3}
-      LLAMA_NO_MMAP: ${LLAMA_NO_MMAP:-off}
-      LLAMA_DIRECT_IO: ${LLAMA_DIRECT_IO:-on}
-      LLAMA_REASONING: ${LLAMA_REASONING:-on}
-      LLAMA_PRESERVE_THINKING: ${LLAMA_PRESERVE_THINKING:-on}
-
-      LLAMA_TS: ${LLAMA_TS:-}
-      LLAMA_NCMOE: ${LLAMA_NCMOE:-}
-
-      LLAMA_NO_KV_OFFLOAD: ${LLAMA_NO_KV_OFFLOAD:-off}
-      LLAMA_KV_UNIFIED: ${LLAMA_KV_UNIFIED:-on}
-      LLAMA_CACHE_RAM: ${LLAMA_CACHE_RAM:-}
-      LLAMA_CLEAR_IDLE: ${LLAMA_CLEAR_IDLE:-on}
-      LLAMA_CHECKPOINT_EVERY_N_TOKENS: ${LLAMA_CHECKPOINT_EVERY_N_TOKENS:-}
-      LLAMA_CTX_CHECKPOINTS: ${LLAMA_CTX_CHECKPOINTS:-}
-
-      # MTP speculative decoding
-      LLAMA_SPEC_TYPE: ${LLAMA_SPEC_TYPE:-}
-      LLAMA_SPEC_DRAFT_N_MAX: ${LLAMA_SPEC_DRAFT_N_MAX:-}
-      LLAMA_SPEC_DRAFT_P_MIN: ${LLAMA_SPEC_DRAFT_P_MIN:-}
-      LLAMA_SPEC_DRAFT_TYPE_K: ${LLAMA_SPEC_DRAFT_TYPE_K:-}
-      LLAMA_SPEC_DRAFT_TYPE_V: ${LLAMA_SPEC_DRAFT_TYPE_V:-}
-      LLAMA_SPEC_DEFAULT: ${LLAMA_SPEC_DEFAULT:-}
-
-      # KV cache reuse via shifting
-      LLAMA_CACHE_REUSE: ${LLAMA_CACHE_REUSE:-}
-
-      # RoPE scaling method
-      LLAMA_ROPE_SCALING: ${LLAMA_ROPE_SCALING:-}
-
-      # WebUI config file — supplies default MCP server + agentic turn limit
-      LLAMA_WEBUI_CONFIG_FILE: ${LLAMA_WEBUI_CONFIG_FILE:-}
-
-      # CUDA diagnostics — forces synchronous kernel execution so illegal memory
-      # access surfaces at the offending launch rather than a later sync point.
-      CUDA_LAUNCH_BLOCKING: "1"
-
-      # CUDA performance
-      GGML_CUDA_GRAPH_OPT: ${GGML_CUDA_GRAPH_OPT:-}
-      CUDA_SCALE_LAUNCH_QUEUES: ${CUDA_SCALE_LAUNCH_QUEUES:-}
-
-      # DRY sampling (Don't Repeat Yourself) — anti-loop protection for reasoning models
-      LLAMA_DRY_MULTIPLIER: ${LLAMA_DRY_MULTIPLIER:-0}
-      LLAMA_DRY_BASE: ${LLAMA_DRY_BASE:-1.75}
-      LLAMA_DRY_ALLOWED_LENGTH: ${LLAMA_DRY_ALLOWED_LENGTH:-128}
-      LLAMA_DRY_PENALTY_LAST_N: ${LLAMA_DRY_PENALTY_LAST_N:-2048}
-      
-      # Reasoning budget — hard cap on tokens inside <think>…</think> per turn
-      LLAMA_REASONING_BUDGET: ${LLAMA_REASONING_BUDGET:-4096}
-      
-      # KV cache slot persistence — saves/restores slot state to disk so
-      # per-conversation KV caches survive server restarts.
-      LLAMA_SLOT_SAVE_PATH: ${LLAMA_SLOT_SAVE_PATH:-/models/slots}
-
-      # Optional API key — when set, all requests to the server must include
-      # Authorization: Bearer <key>. Leave empty for unauthenticated access.
-      # When exposed via Cloudflare Access, this provides an additional
-      # layer of API-level authentication.
-      LLAMA_API_KEY: ${LLAMA_API_KEY:-}
+      SGLANG_REASONING_PARSER: ${SGLANG_REASONING_PARSER:-}
+      SGLANG_SPECULATIVE_ALGO: ${SGLANG_SPECULATIVE_ALGO:-}
+      SGLANG_SPECULATIVE_NUM_STEPS: ${SGLANG_SPECULATIVE_NUM_STEPS:-3}
+      SGLANG_SPECULATIVE_EAGLE_TOPK: ${SGLANG_SPECULATIVE_EAGLE_TOPK:-}
+      SGLANG_SPECULATIVE_NUM_DRAFT_TOKENS: ${SGLANG_SPECULATIVE_NUM_DRAFT_TOKENS:-4}
 
     networks:
       - llama-net
     restart: unless-stopped
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${LLAMA_PORT:-8080}/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:${SGLANG_PORT:-30000}/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 300s  # allow up to 5 min for large model to load from disk
 
   # ---------------------------------------------------------------------------
-  # Cloudflare Tunnel — exposes both llama-server and mcp-search-server publicly:
-  #   - chat.jessfan.com → http://llama-server:8080
-  #   - mcp.jessfan.com → http://mcp-search-server:3100
+  # Cloudflare Tunnel — exposes both sglang-server and mcp-search-server publicly:
+  #   - chat.jessfan.com → http://sglang-server:30000
+  #   - mcp.jessfan.com  → http://mcp-search-server:3100
   # Both use Cloudflare Access authentication. Makes an outbound connection to Cloudflare.
   #
   # One-time setup in Cloudflare Zero Trust → Networks → Tunnels:
   #   1. Create tunnel → Docker → copy token to CF_TUNNEL_TOKEN in .env
-  #   2. Add Public Hostname: chat.jessfan.com → http://llama-server:8080
+  #   2. Add Public Hostname: chat.jessfan.com → http://sglang-server:30000
   #   3. Add Public Hostname: mcp.jessfan.com → http://mcp-search-server:3100
   #   (Cloudflare creates the CNAME DNS records automatically.)
   #
@@ -212,7 +154,7 @@ services:
       - llama-net
     restart: unless-stopped
     depends_on:
-      - llama-server
+      - sglang-server
       - mcp-search-server
 
   # ---------------------------------------------------------------------------
