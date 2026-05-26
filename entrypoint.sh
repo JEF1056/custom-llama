@@ -20,6 +20,11 @@ if [ ! -f "$MODELS_PRESET" ]; then
     exit 1
 fi
 
+# Create slot-save-path directories declared in the preset
+grep -E '^\s*slot-save-path\s*=' "$MODELS_PRESET" | sed 's/.*=\s*//' | while IFS= read -r slot_dir; do
+    mkdir -p "$slot_dir"
+done
+
 echo "Starting llama-server (router mode)"
 echo "  Host:              $HOST:$PORT"
 echo "  Preset:            $MODELS_PRESET"
