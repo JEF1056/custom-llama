@@ -6,7 +6,7 @@ set -e
 # Pass extra flags directly: docker compose run sglang-server --log-requests
 
 HOST=${SGLANG_HOST:-0.0.0.0}
-PORT=${SGLANG_PORT:-30000}
+PORT=${SGLANG_PORT:-8080}
 MODEL_PATH=${SGLANG_MODEL_PATH:-}
 TOKENIZER_PATH=${SGLANG_TOKENIZER_PATH:-}
 SERVED_MODEL_NAME=${SGLANG_SERVED_MODEL_NAME:-}

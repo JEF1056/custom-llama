@@ -92,7 +92,7 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
 
       SGLANG_HOST: ${SGLANG_HOST:-0.0.0.0}
-      SGLANG_PORT: ${SGLANG_PORT:-30000}
+      SGLANG_PORT: ${SGLANG_PORT:-8080}
       SGLANG_API_KEY: ${SGLANG_API_KEY:-}
 
       SGLANG_MODEL_PATH: ${SGLANG_MODEL_PATH:-}
@@ -118,7 +118,7 @@ services:
     restart: unless-stopped
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${SGLANG_PORT:-30000}/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:${SGLANG_PORT:-8080}/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -126,13 +126,13 @@ services:
 
   # ---------------------------------------------------------------------------
   # Cloudflare Tunnel — exposes both sglang-server and mcp-search-server publicly:
-  #   - chat.jessfan.com → http://sglang-server:30000
+  #   - chat.jessfan.com → http://sglang-server:8080
   #   - mcp.jessfan.com  → http://mcp-search-server:3100
   # Both use Cloudflare Access authentication. Makes an outbound connection to Cloudflare.
   #
   # One-time setup in Cloudflare Zero Trust → Networks → Tunnels:
   #   1. Create tunnel → Docker → copy token to CF_TUNNEL_TOKEN in .env
-  #   2. Add Public Hostname: chat.jessfan.com → http://sglang-server:30000
+  #   2. Add Public Hostname: chat.jessfan.com → http://sglang-server:8080
   #   3. Add Public Hostname: mcp.jessfan.com → http://mcp-search-server:3100
   #   (Cloudflare creates the CNAME DNS records automatically.)
   #

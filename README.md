@@ -29,14 +29,14 @@ docker compose run --rm llama-convert download qwen3.5-4b --quant Q4_K_M
 docker compose up -d sglang-server mcp-search-server
 ```
 
-Port 30000 is exposed via `docker-compose.override.yml` (gitignored) for local dev. Test with:
+Port 8080 is exposed via `docker-compose.override.yml` (gitignored) for local dev. Test with:
 
 ```bash
-curl http://localhost:30000/health
-curl http://localhost:30000/v1/models
+curl http://localhost:8080/health
+curl http://localhost:8080/v1/models
 ```
 
-Any OpenAI-compatible client (Cursor, Roo Code, opencode, etc.) points at `http://localhost:30000/v1`.
+Any OpenAI-compatible client (Cursor, Roo Code, opencode, etc.) points at `http://localhost:8080/v1`.
 
 ---
 
@@ -76,18 +76,18 @@ Plain `ubuntu:22.04`, zero CUDA dependency. Builds `llama-quantize` CPU-only fro
                              │ Cloudflare Access (auth required)
               ┌──────────────▼────────────────────┐
               │         Host Machine               │
-              │  cloudflared → sglang-server:30000 │
+              │  cloudflared → sglang-server:8080 │
               └───────────────┬────────────────────┘
                               │ llama-net (internal)
                     ┌─────────────────────────┐
-                    │  sglang-server :30000   │
+                    │  sglang-server :8080   │
                     │  mcp-search-server :3100│
                     └─────────────────────────┘
 ```
 
 | Interface | URL | Auth |
 |---|---|---|
-| **Local** | `http://localhost:30000/v1` | None (requires `docker-compose.override.yml`) |
+| **Local** | `http://localhost:8080/v1` | None (requires `docker-compose.override.yml`) |
 | **Public** | `https://chat.jessfan.com/v1` | Cloudflare Access (Google OAuth / Email) |
 
 ---
@@ -103,7 +103,7 @@ On GitHub, merge [sgl-project/sglang PR #23135](https://github.com/sgl-project/s
 1. Go to [Cloudflare Zero Trust](https://one.dash.cloudflare.com/) → **Networks → Tunnels**
 2. Click **Create a tunnel** → **Docker** → copy the token
 3. Paste into `.env` as `CF_TUNNEL_TOKEN`
-4. Add Public Hostname: `chat.jessfan.com` → `http://sglang-server:30000`
+4. Add Public Hostname: `chat.jessfan.com` → `http://sglang-server:8080`
 
 ### Step 3: Configure `.env`
 
@@ -167,10 +167,10 @@ docker compose logs -f cloudflared      # should show "connected"
 ### Step 6: Test
 
 ```bash
-curl http://localhost:30000/health
-curl http://localhost:30000/v1/models
+curl http://localhost:8080/health
+curl http://localhost:8080/v1/models
 
-curl -X POST http://localhost:30000/v1/chat/completions \
+curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $SGLANG_API_KEY" \
   -d '{"model": "qwen3.6-27b", "messages": [{"role": "user", "content": "Hello"}]}'
@@ -221,7 +221,7 @@ response = client.chat.completions.create(
 
 | Service | Purpose |
 |---|---|
-| `sglang-server` | SGLang inference server (port 30000) |
+| `sglang-server` | SGLang inference server (port 8080) |
 | `cloudflared` | Cloudflare Tunnel — exposes sglang-server publicly |
 | `llama-convert` | Model prep tool (download, convert, quantize) — profile: `convert` |
 | `mcp-search-server` | Web search MCP tool (port 3100) |
