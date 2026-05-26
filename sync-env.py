@@ -195,8 +195,8 @@ def sync_env_pair(default_file: Path, env_file: Path, secrets: set[str],
             for key in new_keys:
                 out_lines.append(f"{key}={merged[key]}")
     else:
-        # No existing .env — just copy defaults
-        out_lines = default_file.read_text(encoding="utf-8").splitlines()
+        # No existing .env — write variables only, no comments
+        out_lines = [f"{k}={v}" for k, v in merged.items()]
 
     env_file.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
     print(f"{prefix} ✓ Wrote {env_file}")
