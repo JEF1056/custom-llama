@@ -32,7 +32,7 @@ RUN cmake \
   -DLLAMA_BUILD_EXAMPLES=OFF \
   -DLLAMA_BUILD_TOOLS=ON \
   -DLLAMA_BUILD_TESTS_CXX=OFF \
-  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_EXE_LINKER_FLAGS="-Wl,--allow-shlib-undefined" \
   -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--allow-shlib-undefined" \
   . && \

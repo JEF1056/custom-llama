@@ -144,6 +144,10 @@ services:
       # WebUI config file — supplies default MCP server + agentic turn limit
       LLAMA_WEBUI_CONFIG_FILE: ${LLAMA_WEBUI_CONFIG_FILE:-}
 
+      # CUDA diagnostics — forces synchronous kernel execution so illegal memory
+      # access surfaces at the offending launch rather than a later sync point.
+      CUDA_LAUNCH_BLOCKING: "1"
+
       # CUDA performance
       GGML_CUDA_GRAPH_OPT: ${GGML_CUDA_GRAPH_OPT:-}
       CUDA_SCALE_LAUNCH_QUEUES: ${CUDA_SCALE_LAUNCH_QUEUES:-}
