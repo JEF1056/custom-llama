@@ -2,7 +2,7 @@
 
 A self-hosted LLM inference server built around [llama.cpp (TurboQuant + MTP fork)](https://github.com/JEF1056/llama-cpp-turboquant/tree/llama-next). Exposed publicly via Cloudflare Tunnel with Cloudflare Access authentication.
 
-**Default model:** [Qwen3.5-27B](https://huggingface.co/unsloth/Qwen3.5-27B-GGUF) — a reasoning model with native MTP speculative decoding support.
+**Default model:** [qwen3.6-27B](https://huggingface.co/unsloth/qwen3.6-27B-GGUF) — a reasoning model with native MTP speculative decoding support.
 
 ---
 
@@ -13,7 +13,7 @@ No Cloudflare or secrets needed — just the inference server on this machine.
 ```bash
 python sync-env.py
 docker compose build llama-server llama-convert mcp-search-server
-docker compose run --rm llama-convert convert-st qwen3.5-27b --quant IQ4_NL --mtp
+docker compose run --rm llama-convert convert-st qwen3.6-27b --quant IQ4_NL --mtp
 docker compose up -d llama-server mcp-search-server
 ```
 
@@ -39,7 +39,7 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
 
 > **Without MTP:** if you want a faster first run (skip the safetensors download), use the prebuilt GGUF instead.
 > Comment out `LLAMA_MODEL` and `LLAMA_SPEC_TYPE` in `.env`, then:
-> `docker compose run --rm llama-convert download qwen3.5-27b --quant IQ4_NL`
+> `docker compose run --rm llama-convert download qwen3.6-27b --quant IQ4_NL`
 
 ---
 
@@ -47,8 +47,8 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
 
 | Property | Value |
 |---|---|
-| Model | Qwen3.5-27B |
-| Base | Qwen3.5-27B |
+| Model | qwen3.6-27B |
+| Base | qwen3.6-27B |
 | Quant | IQ4_NL (~15 GB) |
 | Architecture | Dense transformer, 64 GQA attention layers |
 | KV cache layers | 64 of 64 |
@@ -129,7 +129,7 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
 ### Step 3: Configure your `.env` file
 
 ```bash
-cp .env.default .env
+python sync-env.py
 ```
 
 Edit `.env` and set at minimum:
@@ -158,13 +158,13 @@ docker compose build llama-convert
 
 # Option A (recommended): MTP-capable GGUF from safetensors — ~2–2.5× faster generation
 # Downloads safetensors, converts to fp16 GGUF, quantizes, cleans up.
-docker compose run --rm llama-convert convert-st qwen3.5-27b --quant IQ4_NL --mtp --keep-intermediate
-# Output: ./models/qwen3.5-27b-IQ4_NL-mtp.gguf
+docker compose run --rm llama-convert convert-st qwen3.6-27b --quant IQ4_NL --mtp --keep-intermediate
+# Output: ./models/qwen3.6-27b-IQ4_NL-mtp.gguf
 # .env.default already points LLAMA_MODEL at this file and sets LLAMA_SPEC_TYPE=mtp.
 
 # Option B (faster setup, no MTP): prebuilt GGUF from HuggingFace
 # Comment out LLAMA_MODEL and LLAMA_SPEC_TYPE in .env first.
-docker compose run --rm llama-convert download qwen3.5-27b --quant IQ4_NL
+docker compose run --rm llama-convert download qwen3.6-27b --quant IQ4_NL
 ```
 
 > **Gated models:** set `HF_TOKEN=your_token` in `.env`
@@ -194,7 +194,7 @@ curl -H "CF-Access-Client-Id: <id>" \
      -H "CF-Access-Client-Secret: <secret>" \
      https://api.jessfan.com/v1/chat/completions \
      -H "Content-Type: application/json" \
-     -d '{"model": "qwen3.5-27b", "messages": [{"role": "user", "content": "Hello"}]}'
+     -d '{"model": "qwen3.6-27b", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
 ### Step 7: Connect an OpenAI-compatible client
@@ -212,7 +212,7 @@ client = openai.OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="qwen3.5-27b",
+    model="qwen3.6-27b",
     messages=[{"role": "user", "content": "Hello"}],
 )
 ```
@@ -226,13 +226,13 @@ response = client.chat.completions.create(
 docker compose run --rm llama-convert list
 
 # MTP-capable GGUF (recommended — from safetensors, includes nextn heads)
-docker compose run --rm llama-convert convert-st qwen3.5-27b --quant IQ4_NL --mtp
+docker compose run --rm llama-convert convert-st qwen3.6-27b --quant IQ4_NL --mtp
 
 # Standard prebuilt GGUF (faster setup, no MTP)
-docker compose run --rm llama-convert download qwen3.5-27b --quant IQ4_NL
+docker compose run --rm llama-convert download qwen3.6-27b --quant IQ4_NL
 
 # Re-quantize an existing GGUF already in ./models
-docker compose run --rm llama-convert convert /models/qwen3.5-27b-fp16.gguf --quant Q4_K_M
+docker compose run --rm llama-convert convert /models/qwen3.6-27b-fp16.gguf --quant Q4_K_M
 ```
 
 ---

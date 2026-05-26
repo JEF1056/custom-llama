@@ -22,7 +22,7 @@
   "disableAutoScroll": false,
   "alwaysShowSidebarOnDesktop": true,
   "showRawModelNames": false,
-  "alwaysShowAgenticTurns": true,
+  "alwaysShowAgenticTurns": false,
   "samplers": "",
   "backend_sampling": false,
   "agenticMaxTurns": 100,
@@ -33,6 +33,5 @@
   "showRawOutputSwitch": false,
   "custom": "",
   "mcpRequestTimeoutSeconds": 300,
-  "showSystemMessage": true,
-  "mcpServers": "[{\"url\":\"https://mcp.jessfan.com/mcp\",\"transport\":\"streamable_http\"}]"
+  "showSystemMessage": true
 }

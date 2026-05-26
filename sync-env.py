@@ -2,14 +2,18 @@
 """Merge .env.default into .env, adding/updating non-secret variables only.
 
 Supports multiline values (quoted across multiple lines).
+Auto-generates token variables (LLAMA_API_KEY, MCP_API_KEY) if empty.
 
 Usage:
-    python sync-env.py              # use defaults
+    python sync-env.py              # use defaults, auto-generate empty tokens
+    python sync-env.py --regenerate # force regenerate all token variables
     python sync-env.py --secrets CF_TUNNEL_TOKEN,CF_ACCESS_HOSTNAME,MY_SECRET
     python sync-env.py --secrets-file secrets.txt  # one var name per line
 """
 import argparse
+import os
 import re
+import secrets
 import sys
 from pathlib import Path
 
@@ -21,7 +25,13 @@ DEFAULT_SECRETS = [
     "CF_ACCESS_GOOGLE_CLIENT_SECRET",
     "HF_TOKEN",
     "SEARCH_API_KEY",
+    "MCP_API_KEY",
+    "LLAMA_API_KEY",
 ]
+
+# Variables that are auto-generated as random tokens.
+# These are treated as secrets but get a generated value if empty.
+AUTO_GENERATE_TOKENS = frozenset({"LLAMA_API_KEY", "MCP_API_KEY"})
 
 # KEY=VALUE on a single line (value may be quoted, empty, or contain = signs)
 VAR_RE = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
@@ -87,55 +97,61 @@ def merge(defaults: dict[str, str], current: dict[str, str], secrets: set[str]) 
     return result
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Sync .env.default → .env (preserves secrets)")
-    parser.add_argument("--secrets", default=",".join(DEFAULT_SECRETS),
-                        help="Comma-separated list of secret variable names")
-    parser.add_argument("--secrets-file", help="File with one secret var name per line")
-    parser.add_argument("--dry-run", action="store_true", help="Show changes without writing")
-    parser.add_argument("--default-file", default=".env.default")
-    parser.add_argument("--env-file", default=".env")
-    args = parser.parse_args()
+def generate_token() -> str:
+    """Generate a cryptographically secure random token."""
+    return secrets.token_urlsafe(32)
 
-    # Build secret set
-    secrets = set(v.strip() for v in args.secrets.split(",") if v.strip())
-    if args.secrets_file:
-        secrets.update(line.strip() for line in Path(args.secrets_file).read_text(encoding="utf-8").splitlines() if line.strip())
 
-    defaults = parse_env(Path(args.default_file))
-    current  = parse_env(Path(args.env_file))
+def sync_env_pair(default_file: Path, env_file: Path, secrets: set[str],
+                   regenerate: bool, dry_run: bool) -> bool:
+    """Sync a single .env.default → .env pair. Returns True if changes were made."""
+    defaults = parse_env(default_file)
+    current = parse_env(env_file)
 
     if not defaults:
-        print(f"No variables found in {args.default_file}")
-        sys.exit(1)
+        print(f"  ⚠ No variables found in {default_file}")
+        return False
 
+    # Auto-generate or regenerate tokens
+    generated = {}
+    for key in AUTO_GENERATE_TOKENS:
+        if key in defaults:
+            current_val = current.get(key, "")
+            if regenerate or not current_val:
+                generated[key] = generate_token()
+
+    # Merge defaults into current, then overlay generated tokens
     merged = merge(defaults, current, secrets)
+    merged.update(generated)
 
     # Show diff
     added = [k for k in merged if k not in current]
     updated = [k for k in merged if k in current and k not in secrets and merged[k] != current[k]]
+    regenerated = list(generated.keys())
     skipped = [k for k in defaults if k in current and k in secrets and defaults[k] != current[k]]
 
+    prefix = f"  [{env_file}]"
     if added:
-        print(f"Variables to add: {', '.join(sorted(added))}")
+        print(f"{prefix} Variables to add: {', '.join(sorted(added))}")
     if updated:
-        print(f"Variables to update: {', '.join(sorted(updated))}")
+        print(f"{prefix} Variables to update: {', '.join(sorted(updated))}")
+    if regenerated:
+        print(f"{prefix} Tokens generated: {', '.join(sorted(regenerated))}")
     if skipped:
-        print(f"Secrets preserved: {', '.join(sorted(skipped))}")
-    if not added and not updated and not skipped:
-        print("No changes needed.")
-        return
+        print(f"{prefix} Secrets preserved: {', '.join(sorted(skipped))}")
+    if not added and not updated and not regenerated and not skipped:
+        print(f"{prefix} No changes needed.")
+        return False
 
-    if args.dry_run:
-        print("\n(Dry run — no changes written)")
-        return
+    if dry_run:
+        return True
 
     # Rebuild the .env file: only variable assignments, no comments
     out_lines: list[str] = []
     seen_keys: set[str] = set()
 
-    if Path(args.env_file).exists():
-        raw_lines = Path(args.env_file).read_text(encoding="utf-8").splitlines()
+    if env_file.exists():
+        raw_lines = env_file.read_text(encoding="utf-8").splitlines()
         i = 0
         while i < len(raw_lines):
             line = raw_lines[i]
@@ -180,10 +196,48 @@ def main():
                 out_lines.append(f"{key}={merged[key]}")
     else:
         # No existing .env — just copy defaults
-        out_lines = Path(args.default_file).read_text(encoding="utf-8").splitlines()
+        out_lines = default_file.read_text(encoding="utf-8").splitlines()
 
-    Path(args.env_file).write_text("\n".join(out_lines) + "\n", encoding="utf-8")
-    print(f"Done — wrote {args.env_file}")
+    env_file.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+    print(f"{prefix} ✓ Wrote {env_file}")
+    return True
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Sync .env.default → .env (preserves secrets)")
+    parser.add_argument("--secrets", default=",".join(DEFAULT_SECRETS),
+                        help="Comma-separated list of secret variable names")
+    parser.add_argument("--secrets-file", help="File with one secret var name per line")
+    parser.add_argument("--dry-run", action="store_true", help="Show changes without writing")
+    parser.add_argument("--default-file", default=".env.default")
+    parser.add_argument("--env-file", default=".env")
+    parser.add_argument("--regenerate", action="store_true",
+                        help="Force regenerate auto-generated token variables (LLAMA_API_KEY, MCP_API_KEY)")
+    args = parser.parse_args()
+
+    # Build secret set
+    secrets = set(v.strip() for v in args.secrets.split(",") if v.strip())
+    if args.secrets_file:
+        secrets.update(line.strip() for line in Path(args.secrets_file).read_text(encoding="utf-8").splitlines() if line.strip())
+
+    base_dir = Path(args.default_file).parent
+
+    # ── Sync pairs: (default_file, env_file) ──────────────────────────────
+    pairs = [
+        (base_dir / args.default_file, base_dir / args.env_file),
+        # MCP server has its own .env.default → .env
+        (Path("mcp-search-server") / ".env.default", Path("mcp-search-server") / ".env"),
+    ]
+
+    changed = False
+    for default_file, env_file in pairs:
+        if not default_file.exists():
+            print(f"  ⚠ Skipping {default_file} — not found")
+            continue
+        changed |= sync_env_pair(default_file, env_file, secrets, args.regenerate, args.dry_run)
+
+    if not changed and not args.dry_run:
+        print("No changes needed.")
 
 
 if __name__ == "__main__":

@@ -97,11 +97,6 @@ MODELS = {
         "size_gb": 14,
         "mmproj": "mmproj-F16.gguf"
     },
-    "qwen3.5-27b": {
-        "hf_repo": "unsloth/Qwen3.5-27B-GGUF",
-        "description": "Qwen 3.5 27B (~14GB)",
-        "size_gb": 14,
-    },
     "qwen3.6-35b-a3b": {
         "hf_repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
         "fp16_repo": "Qwen/Qwen3.6-35B-A3B",
