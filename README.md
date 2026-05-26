@@ -1,8 +1,8 @@
 # custom-llama
 
-A self-hosted LLM inference server built around [llama.cpp (TurboQuant + MTP fork)](https://github.com/JEF1056/llama-cpp-turboquant/tree/llama-next). Exposed publicly via Cloudflare Tunnel with Cloudflare Access authentication.
+A self-hosted LLM inference server powered by [SGLang](https://github.com/JEF1056/sglang-turboquant) (TurboQuant fork with fused Triton KV cache). Serves GGUF models quantized via the [llama.cpp TurboQuant fork](https://github.com/JEF1056/llama-cpp-turboquant/tree/llama-exp). Exposed publicly via Cloudflare Tunnel with Cloudflare Access authentication.
 
-**Default model:** [qwen3.6-27B](https://huggingface.co/unsloth/qwen3.6-27B-GGUF) — a reasoning model with native MTP speculative decoding support.
+**Default model:** [qwen3.6-27B](https://huggingface.co/unsloth/Qwen3.6-27B-GGUF) — a reasoning model with NEXTN speculative decoding.
 
 ---
 
@@ -11,60 +11,57 @@ A self-hosted LLM inference server built around [llama.cpp (TurboQuant + MTP for
 No Cloudflare or secrets needed — just the inference server on this machine.
 
 ```bash
+# 1. Generate .env from defaults (auto-generates SGLANG_API_KEY, MCP_API_KEY)
 python sync-env.py
-docker compose build llama-server llama-convert mcp-search-server
-docker compose run --rm llama-convert convert-st qwen3.6-27b --quant IQ4_NL --mtp
-docker compose up -d llama-server mcp-search-server
+
+# 2. Build both images
+docker compose build sglang-server llama-convert mcp-search-server
+
+# 3. Prepare a model
+docker compose run --rm llama-convert download qwen3.5-4b --quant Q4_K_M
+
+# 4. Set model path in .env
+# SGLANG_MODEL_PATH=/models/qwen3.5-4b-Q4_K_M.gguf
+# SGLANG_TOKENIZER_PATH=unsloth/Qwen3.5-4B
+# SGLANG_SERVED_MODEL_NAME=qwen3.5-4b
+
+# 5. Start
+docker compose up -d sglang-server mcp-search-server
 ```
 
-Port 8080 is not exposed by default. Create `docker-compose.override.yml` (gitignored) to open it on localhost:
+Port 30000 is exposed via `docker-compose.override.yml` (gitignored) for local dev. Test with:
 
-```yaml
-services:
-  llama-server:
-    ports:
-      - "8080:8080"
-    networks:
-      - llama-net
-      - host-bridge
-
-networks:
-  host-bridge:
-    driver: bridge
+```bash
+curl http://localhost:30000/health
+curl http://localhost:30000/v1/models
 ```
 
-Then `docker compose up -d llama-server` (not `restart` — that won't re-read the config). Test with `curl http://localhost:8080/health`.
-
-Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http://localhost:8080/v1`.
-
-> **Without MTP:** if you want a faster first run (skip the safetensors download), use the prebuilt GGUF instead.
-> Comment out `LLAMA_MODEL` and `LLAMA_SPEC_TYPE` in `.env`, then:
-> `docker compose run --rm llama-convert download qwen3.6-27b --quant IQ4_NL`
+Any OpenAI-compatible client (Cursor, Roo Code, opencode, etc.) points at `http://localhost:30000/v1`.
 
 ---
 
-## Model
+## Images
 
-| Property | Value |
-|---|---|
-| Model | qwen3.6-27B |
-| Base | qwen3.6-27B |
-| Quant | IQ4_NL (~15 GB) |
-| Architecture | Dense transformer, 64 GQA attention layers |
-| KV cache layers | 64 of 64 |
-| Context | 150K (native 32K; extended via RoPE scaling) |
-| Capabilities | Reasoning, tool use, MTP speculative decoding |
-| MTP speedup | ~2–2.5× tok/s vs. baseline (requires MTP-capable GGUF) |
+| Image | Dockerfile | Purpose |
+|---|---|---|
+| `sglang-server` | `Dockerfile` | SGLang CUDA server, built from `JEF1056/sglang-turboquant` |
+| `llama-convert` | `Dockerfile.convert` | CPU-only: download, quantize, convert GGUFs |
+| `mcp-search-server` | `mcp-search-server/Dockerfile` | Web search MCP tool |
 
-**VRAM budget (RTX 3090, 24 GB):**
+### SGLang server (`Dockerfile`)
 
-| Component | Size |
-|---|---|
-| Model (IQ4_NL) | ~15.0 GB |
-| KV cache (turbo3, 150K ctx) | ~2.5 GB |
-| draft-mtp KV cache | ~0.3 GB |
-| CUDA context + compute | ~1.6 GB |
-| **Total** | **~19.4 GB** (~4.6 GB headroom) |
+Built from source from `JEF1056/sglang-turboquant` — a fork of [sgl-project/sglang](https://github.com/sgl-project/sglang) with **TurboQuant PR #23135** merged in:
+
+- **TurboQuant KV cache** — fused Triton kernels read packed 4-bit KV directly during attention (no dequant buffer). 3.88× KV compression, 93–105% of bf16 decode throughput, CUDA graph compatible.
+- **GGUF serving** — `--load-format gguf --quantization gguf` with a HuggingFace tokenizer path.
+- **NEXTN speculative decoding** — uses the model's own MTP heads (`--speculative-algo NEXTN --speculative-eagle-topk 1`), no separate draft model required.
+- **Reasoning parser** — structured `<think>…</think>` extraction for Qwen3 and DeepSeek models.
+
+> **Pre-requisite:** Merge `sgl-project/sglang` PR #23135 into `JEF1056/sglang-turboquant` on GitHub before building.
+
+### Convert image (`Dockerfile.convert`)
+
+Plain `ubuntu:22.04`, zero CUDA dependency. Builds `llama-quantize` CPU-only from the TurboQuant llama.cpp fork (OpenBLAS). Also includes the HF→GGUF conversion pipeline (`convert_hf_to_gguf.py`) and `manage_models.py`.
 
 ---
 
@@ -79,54 +76,36 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
                              │ Cloudflare Access (auth required)
               ┌──────────────▼────────────────────┐
               │         Host Machine               │
-              │  cloudflared → llama-server :8080  │
+              │  cloudflared → sglang-server:30000 │
               └───────────────┬────────────────────┘
-                                │ llama-net (internal)
-                    ┌─────────────────────┐
-                    │ llama-server :8080  │
-                    │  │                   │
-                    │  └─ mcp-search-server :3100
-                    └─────────────────────┘
+                              │ llama-net (internal)
+                    ┌─────────────────────────┐
+                    │  sglang-server :30000   │
+                    │  mcp-search-server :3100│
+                    └─────────────────────────┘
 ```
 
-> **Note:** `mcp-search-server` provides semantic web search with browser automation via MCP. Accessible at `http://mcp-search-server:3100` on the internal `llama-net` network.
-
-| Interface | URL / Command | Auth |
+| Interface | URL | Auth |
 |---|---|---|
-| **Local** | `http://localhost:8080/v1` | None (requires `docker-compose.override.yml`) |
-| **API (Cloudflare Access)** | `https://chat.jessfan.com/v1` | Google OAuth / Email (see below) |
+| **Local** | `http://localhost:30000/v1` | None (requires `docker-compose.override.yml`) |
+| **Public** | `https://chat.jessfan.com/v1` | Cloudflare Access (Google OAuth / Email) |
 
 ---
 
 ## Step-by-step setup guide
 
-### Step 1: Create Cloudflare Tunnel
+### Step 1: Merge TurboQuant PR into fork
 
-1. Go to [Cloudflare Zero Trust](https://one.dash.cloudflare.com/)
-2. Navigate to **Networks → Tunnels**
-3. Click **Create a tunnel**
-4. Select **Docker** as the platform
-5. Copy the generated token (looks like `eyJhIjoi...`)
-6. Paste it into your `.env` file as `CF_TUNNEL_TOKEN`
-7. Add a Public Hostname:
-   - **Subdomain**: `api` (or your preferred subdomain)
-   - **Domain**: `jessfan.com` (your Cloudflare domain)
-   - **Service**: `http://llama-server:8080`
-8. Save the tunnel
+On GitHub, merge [sgl-project/sglang PR #23135](https://github.com/sgl-project/sglang/pull/23135) into `JEF1056/sglang-turboquant`. This is a one-time manual step required before building the server image.
 
-### Step 2: Set up Cloudflare Access
+### Step 2: Create Cloudflare Tunnel
 
-1. Go to **Zero Trust → Access → Applications**
-2. Click **Add an Application**
-3. Choose **Add a Cloud Access Application**
-4. Enter the same domain you set in the tunnel (e.g., `api.jessfan.com`)
-5. Choose an authentication method:
-   - **Google OAuth** — uses Google credentials (recommended)
-   - **Email/Password** — users get a one-time code via email
-6. Set **Who can access** to your email or "Anyone with the domain"
-7. Save the application
+1. Go to [Cloudflare Zero Trust](https://one.dash.cloudflare.com/) → **Networks → Tunnels**
+2. Click **Create a tunnel** → **Docker** → copy the token
+3. Paste into `.env` as `CF_TUNNEL_TOKEN`
+4. Add Public Hostname: `chat.jessfan.com` → `http://sglang-server:30000`
 
-### Step 3: Configure your `.env` file
+### Step 3: Configure `.env`
 
 ```bash
 python sync-env.py
@@ -135,75 +114,75 @@ python sync-env.py
 Edit `.env` and set at minimum:
 
 ```bash
-# Cloudflare Tunnel token (from Step 1)
+# Cloudflare Tunnel token
 CF_TUNNEL_TOKEN=eyJhIjoi...
 
-# Cloudflare Access hostname
-CF_ACCESS_HOSTNAME=api.jessfan.com
-
-# Google OAuth credentials for Cloudflare Access
-CF_ACCESS_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
-CF_ACCESS_GOOGLE_CLIENT_SECRET=your-client-secret
-
-# Optional: API key for llama-server (extra layer of protection)
-LLAMA_API_KEY=$(openssl rand -hex 32)
+# Model to serve
+SGLANG_MODEL_PATH=/models/qwen3.6-27b-IQ4_XS.gguf
+SGLANG_TOKENIZER_PATH=Qwen/Qwen3.6-27B
+SGLANG_SERVED_MODEL_NAME=qwen3.6-27b
 ```
 
-### Step 4: Build and prepare the model
+`SGLANG_API_KEY` and `MCP_API_KEY` are auto-generated by `sync-env.py` if empty.
+
+### Step 4: Prepare a model
 
 ```bash
-# Build the containers
-docker compose build
+# Build the convert image (CPU-only, no GPU needed)
 docker compose build llama-convert
 
-# Option A (recommended): MTP-capable GGUF from safetensors — ~2–2.5× faster generation
-# Downloads safetensors, converts to fp16 GGUF, quantizes, cleans up.
-docker compose run --rm llama-convert convert-st qwen3.6-27b --quant IQ4_NL --mtp --keep-intermediate
-# Output: ./models/qwen3.6-27b-IQ4_NL-mtp.gguf
-# .env.default already points LLAMA_MODEL at this file and sets LLAMA_SPEC_TYPE=mtp.
+# Option A — download a pre-built GGUF
+docker compose run --rm llama-convert download qwen3.5-4b --quant Q4_K_M
 
-# Option B (faster setup, no MTP): prebuilt GGUF from HuggingFace
-# Comment out LLAMA_MODEL and LLAMA_SPEC_TYPE in .env first.
-docker compose run --rm llama-convert download qwen3.6-27b --quant IQ4_NL
+# Option B — convert from safetensors (with MTP head for NEXTN spec decoding)
+docker compose run --rm llama-convert convert-st qwen3.6-27b --quant IQ4_XS --mtp
+
+# List all available models
+docker compose run --rm llama-convert list
 ```
 
 > **Gated models:** set `HF_TOKEN=your_token` in `.env`
+>
+> **WSL2 stability:** set `CONVERT_DOWNLOAD_RATE=300M` and `CONVERT_THREADS=4` to prevent vmmem BSODs.
 
-### Step 5: Start the services
+### Step 5: Build and start
 
 ```bash
+# Build SGLang server (compiles sgl-kernel — first build takes ~10–20 min)
+docker compose build sglang-server
+
+# Start inference server + MCP search tool
+docker compose up -d sglang-server mcp-search-server
+
+# With Cloudflare Tunnel
 docker compose up -d
 ```
 
-> **Note:** `docker compose up -d` starts `llama-server` and `mcp-search-server` by default. `cloudflared` requires `--profile cloudflare`, and `llama-convert` requires `--profile convert`.
-
-Check the logs:
+Check logs:
 ```bash
-docker compose logs -f llama-server   # up to 5 min for large model
-docker compose logs -f cloudflared     # should show "connected"
+docker compose logs -f sglang-server    # allow up to 5 min for large model load
+docker compose logs -f cloudflared      # should show "connected"
 ```
 
-### Step 6: Test the API
+### Step 6: Test
 
 ```bash
-# Local test (no auth needed)
-curl http://localhost:8080/health
+curl http://localhost:30000/health
+curl http://localhost:30000/v1/models
 
-# Public API test (requires Cloudflare Access auth)
-curl -H "CF-Access-Client-Id: <id>" \
-     -H "CF-Access-Client-Secret: <secret>" \
-     https://api.jessfan.com/v1/chat/completions \
-     -H "Content-Type: application/json" \
-     -d '{"model": "qwen3.6-27b", "messages": [{"role": "user", "content": "Hello"}]}'
+curl -X POST http://localhost:30000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $SGLANG_API_KEY" \
+  -d '{"model": "qwen3.6-27b", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
-### Step 7: Connect an OpenAI-compatible client
+### Step 7: Connect a client
 
 ```python
 import openai
 
 client = openai.OpenAI(
-    base_url="https://api.jessfan.com/v1",
+    base_url="https://chat.jessfan.com/v1",
     api_key="none",  # Cloudflare Access handles auth
     default_headers={
         "CF-Access-Client-Id": "<your-client-id>",
@@ -219,21 +198,22 @@ response = client.chat.completions.create(
 
 ---
 
-## Model management
+## Key environment variables
 
-```bash
-# List all supported models
-docker compose run --rm llama-convert list
-
-# MTP-capable GGUF (recommended — from safetensors, includes nextn heads)
-docker compose run --rm llama-convert convert-st qwen3.6-27b --quant IQ4_NL --mtp
-
-# Standard prebuilt GGUF (faster setup, no MTP)
-docker compose run --rm llama-convert download qwen3.6-27b --quant IQ4_NL
-
-# Re-quantize an existing GGUF already in ./models
-docker compose run --rm llama-convert convert /models/qwen3.6-27b-fp16.gguf --quant Q4_K_M
-```
+| Variable | Default | Description |
+|---|---|---|
+| `SGLANG_MODEL_PATH` | — | Absolute path to GGUF inside container |
+| `SGLANG_TOKENIZER_PATH` | — | HF repo ID or local tokenizer path |
+| `SGLANG_SERVED_MODEL_NAME` | — | Model alias for `/v1/models` |
+| `SGLANG_CONTEXT_LENGTH` | `262144` | Max context window in tokens |
+| `SGLANG_MEM_FRACTION_STATIC` | `0.90` | GPU VRAM fraction for weights + KV |
+| `SGLANG_MAX_RUNNING_REQUESTS` | `3` | Concurrent request slots |
+| `SGLANG_TP_SIZE` | `1` | Tensor parallelism (number of GPUs) |
+| `SGLANG_KV_CACHE_DTYPE` | `turboquant` | KV cache quantization (PR #23135) |
+| `SGLANG_REASONING_PARSER` | `qwen3` | Reasoning extraction parser |
+| `SGLANG_SPECULATIVE_ALGO` | `NEXTN` | Speculative decoding algorithm |
+| `SGLANG_SPECULATIVE_EAGLE_TOPK` | `1` | Draft tree width (1 = linear) |
+| `SGLANG_API_KEY` | auto-generated | Bearer token for API auth |
 
 ---
 
@@ -241,19 +221,20 @@ docker compose run --rm llama-convert convert /models/qwen3.6-27b-fp16.gguf --qu
 
 | Service | Purpose |
 |---|---|
-| `llama-server` | llama.cpp inference server (port 8080) |
-| `cloudflared` | Cloudflare Tunnel — exposes llama-server publicly |
-| `llama-convert` | Model conversion tool (download, convert, quantize) |
+| `sglang-server` | SGLang inference server (port 30000) |
+| `cloudflared` | Cloudflare Tunnel — exposes sglang-server publicly |
+| `llama-convert` | Model prep tool (download, convert, quantize) — profile: `convert` |
 | `mcp-search-server` | Web search MCP tool (port 3100) |
 
 ---
 
 ## Troubleshooting
 
-- **Model not loading:** Check `docker compose logs llama-server`. Common causes: model file missing (`LLAMA_MODEL` path mismatch), insufficient VRAM.
-- **MTP not working:** Confirm the GGUF was built with `--mtp`. Prebuilt GGUFs strip MTP heads. Verify `LLAMA_SPEC_TYPE=mtp` and `LLAMA_MODEL` point to the `-mtp.gguf` file.
-- **Slow generation (11 vs 20 tok/s):** Context may be filling up within a long conversation. MTP requires a `-mtp.gguf` file.
-- **Cloudflare Tunnel not connecting:** Verify `CF_TUNNEL_TOKEN` is correct. Check `docker compose logs cloudflared`.
-- **Cloudflare Access authentication failing:** Ensure the Access Application is configured for the correct domain and authentication method.
-- **GPU not detected:** Verify NVIDIA Container Toolkit is installed. Check `docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi`.
+- **Model not loading:** Check `docker compose logs sglang-server`. Common causes: `SGLANG_MODEL_PATH` wrong, missing `SGLANG_TOKENIZER_PATH`, insufficient VRAM.
+- **DeltaNet / unsupported arch:** qwen3.6's hybrid architecture may not load in SGLang. Fall back to a standard model (e.g. `qwen3.5-4b-Q4_K_M.gguf`) to verify the stack, then investigate arch support.
+- **TurboQuant KV error at startup:** Set `SGLANG_KV_CACHE_DTYPE=auto` and verify the exact dtype string name once PR #23135 is confirmed merged.
+- **NEXTN speculative not working:** Confirm the GGUF was built with `--mtp`. The `SGLANG_SPECULATIVE_ALGO=NEXTN` path uses the model's embedded MTP heads — standard GGUFs won't have them.
+- **Cloudflare Tunnel not connecting:** Verify `CF_TUNNEL_TOKEN`. Check `docker compose logs cloudflared`.
+- **GPU not detected:** Verify NVIDIA Container Toolkit. Run `docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi`.
 - **WSL2 BSOD during download/quantize:** Set `CONVERT_DOWNLOAD_RATE=300M` and `CONVERT_THREADS=4` in `.env`.
+- **sgl-kernel build fails:** Ensure the CUDA devel image matches your driver. Check `gcc`/`g++` version (gcc-13 recommended per SGLang docs).
