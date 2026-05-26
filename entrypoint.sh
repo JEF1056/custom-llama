@@ -10,6 +10,11 @@ CTX_SIZE=${LLAMA_CTX_SIZE:-200000}
 BATCH_SIZE=${LLAMA_BATCH_SIZE:-8192}
 UBATCH_SIZE=${LLAMA_UBATCH_SIZE:-2048}
 GPU_LAYERS=${LLAMA_GPU_LAYERS:-99}
+
+# Auto-fit layers/context to available VRAM (--fit).
+# --fit-target reserves a safety margin in MiB per device so the fit doesn't OOM.
+FIT=${LLAMA_FIT:-on}
+FIT_TARGET=${LLAMA_FIT_TARGET:-256}
 MAX_TOKENS=${LLAMA_MAX_TOKENS:--1}
 TOP_P=${LLAMA_TOP_P:-0.95}
 TEMP=${LLAMA_TEMP:-0.6}
@@ -194,6 +199,7 @@ echo "  Threads (batch):  $THREADS_BATCH"
 echo "  Context Size: $CTX_SIZE"
 echo "  Batch Size: $BATCH_SIZE  (ubatch: $UBATCH_SIZE)"
 echo "  GPU Layers: $GPU_LAYERS"
+echo "  Fit VRAM: $([ "$FIT" = "on" ] && echo "enabled (target margin: ${FIT_TARGET} MiB)" || echo "disabled")"
 echo "  Max Tokens: $MAX_TOKENS"
 echo "  Top P: $TOP_P"
 echo "  Temperature: $TEMP"
@@ -281,6 +287,8 @@ exec llama-server \
     --batch-size "$BATCH_SIZE" \
     --ubatch-size "$UBATCH_SIZE" \
     --n-gpu-layers "$GPU_LAYERS" \
+    $([ "$FIT" = "on" ] && echo "--fit") \
+    $([ "$FIT" = "on" ] && [ -n "$FIT_TARGET" ] && echo "--fit-target $FIT_TARGET") \
     -n "$MAX_TOKENS" \
     --top-p "$TOP_P" \
     --temp "$TEMP" \

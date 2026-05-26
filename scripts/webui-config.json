@@ -1,6 +1,5 @@
 {
   "theme": "system",
-  "apiKey": "",
   "systemMessage": "",
   "pasteLongTextToFileLen": 2500,
   "sendOnEnter": true,
@@ -33,5 +32,6 @@
   "showRawOutputSwitch": false,
   "custom": "",
   "mcpRequestTimeoutSeconds": 300,
-  "showSystemMessage": true
+  "showSystemMessage": true,
+  "mcpServers": "[{\"id\":\"77e5d655-a386-4f29-83f7-d487a4125f30\",\"enabled\":true,\"url\":\"https://mcp.jessfan.com/mcp\",\"requestTimeoutSeconds\":300}]"
 }
