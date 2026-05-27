@@ -18,13 +18,16 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       python3 python3-dev python3-pip \
-      git curl build-essential ninja-build \
+      git curl cmake build-essential ninja-build \
       libssl-dev pkg-config && \
     rm -rf /var/lib/apt/lists/*
 
+# Install PyTorch (CUDA 12.4) first — sgl-kernel is a torch CUDA extension
+# and requires torch to be present before its wheel can be built.
+RUN python3 -m pip install --no-cache-dir \
+    torch --index-url https://download.pytorch.org/whl/cu124
+
 # Clone fork — PR #23135 must be merged into main before this step.
-# The clone is intentionally not depth-limited so git history is available
-# for sgl-kernel version detection if needed.
 RUN git clone https://github.com/JEF1056/sglang-turboquant.git /sglang
 
 # Build sgl-kernel: CUDA-compiled C++ extensions + Triton kernels.
