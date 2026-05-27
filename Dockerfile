@@ -33,7 +33,7 @@ RUN git clone https://github.com/JEF1056/sglang-turboquant.git /sglang
 # Build sgl-kernel: CUDA-compiled C++ extensions + Triton kernels.
 # This is the step that takes the most time (~10–20 min on first build).
 WORKDIR /sglang/sgl-kernel
-RUN python3 -m pip install --no-cache-dir .
+RUN CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5" python3 -m pip install --no-cache-dir .
 
 # Install SGLang with all extras (flashinfer, triton, vllm attention backends).
 # 'all' includes every optional attention and sampling backend.
