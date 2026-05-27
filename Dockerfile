@@ -113,13 +113,19 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       python3 -m pip install sglang-kernel==${SGL_KERNEL_VERSION} --force-reinstall --no-deps; \
     fi
 
-# Clone fork to get the dep spec (pyproject.toml + Rust crate + proto).
-# Preserves the workspace-relative paths that build.rs / tonic_build expect:
+# Download fork archive to get the dep spec (pyproject.toml + Rust crate + proto).
+# Uses curl (same HTTP stack as pip) instead of git clone to avoid Docker Desktop
+# DNS resolution failures that affect git but not HTTP on Windows.
+# Preserves workspace-relative paths that build.rs / tonic_build expect:
 #   /tmp/sglang_deps/
 #     python/pyproject.toml
 #     rust/sglang-grpc/
 #     proto/
-RUN git clone --depth=1 --branch "${FORK_BRANCH}" "${FORK_REPO}" /tmp/fork_src \
+RUN REPO_PATH=$(echo "${FORK_REPO}" | sed 's|https://github.com/||;s|\.git$||') \
+    && mkdir -p /tmp/fork_src \
+    && curl --retry 3 --retry-delay 2 -fsSL \
+       "https://github.com/${REPO_PATH}/archive/refs/heads/${FORK_BRANCH}.tar.gz" \
+    | tar -xz --strip-components=1 -C /tmp/fork_src \
     && mkdir -p /tmp/sglang_deps/python \
     && cp /tmp/fork_src/python/pyproject.toml /tmp/sglang_deps/python/pyproject.toml \
     && cp -r /tmp/fork_src/rust /tmp/sglang_deps/rust \
@@ -170,8 +176,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install -c /sgl-workspace/constraints.txt \
       pytest wheel py-spy
 
-# Clone the full fork and do the editable install.
-RUN git clone --depth=1 --branch "${FORK_BRANCH}" "${FORK_REPO}" /sgl-workspace/sglang
+# Download full fork archive for editable install (curl avoids git DNS issues on Docker Desktop).
+RUN REPO_PATH=$(echo "${FORK_REPO}" | sed 's|https://github.com/||;s|\.git$||') \
+    && mkdir -p /sgl-workspace/sglang \
+    && curl --retry 3 --retry-delay 2 -fsSL \
+       "https://github.com/${REPO_PATH}/archive/refs/heads/${FORK_BRANCH}.tar.gz" \
+    | tar -xz --strip-components=1 -C /sgl-workspace/sglang
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     cd /sgl-workspace/sglang \
