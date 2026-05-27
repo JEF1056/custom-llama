@@ -19,7 +19,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       python3 python3-dev python3-pip \
       git curl cmake build-essential ninja-build \
-      libssl-dev pkg-config && \
+      libssl-dev pkg-config libnuma-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # Install PyTorch (CUDA 12.4) first — sgl-kernel is a torch CUDA extension
