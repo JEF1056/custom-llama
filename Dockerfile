@@ -13,10 +13,13 @@
 FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-# CMake 4.x dropped compat with cmake_minimum_required(VERSION < 3.5).
-# mscclpp and other deps fetched by sgl-kernel/SGLang use old CMakeLists.
-# This flag is forwarded by scikit-build-core to cmake for ALL pip builds.
-ENV CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+# CMake 4.x made cmake_minimum_required(VERSION < 3.5) a hard error.
+# mscclpp (FetchContent dep of sgl-kernel) has an old CMakeLists.txt that
+# triggers this. Constraining cmake<4 prevents scikit-build-core from pulling
+# cmake 4.x into its isolated build venv. PIP_CONSTRAINT applies to every
+# pip invocation in this image, including pip's own isolated build envs.
+RUN echo "cmake<4" > /tmp/pip-constraints.txt
+ENV PIP_CONSTRAINT=/tmp/pip-constraints.txt
 
 # Ubuntu 22.04 ships Python 3.10, which meets SGLang's requirements.
 RUN apt-get update && \
