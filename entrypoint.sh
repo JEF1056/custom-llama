@@ -49,7 +49,7 @@ echo "  TP:       $TP_SIZE GPU(s)"
 [ -n "$KV_CACHE_DTYPE" ]   && echo "  KV dtype: $KV_CACHE_DTYPE"
 [ -n "$API_KEY" ]          && echo "  API key:  (set)"
 
-exec python3.12 -m sglang.launch_server \
+exec python3 -m sglang.launch_server \
     --model-path "$MODEL_PATH" \
     --host "$HOST" \
     --port "$PORT" \
