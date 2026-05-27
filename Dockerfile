@@ -13,6 +13,10 @@
 FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+# CMake 4.x dropped compat with cmake_minimum_required(VERSION < 3.5).
+# mscclpp and other deps fetched by sgl-kernel/SGLang use old CMakeLists.
+# This flag is forwarded by scikit-build-core to cmake for ALL pip builds.
+ENV CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
 
 # Ubuntu 22.04 ships Python 3.10, which meets SGLang's requirements.
 RUN apt-get update && \
@@ -33,7 +37,7 @@ RUN git clone https://github.com/JEF1056/sglang-turboquant.git /sglang
 # Build sgl-kernel: CUDA-compiled C++ extensions + Triton kernels.
 # This is the step that takes the most time (~10–20 min on first build).
 WORKDIR /sglang/sgl-kernel
-RUN CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5" python3 -m pip install --no-cache-dir .
+RUN python3 -m pip install --no-cache-dir .
 
 # Install SGLang with all extras (flashinfer, triton, vllm attention backends).
 # 'all' includes every optional attention and sampling backend.
