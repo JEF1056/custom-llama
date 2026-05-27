@@ -49,7 +49,7 @@ RUN --mount=type=cache,target=/var/cache/apt,id=base-apt \
     && ln -s apt_pkg.cpython-312-*-linux-gnu.so apt_pkg.so
 
 RUN --mount=type=cache,target=/var/cache/apt,id=base-apt \
-    apt-get update && apt-get install -y --no-install-recommends \
+    apt-get update && apt-get install -y --no-install-recommends --allow-change-held-packages \
       ca-certificates software-properties-common netcat-openbsd kmod unzip \
       curl wget lsof locales git git-lfs \
       build-essential cmake perl patchelf ccache \
