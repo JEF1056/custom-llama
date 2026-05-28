@@ -61,6 +61,7 @@ RUN --mount=type=cache,target=/var/cache/apt,id=base-apt \
       libssl-dev ninja-build \
       libnccl2 libnccl-dev \
       pybind11-dev \
+      protobuf-compiler \
     && ln -sf /usr/bin/python3.12 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
