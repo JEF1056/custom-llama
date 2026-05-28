@@ -54,12 +54,12 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_PYTHON_DOWNLOADS=never
 
 # Rust toolchain — required by sglang's setup.py (setuptools_rust extensions).
-# Installed in base so it's available in all build stages.
+# PATH must be set before the RUN so the verification commands can find rustc.
+ENV PATH="/root/.cargo/bin:$PATH"
+
 RUN curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --no-modify-path --profile minimal \
     && rustc --version && cargo --version
-
-ENV PATH="/root/.cargo/bin:$PATH"
 
 # CUDA_HOME: not set by the base image as an env var, but required by many
 # build systems (flashinfer, triton native builds, cmake-based extensions).
