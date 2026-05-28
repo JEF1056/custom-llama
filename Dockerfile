@@ -80,7 +80,7 @@ ARG CUDA_VERSION
 ARG BUILD_TYPE=all
 ARG SGL_KERNEL_VERSION=0.4.3
 ARG FORK_REPO=https://github.com/JEF1056/sglang-turboquant.git
-ARG FORK_BRANCH=main
+ARG FORK_BRANCH=feature/turboquant
 
 WORKDIR /sgl-workspace
 
@@ -164,7 +164,7 @@ FROM torch_deps AS framework
 ARG CUDA_VERSION
 ARG BUILD_TYPE=all
 ARG FORK_REPO=https://github.com/JEF1056/sglang-turboquant.git
-ARG FORK_BRANCH=main
+ARG FORK_BRANCH=feature/turboquant
 
 WORKDIR /sgl-workspace
 
