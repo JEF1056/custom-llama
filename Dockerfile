@@ -132,14 +132,21 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       13.0.1) CUINDEX=130 ;; \
       *) echo "Unsupported CUDA version: $CUDA_VERSION" && exit 1 ;; \
     esac \
+    && printf '%s\n' \
+        'MarkupSafe>=2.0' \
+        'Jinja2>=3.0' \
+        'more-itertools>=8.0' \
+        'zipp>=3.0' \
+        'importlib-metadata>=4.0' \
+        'packaging>=20.0' \
+       > /tmp/pip-floors.txt \
     && cd /tmp/sglang_deps/python \
     && rm -rf sglang && mkdir -p sglang \
     && touch sglang/__init__.py \
     && touch README.md LICENSE \
     && python3 -m pip install \
+        -c /tmp/pip-floors.txt \
         --extra-index-url "https://download.pytorch.org/whl/cu${CUINDEX}" \
-        "more-itertools>=8.0" \
-        "zipp>=3.0" \
         "pillow>=12.1.1" \
         ".[${BUILD_TYPE}]" \
     && cd /sgl-workspace \
