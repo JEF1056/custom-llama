@@ -10,6 +10,9 @@
 #   - No Mooncake, nixl, FlashMLA (distributed / DeepSeek-specific)
 #   - Builds from fork instead of local copy or sgl-project/sglang
 #
+# Uses uv for Python dependency resolution — avoids pip's resolution-too-deep
+# errors caused by cache-dit → diffusers transitive dep explosion.
+#
 # Build:
 #   docker compose build sglang-server
 #   docker build --target runtime -t sglang-turboquant .
@@ -18,7 +21,7 @@
 ARG CUDA_VERSION=12.8.1
 
 # -----------------------------------------------------------------------
-# base: OS + system packages
+# base: OS + system packages + uv
 # -----------------------------------------------------------------------
 FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS base
 
@@ -69,10 +72,20 @@ ENV LANG=en_US.UTF-8 \
     LANGUAGE=en_US:en \
     LC_ALL=en_US.UTF-8
 
+# Install uv — faster resolver, no resolution-too-deep issues.
+# uv pip install --system bypasses virtual-env detection in Docker.
+RUN python3 -m pip install uv
+
 # -----------------------------------------------------------------------
 # torch_deps: Install sgl-kernel wheel + all sglang Python dependencies.
-#   Clones the fork just enough to get the dep spec; the full editable
-#   install happens in the framework stage for better layer caching.
+#   Strategy mirrors a local machine build:
+#     1. Pre-install torch from the CUDA-specific PyTorch index so uv
+#        treats it as already satisfied when resolving sglang's extras.
+#        This sidesteps the fork's [tool.uv.sources] ROCm torch override
+#        (only applies to `uv sync`, not `uv pip install`).
+#     2. Clone the fork for the dep spec, create a stub sglang package,
+#        and install all deps — torch is already present, uv skips it.
+#     3. Capture constraints.txt for the framework stage.
 # -----------------------------------------------------------------------
 FROM base AS torch_deps
 
@@ -90,10 +103,11 @@ RUN curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -sSf https://sh.ru
     | sh -s -- -y --no-modify-path --profile minimal \
     && rustc --version && cargo --version
 
-# sgl-kernel pre-built wheel — fork does not modify sgl-kernel (all custom
-# kernels in the fork are JIT-compiled at runtime via sglang/jit_kernel).
-RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 -m pip install --upgrade pip setuptools wheel html5lib six \
+# Bootstrap: upgrade pip/setuptools/wheel basics, then install sgl-kernel wheel.
+# sgl-kernel is a pre-built CUDA-optimised attention/rope wheel; the fork does
+# not modify it — all custom kernels are JIT-compiled at runtime.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system --upgrade pip setuptools wheel html5lib six \
     && case $CUDA_VERSION in \
       12.6.1) CUINDEX=126 ;; \
       12.8.1|12.9.1) CUINDEX=129 ;; \
@@ -101,16 +115,30 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       *) echo "Unsupported CUDA version: $CUDA_VERSION" && exit 1 ;; \
     esac \
     && if [ "$CUDA_VERSION" = "12.6.1" ]; then \
-      python3 -m pip install \
-        "https://github.com/sgl-project/whl/releases/download/v${SGL_KERNEL_VERSION}/sglang_kernel-${SGL_KERNEL_VERSION}+cu124-cp310-abi3-manylinux2014_$(uname -m).whl" \
-        --force-reinstall --no-deps; \
+      uv pip install --system --no-deps --reinstall \
+        "https://github.com/sgl-project/whl/releases/download/v${SGL_KERNEL_VERSION}/sglang_kernel-${SGL_KERNEL_VERSION}+cu124-cp310-abi3-manylinux2014_$(uname -m).whl"; \
     elif [ "$CUDA_VERSION" = "12.8.1" ] || [ "$CUDA_VERSION" = "12.9.1" ]; then \
-      python3 -m pip install \
-        "https://github.com/sgl-project/whl/releases/download/v${SGL_KERNEL_VERSION}/sglang_kernel-${SGL_KERNEL_VERSION}+cu129-cp310-abi3-manylinux2014_$(uname -m).whl" \
-        --force-reinstall --no-deps; \
+      uv pip install --system --no-deps --reinstall \
+        "https://github.com/sgl-project/whl/releases/download/v${SGL_KERNEL_VERSION}/sglang_kernel-${SGL_KERNEL_VERSION}+cu129-cp310-abi3-manylinux2014_$(uname -m).whl"; \
     elif [ "$CUDA_VERSION" = "13.0.1" ]; then \
-      python3 -m pip install sglang-kernel==${SGL_KERNEL_VERSION} --force-reinstall --no-deps; \
+      uv pip install --system --no-deps --reinstall \
+        "sglang-kernel==${SGL_KERNEL_VERSION}"; \
     fi
+
+# Pre-install torch/torchvision/torchaudio from the CUDA-specific PyTorch index.
+# Installing torch BEFORE the sglang extras install means uv finds torch already
+# satisfied in the environment and skips re-resolving it — no ROCm confusion,
+# no version backtracking across thousands of torch candidates.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    case $CUDA_VERSION in \
+      12.6.1) CUINDEX=126 ;; \
+      12.8.1|12.9.1) CUINDEX=129 ;; \
+      13.0.1) CUINDEX=130 ;; \
+      *) echo "Unsupported CUDA version: $CUDA_VERSION" && exit 1 ;; \
+    esac \
+    && uv pip install --system \
+        --index-url "https://download.pytorch.org/whl/cu${CUINDEX}" \
+        torch torchvision torchaudio
 
 # Clone fork to get the dep spec (pyproject.toml + Rust crate + proto).
 # Shallow clone preserves workspace-relative paths that build.rs / tonic_build expect:
@@ -122,9 +150,12 @@ RUN git clone --depth=1 --branch "${FORK_BRANCH}" "${FORK_REPO}" /tmp/sglang_dep
 
 # Install all sglang dependencies using a stub sglang package so the real
 # source can be installed as an editable package in the next stage without
-# re-downloading torch/transformers/etc.  Generates constraints.txt to pin
-# versions for downstream stages.
-RUN --mount=type=cache,target=/root/.cache/pip \
+# re-downloading torch/transformers/etc.
+#
+# --index-strategy unsafe-best-match: mirrors [tool.uv] in pyproject.toml;
+#   picks the best (latest) package across all configured indexes.
+# torch is already installed above so uv skips it — no resolver explosion.
+RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=cache,target=/root/.cargo/registry \
     case $CUDA_VERSION in \
       12.6.1) CUINDEX=126 ;; \
@@ -132,23 +163,13 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       13.0.1) CUINDEX=130 ;; \
       *) echo "Unsupported CUDA version: $CUDA_VERSION" && exit 1 ;; \
     esac \
-    && printf '%s\n' \
-        'MarkupSafe>=2.1' \
-        'Jinja2>=3.1' \
-        'more-itertools>=9.0' \
-        'zipp>=3.20' \
-        'importlib-metadata>=8.9' \
-        'packaging>=23.0' \
-       > /tmp/pip-floors.txt \
     && cd /tmp/sglang_deps/python \
     && rm -rf sglang && mkdir -p sglang \
     && touch sglang/__init__.py \
     && touch README.md LICENSE \
-    && python3 -m pip install \
-        -c /tmp/pip-floors.txt \
-        --prefer-binary \
+    && uv pip install --system \
+        --index-strategy unsafe-best-match \
         --extra-index-url "https://download.pytorch.org/whl/cu${CUINDEX}" \
-        "pillow>=12.1.1" \
         ".[${BUILD_TYPE}]" \
     && cd /sgl-workspace \
     && rm -rf /tmp/sglang_deps \
@@ -169,19 +190,24 @@ WORKDIR /sgl-workspace
 # sm_86 for RTX 3090; used by any ahead-of-time Torch CUDA extension compile
 ENV TORCH_CUDA_ARCH_LIST="8.6"
 
-# Minimal extras needed at runtime
-RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 -m pip install -c /sgl-workspace/constraints.txt \
+# Minimal extras needed at runtime / dev
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system -c /sgl-workspace/constraints.txt \
       pytest wheel py-spy
 
-# Clone full fork for editable install.
+# Clone full fork for editable install (includes Rust source in rust/).
 RUN git clone --depth=1 --branch "${FORK_BRANCH}" "${FORK_REPO}" /sgl-workspace/sglang
 
-RUN --mount=type=cache,target=/root/.cache/pip \
+# Editable install with Rust compilation.
+# setuptools-rust must be present BEFORE --no-build-isolation so the build
+# backend can import it without an isolated env.
+# All sglang Python deps are already installed (torch_deps stage), so uv
+# only builds the Rust extension and links the editable package.
+RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=cache,target=/root/.cargo/registry \
-    python3 -m pip install setuptools-rust \
+    uv pip install --system setuptools-rust \
     && cd /sgl-workspace/sglang \
-    && python3 -m pip install --no-build-isolation -e "python[${BUILD_TYPE}]" \
+    && uv pip install --system --no-build-isolation -e "python[${BUILD_TYPE}]" \
     && mkdir -p /root/.cache/huggingface /root/.cache/sglang \
     && find /usr/local/lib/python3.12/dist-packages -type d -name __pycache__ \
          -exec rm -rf {} + 2>/dev/null || true
