@@ -150,6 +150,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && touch README.md LICENSE \
     && python3 -m pip install \
         --extra-index-url "https://download.pytorch.org/whl/cu${CUINDEX}" \
+        "pillow>=12.1.1" \
         ".[${BUILD_TYPE}]" \
     && cd /sgl-workspace \
     && rm -rf /tmp/sglang_deps \
