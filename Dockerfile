@@ -80,7 +80,7 @@ ARG CUDA_VERSION
 ARG BUILD_TYPE=all
 ARG SGL_KERNEL_VERSION=0.4.3
 ARG FORK_REPO=https://github.com/JEF1056/sglang-turboquant.git
-ARG FORK_BRANCH=feature/turboquant
+ARG FORK_BRANCH=feature/carlos-turboquant
 
 WORKDIR /sgl-workspace
 
@@ -148,7 +148,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && touch sglang/__init__.py \
     && echo '__version__ = "0.0.0"' > sglang/version.py \
     && touch README.md LICENSE \
-    && python3 -m pip install \
+    && SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SGLANG=0.0.0 \
+       python3 -m pip install \
         --extra-index-url "https://download.pytorch.org/whl/cu${CUINDEX}" \
         "pillow>=12.1.1" \
         ".[${BUILD_TYPE}]" \
@@ -164,7 +165,7 @@ FROM torch_deps AS framework
 ARG CUDA_VERSION
 ARG BUILD_TYPE=all
 ARG FORK_REPO=https://github.com/JEF1056/sglang-turboquant.git
-ARG FORK_BRANCH=feature/turboquant
+ARG FORK_BRANCH=feature/carlos-turboquant
 
 WORKDIR /sgl-workspace
 
@@ -184,8 +185,10 @@ RUN REPO_PATH=$(echo "${FORK_REPO}" | sed 's|https://github.com/||;s|\.git$||') 
     | tar -xz --strip-components=1 -C /sgl-workspace/sglang
 
 RUN --mount=type=cache,target=/root/.cache/pip \
-    cd /sgl-workspace/sglang \
-    && python3 -m pip install --no-deps -e "python[${BUILD_TYPE}]" \
+    --mount=type=cache,target=/root/.cargo/registry \
+    python3 -m pip install setuptools-rust \
+    && cd /sgl-workspace/sglang \
+    && python3 -m pip install --no-build-isolation -e "python[${BUILD_TYPE}]" \
     && mkdir -p /root/.cache/huggingface /root/.cache/sglang \
     && find /usr/local/lib/python3.12/dist-packages -type d -name __pycache__ \
          -exec rm -rf {} + 2>/dev/null || true
