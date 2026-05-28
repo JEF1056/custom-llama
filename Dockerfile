@@ -128,10 +128,15 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 # the venv, avoiding a redundant torch download during sglang's native builds.
 # Non-editable install: copies everything into site-packages so /sglang is not
 # needed at runtime, shaving off the full source + submodule tree.
+#
+# [runtime_common] instead of [all]: the fork maps [all] → [all_hip] (AMD ROCm)
+# which installs HIP-specific wheels (petit_kernel, wave-lang) incompatible with
+# CUDA. [runtime_common] contains all core LLM serving deps without the HIP extras.
+# PyTorch is already in the venv from the torch-builder stage.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     uv pip install \
         --no-build-isolation \
-        "./python[all]"
+        "./python[runtime_common]"
 
 # ─── runtime ──────────────────────────────────────────────────────────────────
 # cudnn-runtime (~8 GB) instead of cudnn-devel (~15 GB) — saves ~5-8 GB.
