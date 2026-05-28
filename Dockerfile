@@ -112,24 +112,13 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       python3 -m pip install sglang-kernel==${SGL_KERNEL_VERSION} --force-reinstall --no-deps; \
     fi
 
-# Download fork archive to get the dep spec (pyproject.toml + Rust crate + proto).
-# Uses curl (same HTTP stack as pip) instead of git clone to avoid Docker Desktop
-# DNS resolution failures that affect git but not HTTP on Windows.
-# Preserves workspace-relative paths that build.rs / tonic_build expect:
+# Clone fork to get the dep spec (pyproject.toml + Rust crate + proto).
+# Shallow clone preserves workspace-relative paths that build.rs / tonic_build expect:
 #   /tmp/sglang_deps/
 #     python/pyproject.toml
 #     rust/sglang-grpc/
 #     proto/
-RUN REPO_PATH=$(echo "${FORK_REPO}" | sed 's|https://github.com/||;s|\.git$||') \
-    && mkdir -p /tmp/fork_src \
-    && curl --retry 3 --retry-delay 2 -fsSL \
-       "https://github.com/${REPO_PATH}/archive/refs/heads/${FORK_BRANCH}.tar.gz" \
-    | tar -xz --strip-components=1 -C /tmp/fork_src \
-    && mkdir -p /tmp/sglang_deps/python \
-    && cp /tmp/fork_src/python/pyproject.toml /tmp/sglang_deps/python/pyproject.toml \
-    && cp -r /tmp/fork_src/rust /tmp/sglang_deps/rust \
-    && cp -r /tmp/fork_src/proto /tmp/sglang_deps/proto \
-    && rm -rf /tmp/fork_src
+RUN git clone --depth=1 --branch "${FORK_BRANCH}" "${FORK_REPO}" /tmp/sglang_deps
 
 # Install all sglang dependencies using a stub sglang package so the real
 # source can be installed as an editable package in the next stage without
@@ -144,15 +133,13 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       *) echo "Unsupported CUDA version: $CUDA_VERSION" && exit 1 ;; \
     esac \
     && cd /tmp/sglang_deps/python \
-    && mkdir -p sglang \
+    && rm -rf sglang && mkdir -p sglang \
     && touch sglang/__init__.py \
-    && echo '__version__ = "0.0.0"' > sglang/version.py \
     && touch README.md LICENSE \
-    && SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SGLANG=0.0.0 \
-       python3 -m pip install \
+    && python3 -m pip install \
         --extra-index-url "https://download.pytorch.org/whl/cu${CUINDEX}" \
-        "MarkupSafe>=2.0" \
-        "Jinja2>=3.0" \
+        "more-itertools>=8.0" \
+        "zipp>=3.0" \
         "pillow>=12.1.1" \
         ".[${BUILD_TYPE}]" \
     && cd /sgl-workspace \
@@ -179,12 +166,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install -c /sgl-workspace/constraints.txt \
       pytest wheel py-spy
 
-# Download full fork archive for editable install (curl avoids git DNS issues on Docker Desktop).
-RUN REPO_PATH=$(echo "${FORK_REPO}" | sed 's|https://github.com/||;s|\.git$||') \
-    && mkdir -p /sgl-workspace/sglang \
-    && curl --retry 3 --retry-delay 2 -fsSL \
-       "https://github.com/${REPO_PATH}/archive/refs/heads/${FORK_BRANCH}.tar.gz" \
-    | tar -xz --strip-components=1 -C /sgl-workspace/sglang
+# Clone full fork for editable install.
+RUN git clone --depth=1 --branch "${FORK_BRANCH}" "${FORK_REPO}" /sgl-workspace/sglang
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=cache,target=/root/.cargo/registry \
