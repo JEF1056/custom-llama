@@ -136,8 +136,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         'MarkupSafe>=2.1' \
         'Jinja2>=3.1' \
         'more-itertools>=9.0' \
-        'zipp>=3.15' \
-        'importlib-metadata>=7.0' \
+        'zipp>=3.20' \
+        'importlib-metadata>=8.9' \
         'packaging>=23.0' \
        > /tmp/pip-floors.txt \
     && cd /tmp/sglang_deps/python \
