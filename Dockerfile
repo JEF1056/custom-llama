@@ -148,10 +148,11 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && touch sglang/__init__.py \
     && echo '__version__ = "0.0.0"' > sglang/version.py \
     && touch README.md LICENSE \
-    && python3 -m pip install "MarkupSafe>=2.0" "Jinja2>=3.0" \
     && SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SGLANG=0.0.0 \
        python3 -m pip install \
         --extra-index-url "https://download.pytorch.org/whl/cu${CUINDEX}" \
+        "MarkupSafe>=2.0" \
+        "Jinja2>=3.0" \
         "pillow>=12.1.1" \
         ".[${BUILD_TYPE}]" \
     && cd /sgl-workspace \
