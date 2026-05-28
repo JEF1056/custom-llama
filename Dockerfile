@@ -53,6 +53,14 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never
 
+# Rust toolchain — required by sglang's setup.py (setuptools_rust extensions).
+# Installed in base so it's available in all build stages.
+RUN curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --no-modify-path --profile minimal \
+    && rustc --version && cargo --version
+
+ENV PATH="/root/.cargo/bin:$PATH"
+
 # CUDA_HOME: not set by the base image as an env var, but required by many
 # build systems (flashinfer, triton native builds, cmake-based extensions).
 # TORCH_CUDA_ARCH_LIST: limit native extension compilation to your GPU's SM.
@@ -110,6 +118,11 @@ ENV VIRTUAL_ENV=/opt/venv \
     PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /sglang
+
+# setuptools_rust is required by sglang's setup.py but not auto-installed when
+# --no-build-isolation is used (isolation is off so uv skips build-system deps).
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    uv pip install setuptools_rust
 
 # --no-build-isolation: allows the build backend to use the torch already in
 # the venv, avoiding a redundant torch download during sglang's native builds.
