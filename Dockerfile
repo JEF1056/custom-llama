@@ -185,24 +185,9 @@ RUN REPO_PATH=$(echo "${FORK_REPO}" | sed 's|https://github.com/||;s|\.git$||') 
 RUN --mount=type=cache,target=/root/.cache/pip \
     cd /sgl-workspace/sglang \
     && python3 -m pip install --no-deps -e "python[${BUILD_TYPE}]" \
-    && ( kernels lock python || echo "kernels lock: skipped (no lock file in fork)" ) \
-    && ( if [ "$(uname -m)" = "aarch64" ]; then \
-          echo "Skipping sgl-kernel cubin download on aarch64"; \
-        else \
-          for i in 1 2 3; do \
-            echo "Attempt $i/3: downloading sgl-kernel cubins..." \
-            && kernels download python && break \
-            || (echo "Retry in 30s..." && sleep 30); \
-          done; \
-        fi; \
-        true ) \
     && mkdir -p /root/.cache/huggingface /root/.cache/sglang \
-    && ( [ -f python/kernels.lock ] && mv python/kernels.lock /root/.cache/sglang/ || true ) \
     && find /usr/local/lib/python3.12/dist-packages -type d -name __pycache__ \
          -exec rm -rf {} + 2>/dev/null || true
-
-# Fix Trivy CVEs (urllib3, pillow)
-RUN python3 -m pip install --upgrade "urllib3>=2.6.3" "pillow>=12.1.1"
 
 WORKDIR /sgl-workspace/sglang
 
