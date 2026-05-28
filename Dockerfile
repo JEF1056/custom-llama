@@ -133,12 +133,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       *) echo "Unsupported CUDA version: $CUDA_VERSION" && exit 1 ;; \
     esac \
     && printf '%s\n' \
-        'MarkupSafe>=2.0' \
-        'Jinja2>=3.0' \
-        'more-itertools>=8.0' \
-        'zipp>=3.0' \
-        'importlib-metadata>=4.0' \
-        'packaging>=20.0' \
+        'MarkupSafe>=2.1' \
+        'Jinja2>=3.1' \
+        'more-itertools>=9.0' \
+        'zipp>=3.15' \
+        'importlib-metadata>=7.0' \
+        'packaging>=23.0' \
        > /tmp/pip-floors.txt \
     && cd /tmp/sglang_deps/python \
     && rm -rf sglang && mkdir -p sglang \
