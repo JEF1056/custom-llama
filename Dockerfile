@@ -146,6 +146,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && touch README.md LICENSE \
     && python3 -m pip install \
         -c /tmp/pip-floors.txt \
+        --prefer-binary \
         --extra-index-url "https://download.pytorch.org/whl/cu${CUINDEX}" \
         "pillow>=12.1.1" \
         ".[${BUILD_TYPE}]" \
