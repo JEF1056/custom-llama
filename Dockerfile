@@ -126,15 +126,18 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 
 # --no-build-isolation: allows the build backend to use the torch already in
 # the venv, avoiding a redundant torch download during sglang's native builds.
+# Non-editable install: copies everything into site-packages so /sglang is not
+# needed at runtime, shaving off the full source + submodule tree.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     uv pip install \
         --no-build-isolation \
-        -e "python[all]"
+        "./python[all]"
 
 # ─── runtime ──────────────────────────────────────────────────────────────────
-# Final image keeps the devel base: triton and flashinfer JIT-compile CUDA
-# kernels at first use and require nvcc (present in the devel image).
-FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS runtime
+# cudnn-runtime (~8 GB) instead of cudnn-devel (~15 GB) — saves ~5-8 GB.
+# Triton 3.x ships its own LLVM/PTX backend and does NOT need system nvcc.
+# Flashinfer ships prebuilt kernels. Neither requires the full CUDA dev toolkit.
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn-runtime-ubuntu24.04 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -144,8 +147,8 @@ RUN apt-get update && \
         ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
+# Only the venv is needed — non-editable install put everything in site-packages.
 COPY --from=sglang-builder /opt/venv /opt/venv
-COPY --from=sglang-builder /sglang /sglang
 
 ENV VIRTUAL_ENV=/opt/venv \
     PATH="/opt/venv/bin:$PATH"
