@@ -24,11 +24,9 @@ FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS base
 
 ARG CUDA_VERSION
 ARG TARGETARCH
-ARG GDRCOPY_VERSION=2.5.1
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    CUDA_HOME=/usr/local/cuda \
-    GDRCOPY_HOME=/usr/src/gdrdrv-${GDRCOPY_VERSION}/
+    CUDA_HOME=/usr/local/cuda
 
 # GKE default lib/bin locations
 ENV PATH="${PATH}:/usr/local/nvidia/bin" \
@@ -237,6 +235,8 @@ RUN --mount=type=cache,target=/var/cache/apt,id=runtime-apt \
       ninja-build \
       libnccl2 libnccl-dev \
       linux-libc-dev \
+      libunwind8 \
+      libgoogle-glog0v6t64 \
     && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 2 \
     && update-alternatives --set python3 /usr/bin/python3.12 \
     && ln -sf /usr/bin/python3.12 /usr/bin/python \
