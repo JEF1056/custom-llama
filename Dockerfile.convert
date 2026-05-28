@@ -25,21 +25,21 @@
 #   # List all available models:
 #   docker compose run --rm llama-convert list
 # =============================================================================
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-      git cmake build-essential libopenblas-dev \
-      libssl-dev pkg-config \
-      python3 python3-pip aria2 curl && \
-    rm -rf /var/lib/apt/lists/*
+  apt-get install -y --no-install-recommends \
+  git cmake build-essential libopenblas-dev \
+  libssl-dev pkg-config \
+  python3 python3-pip aria2 curl && \
+  rm -rf /var/lib/apt/lists/*
 
 # CPU-only build of llama-quantize from TurboQuant fork (llama-exp branch).
 # --recursive ensures submodules (ggml, etc.) are checked out.
 RUN git clone --depth 1 --branch llama-exp --recursive \
-    https://github.com/JEF1056/llama-cpp-turboquant.git /llama.cpp
+  https://github.com/JEF1056/llama-cpp-turboquant.git /llama.cpp
 
 WORKDIR /llama.cpp
 
@@ -47,43 +47,43 @@ WORKDIR /llama.cpp
 # Static libs (BUILD_SHARED_LIBS=OFF) avoid LD_LIBRARY_PATH issues at runtime.
 # Release build for maximum quantization throughput.
 RUN cmake -B build \
-    -DBUILD_SHARED_LIBS=OFF \
-    -DGGML_CUDA=OFF \
-    -DGGML_BLAS=ON \
-    -DGGML_BLAS_VENDOR=OpenBLAS \
-    -DLLAMA_BUILD_TESTS=OFF \
-    -DLLAMA_BUILD_EXAMPLES=OFF \
-    -DLLAMA_BUILD_TOOLS=ON \
-    -DCMAKE_BUILD_TYPE=Release \
-    . && \
-    cmake --build build --parallel $(nproc) --target llama-quantize
+  -DBUILD_SHARED_LIBS=OFF \
+  -DGGML_CUDA=OFF \
+  -DGGML_BLAS=ON \
+  -DGGML_BLAS_VENDOR=OpenBLAS \
+  -DLLAMA_BUILD_TESTS=OFF \
+  -DLLAMA_BUILD_EXAMPLES=OFF \
+  -DLLAMA_BUILD_TOOLS=ON \
+  -DCMAKE_BUILD_TYPE=Release \
+  . && \
+  cmake --build build --parallel $(nproc) --target llama-quantize
 
 # Normalize binary name — fork may produce 'quantize' or 'llama-quantize'.
 RUN BIN=/llama.cpp/build/bin; \
-    if [ ! -f "$BIN/llama-quantize" ] && [ -f "$BIN/quantize" ]; then \
-      cp "$BIN/quantize" /usr/local/bin/llama-quantize; \
-    else \
-      cp "$BIN/llama-quantize" /usr/local/bin/llama-quantize; \
-    fi && \
-    llama-quantize --help 2>&1 | head -1
+  if [ ! -f "$BIN/llama-quantize" ] && [ -f "$BIN/quantize" ]; then \
+  cp "$BIN/quantize" /usr/local/bin/llama-quantize; \
+  else \
+  cp "$BIN/llama-quantize" /usr/local/bin/llama-quantize; \
+  fi && \
+  llama-quantize --help 2>&1 | head -1
 
 # HF→GGUF conversion scripts live in the cloned repo — copy them to /scripts.
 RUN mkdir -p /scripts && \
-    cp /llama.cpp/convert_hf_to_gguf.py /scripts/ && \
-    cp -r /llama.cpp/conversion/ /scripts/conversion/
+  cp /llama.cpp/convert_hf_to_gguf.py /scripts/ && \
+  cp -r /llama.cpp/conversion/ /scripts/conversion/
 
 # Python stack for model download and HF→GGUF conversion.
 # CPU-only torch keeps the image ~3 GB lighter than CUDA torch.
 # Conversion is memory-bound, not compute-bound — CPU torch is sufficient.
 RUN python3 -m pip install --no-cache-dir \
-    torch --index-url https://download.pytorch.org/whl/cpu && \
-    python3 -m pip install --no-cache-dir \
-    huggingface_hub \
-    hf_transfer \
-    transformers \
-    safetensors \
-    sentencepiece \
-    accelerate
+  torch --index-url https://download.pytorch.org/whl/cpu && \
+  python3 -m pip install --no-cache-dir \
+  huggingface_hub \
+  hf_transfer \
+  transformers \
+  safetensors \
+  sentencepiece \
+  accelerate
 
 RUN python3 -m pip install --no-cache-dir /llama.cpp/gguf-py/
 
