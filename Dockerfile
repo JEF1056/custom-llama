@@ -137,14 +137,14 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 # Non-editable install: copies everything into site-packages so /sglang is not
 # needed at runtime, shaving off the full source + submodule tree.
 #
-# [runtime_common] instead of [all]: the fork maps [all] → [all_hip] (AMD ROCm)
-# which installs HIP-specific wheels (petit_kernel, wave-lang) incompatible with
-# CUDA. [runtime_common] contains all core LLM serving deps without the HIP extras.
-# PyTorch is already in the venv from the torch-builder stage.
+# No extras: all CUDA optimizations (flashinfer, flash-attn-4, cutlass, tilelang,
+# torchao, sgl-kernel, quack-kernels, sgl-deep-gemm, etc.) live in base deps on
+# feature/turboquant. The only extras ([all] = diffusion+tracing+http2) are
+# irrelevant for LLM inference. PyTorch is already in the venv from torch-builder.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   uv pip install \
   --no-build-isolation \
-  "./python[runtime_common]"
+  "./python"
 
 # sgl_kernel from [runtime_common] ships SM100-only prebuilt kernels — no SM86
 # (Ampere) binary. Rebuild from the vendored source so nvcc compiles for the full
@@ -160,10 +160,15 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 
 # CMAKE_POLICY_VERSION_MINIMUM=3.5: mscclpp (sgl-kernel dep) has a cmake_minimum_required
 # below 3.5. CMake 4.x removed compatibility for those old versions; this flag re-enables it.
+# CMAKE_BUILD_PARALLEL_LEVEL=2: each nvcc process uses 1-4 GB RAM. Without a cap,
+# cmake launches one job per .cu file simultaneously, exhausting memory on WSL2.
+# At ~3 GB/nvcc process × 4 jobs = ~12 GB peak, leaving ~6 GB headroom in 18 GB WSL2.
+# Lower to 2 if still crashing; raise to 6 if you allocate more WSL2 memory.
 # --no-build-isolation: use torch already in venv for ABI consistency.
 # --no-deps: skip re-resolving the full dependency graph.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5" \
+  CMAKE_BUILD_PARALLEL_LEVEL=4 \
   uv pip install --no-build-isolation --no-deps /sglang/sgl-kernel
 
 # ─── runtime ──────────────────────────────────────────────────────────────────
