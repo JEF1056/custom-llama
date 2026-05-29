@@ -43,7 +43,8 @@ RUN apt-get update && \
   ninja-build \
   pkg-config \
   libssl-dev \
-  protobuf-compiler && \
+  protobuf-compiler \
+  libnuma-dev && \
   rm -rf /var/lib/apt/lists/*
 
 # uv — fast Python package manager (pinned for reproducibility)
@@ -145,6 +146,15 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   --no-build-isolation \
   "./python[runtime_common]"
 
+# sgl_kernel from [runtime_common] ships SM100-only prebuilt kernels — no SM86
+# (Ampere) binary. Rebuild from the vendored source so nvcc compiles for the full
+# TORCH_CUDA_ARCH_LIST (includes 8.6 → SM86). --no-build-isolation reuses the
+# torch already in the venv; --no-deps avoids re-resolving the dependency graph.
+# NOTE: this triggers a full nvcc compile for every arch in TORCH_CUDA_ARCH_LIST.
+#       Narrow via --build-arg TORCH_CUDA_ARCH_LIST="8.6" to speed up first builds.
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+  uv pip install --no-build-isolation --no-deps /sglang/sgl-kernel
+
 # ─── runtime ──────────────────────────────────────────────────────────────────
 # cudnn-runtime (~8 GB) instead of cudnn-devel (~15 GB) — saves ~5-8 GB.
 # Triton 3.x ships its own LLVM/PTX backend and does NOT need system nvcc.
@@ -157,7 +167,8 @@ RUN apt-get update && \
   apt-get install -y --no-install-recommends \
   python3 \
   python3-dev \
-  ca-certificates && \
+  ca-certificates \
+  libnuma1 && \
   rm -rf /var/lib/apt/lists/*
 
 # Only the venv is needed — non-editable install put everything in site-packages.
