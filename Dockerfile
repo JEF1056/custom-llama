@@ -74,9 +74,13 @@ ENV CUDA_HOME=/usr/local/cuda \
 
 # ─── torch-builder ────────────────────────────────────────────────────────────
 # Runs in parallel with repo-cloner. Installs PyTorch into a dedicated venv.
-# Cache mount: reuses downloaded wheels across rebuilds.
-# NOTE: if a new cu126 torch wheel is published with the same version, you must
-# invalidate this layer manually (--no-cache-filter=torch-builder) to pick it up.
+#
+# Versions are pinned to match what sglang's pyproject.toml requires.
+# sglang installs deps with --no-build-isolation; if torch is already at the
+# exact version required (local +cu126 suffix satisfies the bare version per
+# PEP 440), uv leaves it alone and the CUDA variant stays in the venv.
+# Without this pin, uv replaces +cu126 torch with a CPU wheel from PyPI,
+# causing sgl-kernel to fail: ATen/cuda headers are absent in CPU torch.
 FROM base AS torch-builder
 
 RUN uv venv /opt/venv --python python3
@@ -86,9 +90,9 @@ ENV VIRTUAL_ENV=/opt/venv \
 
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   uv pip install \
-  torch \
-  torchvision \
-  torchaudio \
+  "torch==2.11.0+cu126" \
+  "torchvision==0.26.0+cu126" \
+  "torchaudio==2.11.0+cu126" \
   --index-url https://download.pytorch.org/whl/cu126
 
 # ─── repo-cloner ──────────────────────────────────────────────────────────────
