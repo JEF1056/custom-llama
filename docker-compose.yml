@@ -60,12 +60,9 @@ services:
     # No GPU needed — conversion and quantization run on CPU.
 
   # ---------------------------------------------------------------------------
-  # SGLang inference server — JEF1056/sglang-turboquant + TurboQuant PR #23135
+  # SGLang inference server — JEF1056/sglang-turboquant (carlosfundora/sglang-1-bit-turbo)
   # Exposed publicly via Cloudflare Tunnel at chat.jessfan.com with
   # Cloudflare Access authentication.
-  #
-  # Pre-requisite: merge sgl-project/sglang PR #23135 into JEF1056/sglang-turboquant
-  # on GitHub before running `docker compose build sglang-server`.
   # ---------------------------------------------------------------------------
   sglang-server:
     build:
