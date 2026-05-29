@@ -108,9 +108,24 @@ export function MessageBubble({ message }: Props) {
           </div>
         )}
 
+        {/* Token speed — live during streaming, dimmed summary after */}
+        {!isUser && (message.streaming || !!message.tokensPerSec) && (
+          <p className={`mt-1 text-[10px] font-mono tabular-nums ${
+            message.streaming
+              ? 'text-[var(--text-secondary)]'
+              : 'text-[var(--placeholder)] opacity-60'
+          }`}>
+            {message.streaming && message.tokensPerSec
+              ? `⚡ ${message.tokensPerSec} tok/s`
+              : message.streaming
+              ? '…'
+              : `${message.tokenCount ? `${message.tokenCount} tok · ` : ''}${message.tokensPerSec} tok/s`}
+          </p>
+        )}
+
         {/* Agent iteration badge */}
         {message.agentIteration && message.agentIteration > 1 && (
-          <p className="mt-1 text-[10px] text-[var(--text-secondary)]">
+          <p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">
             Turn {message.agentIteration}
           </p>
         )}

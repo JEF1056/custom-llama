@@ -48,6 +48,10 @@ export interface Message {
   streaming?: boolean
   /** Current agentic iteration for assistant messages in a loop */
   agentIteration?: number
+  /** Estimated token count (chars / 4) for the streamed content */
+  tokenCount?: number
+  /** Tokens per second during / at end of streaming */
+  tokensPerSec?: number
 }
 
 // ── Conversation ──────────────────────────────────────────────────────

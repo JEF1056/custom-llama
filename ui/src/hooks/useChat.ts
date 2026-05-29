@@ -185,6 +185,8 @@ export function useChat(convId: string | null, mcp: UseMCPResult): UseChatResult
 
           let streamedContent = ''
           let streamedThinking = ''
+          let charCount = 0
+          const streamStart = Date.now()
 
           const result = await streamCompletion(
             apiMessages,
@@ -193,7 +195,11 @@ export function useChat(convId: string | null, mcp: UseMCPResult): UseChatResult
             controller.signal,
             (chunk) => {
               streamedContent += chunk
-              updateMessage(convId, assistantMsgId, { content: streamedContent, streaming: true })
+              charCount += chunk.length
+              const elapsed = (Date.now() - streamStart) / 1000
+              const tokenCount = Math.round(charCount / 4)
+              const tokensPerSec = elapsed > 0.2 ? Math.round(tokenCount / elapsed) : 0
+              updateMessage(convId, assistantMsgId, { content: streamedContent, streaming: true, tokenCount, tokensPerSec })
             },
             (chunk) => {
               streamedThinking += chunk
@@ -201,12 +207,19 @@ export function useChat(convId: string | null, mcp: UseMCPResult): UseChatResult
             },
           )
 
+          // Finalize: freeze the last tok/s so it stays visible after streaming
+          const totalElapsed = (Date.now() - streamStart) / 1000
+          const finalTokenCount = Math.round(charCount / 4)
+          const finalTokPerSec = totalElapsed > 0.2 ? Math.round(finalTokenCount / totalElapsed) : 0
+
           // Finalize assistant message
           updateMessage(convId, assistantMsgId, {
             content: result.content || streamedContent,
             thinking: result.thinking || streamedThinking || undefined,
             tool_calls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
             streaming: false,
+            tokenCount: finalTokenCount,
+            tokensPerSec: finalTokPerSec,
           })
 
           // Stop conditions
