@@ -145,13 +145,13 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   --no-build-isolation \
   "./python"
 
-# Pin the HuggingFace `kernels` package to a version whose LayerRepository
-# doesn't require a `revision`/`version` argument. Newer kernels broke the
-# API that transformers' hub_kernels.py uses (calls LayerRepository without
-# those args), causing a ValueError on startup. Remove once transformers fixes
-# its hub_kernels.py caller.
+# The transformers version installed by sglang's setup.py is out of sync with
+# the kernels and huggingface_hub versions that land in the environment:
+#   - hub_kernels.py calls LayerRepository without revision/version (newer kernels requires them)
+#   - utils/hub.py imports is_offline_mode from huggingface_hub (removed in recent releases)
+# Upgrading transformers picks up both fixes from upstream.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-  uv pip install "kernels<0.4.0"
+  uv pip install --upgrade transformers
 
 # sgl-kernel: precompiled cu124 wheel (default) or source build from fork.
 # Precompiled cu124 targets sm80/sm86/sm89/sm90/sm90a — covers RTX 3090 (SM86).
