@@ -74,7 +74,7 @@ PROJECTIONS: list[Projection] = [
     ),
     # Vite dev server — loaded as VITE_* env vars by Vite
     Projection(
-        target=Path("ui") / ".env.local",
+        target=Path("ui") / ".env",
         prefixes=["VITE_"],
         all_secrets=True,  # Firebase keys and UIDs — never auto-update
     ),
