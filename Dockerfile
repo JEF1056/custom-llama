@@ -52,7 +52,7 @@ RUN apt-get update && \
 
 # uv — fast Python package manager (pinned for reproducibility)
 # https://docs.astral.sh/uv/guides/integration/docker/
-COPY --from=ghcr.io/astral-sh/uv:0.7.13 /uv /uvx /usr/local/bin/
+COPY --link --from=ghcr.io/astral-sh/uv:0.7.13 /uv /uvx /usr/local/bin/
 
 ENV UV_COMPILE_BYTECODE=1 \
   UV_LINK_MODE=copy \
@@ -101,7 +101,8 @@ FROM base AS repo-cloner
 
 RUN git clone --depth 1 \
   --branch feature/turboquant \
-  --recursive \
+  --recurse-submodules \
+  --shallow-submodules \
   https://github.com/JEF1056/sglang-turboquant.git \
   /sglang
 
@@ -117,19 +118,25 @@ RUN git clone --depth 1 \
 FROM base AS sglang-builder
 
 # Venv with torch already installed
-COPY --from=torch-builder /opt/venv /opt/venv
-# Cloned source tree
-COPY --from=repo-cloner /sglang /sglang
+COPY --link --from=torch-builder /opt/venv /opt/venv
 
 ENV VIRTUAL_ENV=/opt/venv \
   PATH="/opt/venv/bin:$PATH"
 
-WORKDIR /sglang
-
 # setuptools_rust is required by sglang's setup.py but not auto-installed when
 # --no-build-isolation is used (isolation is off so uv skips build-system deps).
+# Installed BEFORE copying sglang source so this layer survives source-only
+# rebuilds (torch venv is the only upstream dependency).
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+  --mount=type=cache,target=/root/.cargo/registry,sharing=locked \
+  --mount=type=cache,target=/root/.cargo/git,sharing=locked \
   uv pip install setuptools_rust
+
+# Cloned source tree — placed after stable installs so source changes only
+# bust layers from here down.
+COPY --link --from=repo-cloner /sglang /sglang
+
+WORKDIR /sglang
 
 # --no-build-isolation: allows the build backend to use the torch already in
 # the venv, avoiding a redundant torch download during sglang's native builds.
@@ -141,6 +148,8 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 # feature/turboquant. The only extras ([all] = diffusion+tracing+http2) are
 # irrelevant for LLM inference. PyTorch is already in the venv from torch-builder.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+  --mount=type=cache,target=/root/.cargo/registry,sharing=locked \
+  --mount=type=cache,target=/root/.cargo/git,sharing=locked \
   uv pip install \
   --no-build-isolation \
   "./python"
@@ -253,12 +262,11 @@ RUN apt-get update && \
   rm -rf /var/lib/apt/lists/*
 
 # Only the venv is needed — non-editable install put everything in site-packages.
-COPY --from=sglang-builder /opt/venv /opt/venv
+COPY --link --from=sglang-builder /opt/venv /opt/venv
 
 ENV VIRTUAL_ENV=/opt/venv \
   PATH="/opt/venv/bin:$PATH"
 
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY --link --chmod=755 entrypoint.sh /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
