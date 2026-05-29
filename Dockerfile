@@ -153,7 +153,7 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 # NOTE: this triggers a full nvcc compile for every arch in TORCH_CUDA_ARCH_LIST.
 #       Narrow via --build-arg TORCH_CUDA_ARCH_LIST="8.6" to speed up first builds.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-  uv pip install --no-build-isolation --no-deps /sglang/sgl-kernel
+  uv pip install --no-deps /sglang/sgl-kernel
 
 # ─── runtime ──────────────────────────────────────────────────────────────────
 # cudnn-runtime (~8 GB) instead of cudnn-devel (~15 GB) — saves ~5-8 GB.
