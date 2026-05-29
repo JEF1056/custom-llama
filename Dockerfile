@@ -161,14 +161,18 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   uv pip install "kernels==0.14.1"
 
-# sgl-kernel: precompiled cu124 wheel (default) or source build from fork.
-# Precompiled cu124 targets sm80/sm86/sm89/sm90/sm90a — covers RTX 3090 (SM86).
+# sgl-kernel: precompiled PyPI wheel (default) or source build from fork.
+#
+# NOTE: the turboquant whl index (https://docs.sglang.io/whl/cu124) now ships
+# sm100-only wheels — they crash on SM86 (RTX 3090) with ImportError: no common_ops
+# for sm86. PyPI wheel includes sm80/sm86/sm89/sm90 variants; SM86 runs SM80 binary.
+#
 # Source build patches CMakeLists and compiles SM80+SM89+SM90 only (no SM100+/FA3).
-# cu124 wheel runs fine on CUDA 12.6.3+ runtime (forward-compatible).
+# Use if the PyPI wheel is incompatible with the turboquant fork (takes 30-60 min).
 #
 # Toggle at build time:
 #   docker build --build-arg SGL_KERNEL_FROM_SOURCE=1 ...  # compile from fork source
-#   docker build ...                                        # precompiled wheel (default)
+#   docker build ...                                        # precompiled PyPI wheel (default)
 ARG SGL_KERNEL_FROM_SOURCE=0
 
 # Source build only: install build backend (scikit-build-core, cmake, ninja).
@@ -240,9 +244,8 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   CMAKE_BUILD_PARALLEL_LEVEL=2 \
   uv pip install --no-build-isolation --no-deps /sglang/sgl-kernel; \
   else \
-  echo "--- sgl-kernel: precompiled cu124 wheel (sm80/sm86/sm89/sm90) ---"; \
-  uv pip install --no-deps sgl-kernel \
-  --index-url https://docs.sglang.io/whl/cu124; \
+  echo "--- sgl-kernel: precompiled PyPI wheel (sm80/sm86/sm89/sm90) ---"; \
+  uv pip install --no-deps sgl-kernel; \
   fi
 
 # ─── runtime ──────────────────────────────────────────────────────────────────
