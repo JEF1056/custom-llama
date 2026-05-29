@@ -42,7 +42,8 @@ RUN apt-get update && \
   build-essential \
   ninja-build \
   pkg-config \
-  libssl-dev && \
+  libssl-dev \
+  protobuf-compiler && \
   rm -rf /var/lib/apt/lists/*
 
 # uv — fast Python package manager (pinned for reproducibility)
