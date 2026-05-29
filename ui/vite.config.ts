@@ -5,14 +5,16 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
+    host: '0.0.0.0',
     proxy: {
-      // Dev-only: proxy /v1 → local SGLang and /mcp-dev → local MCP server
+      // Dev-only: proxy /v1 → SGLang and /mcp-dev → MCP server.
+      // Override targets via env vars when running inside Docker.
       '/v1': {
-        target: 'http://localhost:8080',
+        target: process.env.PROXY_API_TARGET ?? 'http://localhost:8080',
         changeOrigin: true,
       },
       '/mcp-dev': {
-        target: 'http://localhost:3100',
+        target: process.env.PROXY_MCP_TARGET ?? 'http://localhost:3100',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/mcp-dev/, ''),
       },

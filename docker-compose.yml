@@ -210,6 +210,79 @@ services:
     networks:
       - llama-net
 
+  # ---------------------------------------------------------------------------
+  # Chat UI — Vite dev server with Docker Watch
+  #
+  # Start with hot-reload:
+  #   docker compose watch chat-ui
+  #   docker compose up chat-ui --watch     # (Compose v2.22+)
+  #
+  # Or without watch (no HMR sync):
+  #   docker compose up chat-ui
+  #
+  # Docker Watch actions:
+  #   sync        src/, public/, index.html → Vite HMR picks up changes instantly
+  #   sync+restart  vite.config.ts, tsconfig*.json → restarts Vite dev server
+  #   rebuild     package*.json → reinstalls node_modules and rebuilds image
+  #
+  # Configure in .env: VITE_FIREBASE_* and VITE_ADMIN_UID
+  # ---------------------------------------------------------------------------
+  chat-ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile.dev
+    container_name: chat-ui
+
+    ports:
+      - "${CHAT_UI_PORT:-5173}:5173"
+
+    environment:
+      # Proxy targets resolved via Docker network
+      PROXY_API_TARGET: http://sglang-server:${SGLANG_PORT:-8080}
+      PROXY_MCP_TARGET: http://mcp-search-server:${MCP_SERVER_PORT:-3100}
+
+      # Firebase config — set in .env
+      VITE_FIREBASE_API_KEY: ${VITE_FIREBASE_API_KEY:-}
+      VITE_FIREBASE_AUTH_DOMAIN: ${VITE_FIREBASE_AUTH_DOMAIN:-}
+      VITE_FIREBASE_PROJECT_ID: ${VITE_FIREBASE_PROJECT_ID:-}
+      VITE_FIREBASE_STORAGE_BUCKET: ${VITE_FIREBASE_STORAGE_BUCKET:-}
+      VITE_FIREBASE_MESSAGING_SENDER_ID: ${VITE_FIREBASE_MESSAGING_SENDER_ID:-}
+      VITE_FIREBASE_APP_ID: ${VITE_FIREBASE_APP_ID:-}
+      VITE_ADMIN_UID: ${VITE_ADMIN_UID:-}
+
+    networks:
+      - llama-net
+
+    develop:
+      watch:
+        # Source files — Vite HMR handles the reload, no restart needed
+        - action: sync
+          path: ./ui/src
+          target: /app/src
+        - action: sync
+          path: ./ui/public
+          target: /app/public
+        - action: sync
+          path: ./ui/index.html
+          target: /app/index.html
+
+        # Config files — require Vite server restart
+        - action: sync+restart
+          path: ./ui/vite.config.ts
+          target: /app/vite.config.ts
+        - action: sync+restart
+          path: ./ui/tsconfig.app.json
+          target: /app/tsconfig.app.json
+        - action: sync+restart
+          path: ./ui/tsconfig.json
+          target: /app/tsconfig.json
+
+        # Dependency changes — rebuild image to re-run npm install
+        - action: rebuild
+          path: ./ui/package.json
+        - action: rebuild
+          path: ./ui/package-lock.json
+
 volumes:
   mcp-cache:
     driver: local
