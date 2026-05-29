@@ -23,8 +23,6 @@ SPEC_ALGO=${SGLANG_SPECULATIVE_ALGO:-}
 SPEC_NUM_STEPS=${SGLANG_SPECULATIVE_NUM_STEPS:-3}
 SPEC_EAGLE_TOPK=${SGLANG_SPECULATIVE_EAGLE_TOPK:-}
 SPEC_NUM_DRAFT_TOKENS=${SGLANG_SPECULATIVE_NUM_DRAFT_TOKENS:-4}
-CORS_ORIGINS=${SGLANG_CORS_ORIGINS:-*}
-
 if [ -z "$MODEL_PATH" ]; then
     echo "ERROR: SGLANG_MODEL_PATH is required"
     echo "Set SGLANG_MODEL_PATH to the absolute path of a GGUF file inside /models"
@@ -72,5 +70,4 @@ exec python3 -m sglang.launch_server \
     ${SPEC_ALGO:+--speculative-num-steps "$SPEC_NUM_STEPS"} \
     ${SPEC_ALGO:+--speculative-num-draft-tokens "$SPEC_NUM_DRAFT_TOKENS"} \
     ${SPEC_EAGLE_TOPK:+--speculative-eagle-topk "$SPEC_EAGLE_TOPK"} \
-    --cors-allow-origins "$CORS_ORIGINS" \
     "$@"
