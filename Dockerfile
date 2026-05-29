@@ -99,6 +99,12 @@ RUN git clone --depth 1 \
         https://github.com/JEF1056/sglang-turboquant.git \
         /sglang
 
+# InternS2PreviewConfig is imported in hf_transformers/common.py (import block
+# and _CONFIG_REGISTRY list) but is missing from configs/__init__.py — broken
+# merge. Remove both occurrences until the class is added to the branch.
+RUN sed -i '/InternS2PreviewConfig,/d' \
+    /sglang/python/sglang/srt/utils/hf_transformers/common.py
+
 # ─── sglang-builder ───────────────────────────────────────────────────────────
 # Merges outputs of the two parallel stages, then installs sglang on top of
 # the pre-built torch venv.
