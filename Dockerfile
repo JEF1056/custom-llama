@@ -215,18 +215,18 @@ PATCH
 #     CMake 4.x removed that compat — this flag re-enables it.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   if [ "${SGL_KERNEL_FROM_SOURCE}" = "1" ]; then \
-    echo "--- sgl-kernel: building from source (SM86) ---"; \
-    CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-      -DSGL_KERNEL_COMPILE_THREADS=2 \
-      -DSGL_KERNEL_ENABLE_SM90A=OFF \
-      -DSGL_KERNEL_ENABLE_SM100A=OFF \
-      -DSGL_KERNEL_ENABLE_FA3=OFF" \
-    CMAKE_BUILD_PARALLEL_LEVEL=2 \
-    uv pip install --no-build-isolation --no-deps /sglang/sgl-kernel; \
+  echo "--- sgl-kernel: building from source (SM86) ---"; \
+  CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+  -DSGL_KERNEL_COMPILE_THREADS=2 \
+  -DSGL_KERNEL_ENABLE_SM90A=OFF \
+  -DSGL_KERNEL_ENABLE_SM100A=OFF \
+  -DSGL_KERNEL_ENABLE_FA3=OFF" \
+  CMAKE_BUILD_PARALLEL_LEVEL=2 \
+  uv pip install --no-build-isolation --no-deps /sglang/sgl-kernel; \
   else \
-    echo "--- sgl-kernel: precompiled cu124 wheel (sm80/sm86/sm89/sm90) ---"; \
-    uv pip install --no-deps sgl-kernel \
-      --index-url https://docs.sglang.io/whl/cu124; \
+  echo "--- sgl-kernel: precompiled cu124 wheel (sm80/sm86/sm89/sm90) ---"; \
+  uv pip install --no-deps sgl-kernel \
+  --index-url https://docs.sglang.io/whl/cu124; \
   fi
 
 # ─── runtime ──────────────────────────────────────────────────────────────────

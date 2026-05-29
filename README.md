@@ -59,6 +59,15 @@ Built from source from `JEF1056/sglang-turboquant` — a fork of [sgl-project/sg
 
 > **Pre-requisite:** Merge `sgl-project/sglang` PR #23135 into `JEF1056/sglang-turboquant` on GitHub before building.
 
+#### sgl-kernel build modes
+
+| Mode | Command | Time | Notes |
+|---|---|---|---|
+| **Precompiled** (default) | `docker compose build sglang-server` | ~1 min | cu124 wheel; targets sm80/sm86/sm89/sm90 |
+| **From source** | `docker compose build --build-arg SGL_KERNEL_FROM_SOURCE=1 sglang-server` | ~10–20 min | SM86-optimised; strips SM100+/FA3 |
+
+The precompiled [cu124 wheel](https://docs.sglang.io/whl/cu124) includes RTX 3090 (SM86) and runs on CUDA 12.4+ runtimes. Use source build only if you need to pick up unreleased sgl-kernel changes from the fork.
+
 ### Convert image (`Dockerfile.convert`)
 
 Plain `ubuntu:22.04`, zero CUDA dependency. Builds `llama-quantize` CPU-only from the TurboQuant llama.cpp fork (OpenBLAS). Also includes the HF→GGUF conversion pipeline (`convert_hf_to_gguf.py`) and `manage_models.py`.
@@ -148,8 +157,11 @@ docker compose run --rm llama-convert list
 ### Step 5: Build and start
 
 ```bash
-# Build SGLang server (compiles sgl-kernel — first build takes ~10–20 min)
+# Build SGLang server (uses precompiled sgl-kernel wheel by default — fast)
 docker compose build sglang-server
+
+# To compile sgl-kernel from source instead (SM86-optimised, ~10–20 min):
+docker compose build --build-arg SGL_KERNEL_FROM_SOURCE=1 sglang-server
 
 # Start inference server + MCP search tool
 docker compose up -d sglang-server mcp-search-server
@@ -237,4 +249,4 @@ response = client.chat.completions.create(
 - **Cloudflare Tunnel not connecting:** Verify `CF_TUNNEL_TOKEN`. Check `docker compose logs cloudflared`.
 - **GPU not detected:** Verify NVIDIA Container Toolkit. Run `docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi`.
 - **WSL2 BSOD during download/quantize:** Set `CONVERT_DOWNLOAD_RATE=300M` and `CONVERT_THREADS=4` in `.env`.
-- **sgl-kernel build fails:** Ensure the CUDA devel image matches your driver. Check `gcc`/`g++` version (gcc-13 recommended per SGLang docs).
+- **sgl-kernel build fails:** Only applies when `SGL_KERNEL_FROM_SOURCE=1`. Ensure the CUDA devel image matches your driver. Check `gcc`/`g++` version (gcc-13 recommended per SGLang docs). Default precompiled wheel avoids this entirely.
