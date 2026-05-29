@@ -145,6 +145,14 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   --no-build-isolation \
   "./python"
 
+# Pin the HuggingFace `kernels` package to a version whose LayerRepository
+# doesn't require a `revision`/`version` argument. Newer kernels broke the
+# API that transformers' hub_kernels.py uses (calls LayerRepository without
+# those args), causing a ValueError on startup. Remove once transformers fixes
+# its hub_kernels.py caller.
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+  uv pip install "kernels<0.4.0"
+
 # sgl-kernel: precompiled cu124 wheel (default) or source build from fork.
 # Precompiled cu124 targets sm80/sm86/sm89/sm90/sm90a — covers RTX 3090 (SM86).
 # Source build patches CMakeLists and compiles SM80+SM89+SM90 only (no SM100+/FA3).
