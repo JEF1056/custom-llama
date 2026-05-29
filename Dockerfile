@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # =============================================================================
-# SGLang TurboQuant server image — CUDA 13.0.1 + cuDNN
+# SGLang TurboQuant server image — CUDA 12.6.3 + cuDNN
+# Optimized for RTX 3090 (SM86): compiles SM80+SM89+SM90 only.
 #
 # Builds sglang from JEF1056/sglang-turboquant (feature/turboquant)
 # using uv for dependency management. Served via entrypoint.sh.
@@ -10,7 +11,9 @@
 # Cache mounts avoid re-downloading packages on rebuild.
 #
 # Build:
-#   docker build --build-arg CUDA_VERSION=13.0.1 -t sglang-turboquant .
+#   docker build -t sglang-turboquant .
+# Build for other GPU (e.g. H100):
+#   docker build --build-arg CUDA_VERSION=13.0.1 --build-arg TORCH_CUDA_ARCH_LIST="9.0" -t sglang-turboquant .
 #
 # Force-refresh uv/pip cache (e.g. after a new torch release):
 #   docker build --no-cache-filter=torch-builder,sglang-builder ...
@@ -23,7 +26,7 @@
 #     sglang-turboquant
 # =============================================================================
 
-ARG CUDA_VERSION=13.0.1
+ARG CUDA_VERSION=12.6.3
 
 # ─── base: system packages + uv ──────────────────────────────────────────────
 # Shared parent for all build stages; deduped automatically by BuildKit.
@@ -66,16 +69,17 @@ RUN curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -sSf https://sh.ru
 # CUDA_HOME: not set by the base image as an env var, but required by many
 # build systems (flashinfer, triton native builds, cmake-based extensions).
 # TORCH_CUDA_ARCH_LIST: limit native extension compilation to your GPU's SM.
-# Override at build time: --build-arg TORCH_CUDA_ARCH_LIST="9.0"
+# Defaulting to RTX 3090 (SM86) only — override at build time for other GPUs:
+#   --build-arg TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0"
 # Common values: "8.0" (A100), "8.6" (RTX 3090), "8.9" (RTX 4090), "9.0" (H100)
-ARG TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0"
+ARG TORCH_CUDA_ARCH_LIST="8.6"
 ENV CUDA_HOME=/usr/local/cuda \
   TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
 
 # ─── torch-builder ────────────────────────────────────────────────────────────
 # Runs in parallel with repo-cloner. Installs PyTorch into a dedicated venv.
 # Cache mount: reuses downloaded wheels across rebuilds.
-# NOTE: if a new cu130 torch wheel is published with the same version, you must
+# NOTE: if a new cu126 torch wheel is published with the same version, you must
 # invalidate this layer manually (--no-cache-filter=torch-builder) to pick it up.
 FROM base AS torch-builder
 
@@ -89,7 +93,7 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   torch \
   torchvision \
   torchaudio \
-  --index-url https://download.pytorch.org/whl/cu130
+  --index-url https://download.pytorch.org/whl/cu126
 
 # ─── repo-cloner ──────────────────────────────────────────────────────────────
 # Runs in parallel with torch-builder (no shared resources).
@@ -105,7 +109,7 @@ RUN git clone --depth 1 \
 # ─── sglang-builder ───────────────────────────────────────────────────────────
 # Merges outputs of the two parallel stages, then installs sglang on top of
 # the pre-built torch venv.
-# NOTE: if flashinfer or triton prebuilt wheels for cu130 are unavailable,
+# NOTE: if flashinfer or triton prebuilt wheels for cu126 are unavailable,
 # the install will fail. Check:
 #   https://github.com/flashinfer-ai/flashinfer/releases
 #   https://github.com/triton-lang/triton/releases
@@ -151,17 +155,73 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   uv pip install scikit-build-core cmake ninja
 
+# Patch sgl-kernel CMakeLists for RTX 3090 (SM86):
+#
+# 1. Remove the SM100+ build target (common_ops_sm100_build).
+#    sgl-kernel compiles TWO identical shared libraries from the same sources
+#    (sm90/ and sm100/); with SM100A=OFF they use the same arch set — pure
+#    duplicate work. RTX 3090 will never load the sm100 path anyway.
+#    Savings: ~50% of total kernel compile time.
+#
+# 2. Remove SM100-specific source files from the SOURCES list.
+#    These Blackwell-only kernels (mxfp8 blockscaled) produce dead code for
+#    SM86 and still take nvcc time even in the sm90/ target.
+#
+# Uses Python heredoc (requires dockerfile syntax 1.7 + BuildKit).
+RUN python3 - <<'PATCH'
+import re, pathlib, sys
+
+cmake = pathlib.Path('/sglang/sgl-kernel/CMakeLists.txt')
+txt = cmake.read_text()
+
+# 1. Remove SM100+ build target block
+before = len(txt)
+txt = re.sub(
+    r'# =+[^\n]*(?:Common SM100\+|SM100\+ Build)[^\n]*\n.*?install\(TARGETS common_ops_sm100_build[^\n]*\n',
+    '',
+    txt,
+    flags=re.DOTALL | re.IGNORECASE,
+)
+removed_sm100_target = len(txt) < before
+if not removed_sm100_target:
+    print("WARNING: SM100+ build target block not found — skipping", file=sys.stderr)
+
+# 2. Remove SM100-specific source files
+sm100_sources = [
+    '    "csrc/expert_specialization/es_sm100_mxfp8_blockscaled.cu"\n',
+    '    "csrc/expert_specialization/es_sm100_mxfp8_blockscaled_group_quant.cu"\n',
+]
+for src in sm100_sources:
+    if src in txt:
+        txt = txt.replace(src, '')
+    else:
+        print(f"WARNING: source not found: {src.strip()}", file=sys.stderr)
+
+cmake.write_text(txt)
+print(f"Patched CMakeLists.txt — SM100+ target removed: {removed_sm100_target}")
+PATCH
+
 # CMAKE_POLICY_VERSION_MINIMUM=3.5: mscclpp sub-project uses cmake_minimum_required
 # below 3.5; CMake 4.x removed compatibility. This flag re-enables it.
 # SGL_KERNEL_COMPILE_THREADS=2: limits NVCC's internal thread count per job,
 # reducing per-process peak memory on top of the parallel job cap.
-# CMAKE_BUILD_PARALLEL_LEVEL=4: cap concurrent nvcc jobs at ~12 GB peak RAM,
-# safe within 18 GB WSL2. Lower to 2 if OOM; raise to 6 with more memory.
+# CMAKE_BUILD_PARALLEL_LEVEL=2: cap concurrent nvcc jobs; lower if OOM.
 # --no-build-isolation: use torch already in venv for ABI consistency.
 # --no-deps: skip re-resolving the full dependency graph.
+#
+# RTX 3090 (SM86) arch reduction flags:
+#   ENABLE_BELOW_SM90=ON (default): compiles SM80+SM89 code; SM86 runs SM80 binary.
+#   SGL_KERNEL_ENABLE_SM90A=OFF: suppresses SM90a (would auto-enable on CUDA >=12.4).
+#   SGL_KERNEL_ENABLE_SM100A=OFF: suppresses SM100a/SM120a (Blackwell).
+#   SGL_KERNEL_ENABLE_FA3=OFF: suppresses Flash Attention 3 (also auto-enables SM90a).
+# Net result: compiles SM80 + SM89 + SM90 only (vs 8+ arches on CUDA 13.0).
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-  CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DSGL_KERNEL_COMPILE_THREADS=2" \
-  CMAKE_BUILD_PARALLEL_LEVEL=4 \
+  CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    -DSGL_KERNEL_COMPILE_THREADS=2 \
+    -DSGL_KERNEL_ENABLE_SM90A=OFF \
+    -DSGL_KERNEL_ENABLE_SM100A=OFF \
+    -DSGL_KERNEL_ENABLE_FA3=OFF" \
+  CMAKE_BUILD_PARALLEL_LEVEL=2 \
   uv pip install --no-build-isolation --no-deps /sglang/sgl-kernel
 
 # ─── runtime ──────────────────────────────────────────────────────────────────
