@@ -141,28 +141,26 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   --no-build-isolation \
   "./python"
 
-# sgl_kernel from [runtime_common] ships SM100-only prebuilt kernels — no SM86
-# (Ampere) binary. Rebuild from the vendored source so nvcc compiles for the full
-# TORCH_CUDA_ARCH_LIST (includes 8.6 → SM86).
-# NOTE: this triggers a full nvcc compile. Narrow via:
-#       --build-arg TORCH_CUDA_ARCH_LIST="8.6"  (docker-compose.yml already does this)
+# Rebuild sgl-kernel from vendored source for SM86 (RTX 3090) support.
+# The PyPI wheel ships SM100-only; source build with ENABLE_BELOW_SM90=ON
+# (default on x86_64) produces SM80 + SM86 + SM89 binaries.
+# NOTE: triggers nvcc compile. docker-compose.yml pins TORCH_CUDA_ARCH_LIST=8.6
+#       to build only SM86 and keep compile time reasonable.
 #
-# Pre-install build backend + tools into the venv so --no-build-isolation can find
-# them. This ensures cmake uses the torch 2.12+cu130 from our venv (not a throwaway
-# uv build-isolation env with a different torch version).
+# Pre-install build backend into the venv so --no-build-isolation finds them.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   uv pip install scikit-build-core cmake ninja
 
-# CMAKE_POLICY_VERSION_MINIMUM=3.5: mscclpp (sgl-kernel dep) has a cmake_minimum_required
-# below 3.5. CMake 4.x removed compatibility for those old versions; this flag re-enables it.
-# CMAKE_BUILD_PARALLEL_LEVEL=2: each nvcc process uses 1-4 GB RAM. Without a cap,
-# cmake launches one job per .cu file simultaneously, exhausting memory on WSL2.
-# At ~3 GB/nvcc process × 4 jobs = ~12 GB peak, leaving ~6 GB headroom in 18 GB WSL2.
-# Lower to 2 if still crashing; raise to 6 if you allocate more WSL2 memory.
+# CMAKE_POLICY_VERSION_MINIMUM=3.5: mscclpp sub-project uses cmake_minimum_required
+# below 3.5; CMake 4.x removed compatibility. This flag re-enables it.
+# SGL_KERNEL_COMPILE_THREADS=2: limits NVCC's internal thread count per job,
+# reducing per-process peak memory on top of the parallel job cap.
+# CMAKE_BUILD_PARALLEL_LEVEL=4: cap concurrent nvcc jobs at ~12 GB peak RAM,
+# safe within 18 GB WSL2. Lower to 2 if OOM; raise to 6 with more memory.
 # --no-build-isolation: use torch already in venv for ABI consistency.
 # --no-deps: skip re-resolving the full dependency graph.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-  CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5" \
+  CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DSGL_KERNEL_COMPILE_THREADS=2" \
   CMAKE_BUILD_PARALLEL_LEVEL=4 \
   uv pip install --no-build-isolation --no-deps /sglang/sgl-kernel
 
