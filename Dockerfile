@@ -148,12 +148,23 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 
 # sgl_kernel from [runtime_common] ships SM100-only prebuilt kernels — no SM86
 # (Ampere) binary. Rebuild from the vendored source so nvcc compiles for the full
-# TORCH_CUDA_ARCH_LIST (includes 8.6 → SM86). --no-build-isolation reuses the
-# torch already in the venv; --no-deps avoids re-resolving the dependency graph.
-# NOTE: this triggers a full nvcc compile for every arch in TORCH_CUDA_ARCH_LIST.
-#       Narrow via --build-arg TORCH_CUDA_ARCH_LIST="8.6" to speed up first builds.
+# TORCH_CUDA_ARCH_LIST (includes 8.6 → SM86).
+# NOTE: this triggers a full nvcc compile. Narrow via:
+#       --build-arg TORCH_CUDA_ARCH_LIST="8.6"  (docker-compose.yml already does this)
+#
+# Pre-install build backend + tools into the venv so --no-build-isolation can find
+# them. This ensures cmake uses the torch 2.12+cu130 from our venv (not a throwaway
+# uv build-isolation env with a different torch version).
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-  uv pip install --no-deps /sglang/sgl-kernel
+  uv pip install scikit-build-core cmake ninja
+
+# CMAKE_POLICY_VERSION_MINIMUM=3.5: mscclpp (sgl-kernel dep) has a cmake_minimum_required
+# below 3.5. CMake 4.x removed compatibility for those old versions; this flag re-enables it.
+# --no-build-isolation: use torch already in venv for ABI consistency.
+# --no-deps: skip re-resolving the full dependency graph.
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+  CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5" \
+  uv pip install --no-build-isolation --no-deps /sglang/sgl-kernel
 
 # ─── runtime ──────────────────────────────────────────────────────────────────
 # cudnn-runtime (~8 GB) instead of cudnn-devel (~15 GB) — saves ~5-8 GB.
