@@ -23,3 +23,8 @@ Thumbs.db
 plans
 .roo
 .roomodes
+
+# Chat UI
+ui/node_modules/
+ui/dist/
+ui/.env.local

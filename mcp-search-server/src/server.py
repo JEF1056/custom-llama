@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -88,7 +89,7 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Protected endpoints
-        if path == "/mcp" or path.startswith("/files/") or path == "/messages/":
+        if path == "/" or path.startswith("/files/") or path == "/messages/" or path.startswith("/api/files"):
             auth_header = request.headers.get("Authorization", "")
             if not auth_header.startswith("Bearer "):
                 return Response(
@@ -125,7 +126,7 @@ def create_server() -> FastMCP:
         name="mcp-search-server",
         host=settings.MCP_SERVER_HOST,
         port=settings.MCP_SERVER_PORT,
-        streamable_http_path="/mcp",
+        streamable_http_path="/",
         stateless_http=True,
         instructions=(
             "A generalized MCP tool server: web search, browser automation, HTTP requests, "
@@ -503,12 +504,14 @@ def create_app(server: FastMCP) -> Starlette:
 
     app = Starlette(
         debug=server.settings.debug,
-        routes=sse_routes + http_routes + [healthcheck_route, file_ui_route, file_route, list_files_route, upload_file_route, delete_file_route],
+        # Explicit routes first so they are matched before the MCP catch-all at "/"
+        routes=[healthcheck_route, file_ui_route, file_route, list_files_route, upload_file_route, delete_file_route] + sse_routes + http_routes,
         lifespan=lifespan,
     )
+    _cors_origins = [o.strip() for o in os.environ.get("MCP_CORS_ORIGINS", "*").split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=_cors_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -527,7 +530,7 @@ async def run_server(server: FastMCP) -> None:
     logger.info("Starting MCP server at %s:%s", settings.MCP_SERVER_HOST, settings.MCP_SERVER_PORT)
     logger.info("SSE transport:             GET  /sse")
     logger.info("SSE message handler:       POST /messages/")
-    logger.info("Streamable HTTP transport: POST /mcp  (recommended)")
+    logger.info("Streamable HTTP transport: POST /  (recommended)")
     logger.info("Healthcheck:               GET  /health")
     logger.info("File UI:                   GET  /files")
     logger.info("File list:                 GET  /api/files")
