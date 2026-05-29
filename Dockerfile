@@ -19,11 +19,7 @@
 #   docker build --no-cache-filter=torch-builder,sglang-builder ...
 #
 # Run:
-#   docker run --gpus all \
-#     -e SGLANG_MODEL_PATH=/models/my-model.gguf \
-#     -v /path/to/models:/models \
-#     -p 8080:8080 \
-#     sglang-turboquant
+#   docker compose up sglang-server
 # =============================================================================
 
 ARG CUDA_VERSION=12.6.3
@@ -161,43 +157,23 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   uv pip install "kernels==0.14.1"
 
-# sgl-kernel: precompiled PyPI wheel (default) or source build from fork.
-#
-# NOTE: the turboquant whl index (https://docs.sglang.io/whl/cu124) now ships
-# sm100-only wheels — they crash on SM86 (RTX 3090) with ImportError: no common_ops
-# for sm86. PyPI wheel includes sm80/sm86/sm89/sm90 variants; SM86 runs SM80 binary.
-#
-# Source build patches CMakeLists and compiles SM80+SM89+SM90 only (no SM100+/FA3).
-# Use if the PyPI wheel is incompatible with the turboquant fork (takes 30-60 min).
-#
-# Toggle at build time:
-#   docker build --build-arg SGL_KERNEL_FROM_SOURCE=1 ...  # compile from fork source
-#   docker build ...                                        # precompiled PyPI wheel (default)
-ARG SGL_KERNEL_FROM_SOURCE=0
+# sgl-kernel: compiled from fork source.
+# Precompiled wheels (PyPI and turboquant index) are sm100-only; SM86 requires source build.
+# Compiles SM80+SM89+SM90 (no SM100+/FA3); SM86 runs the SM80 binary.
+# First build ~30-60 min; subsequent rebuilds are cached.
 
-# Source build only: install build backend (scikit-build-core, cmake, ninja).
+# Build backend for scikit-build-core / cmake.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-  [ "${SGL_KERNEL_FROM_SOURCE}" != "1" ] || \
   uv pip install scikit-build-core cmake ninja
 
-# Source build only: patch CMakeLists for RTX 3090 (SM86).
-#
-# 1. Remove the SM100+ build target (common_ops_sm100_build).
-#    sgl-kernel compiles TWO identical shared libraries from the same sources
-#    (sm90/ and sm100/); with SM100A=OFF they use the same arch set — pure
-#    duplicate work. RTX 3090 will never load the sm100 path anyway.
-#    Savings: ~50% of total kernel compile time.
-#
-# 2. Remove SM100-specific source files from the SOURCES list.
-#    These Blackwell-only kernels (mxfp8 blockscaled) produce dead code for
-#    SM86 and still take nvcc time even in the sm90/ target.
-RUN [ "${SGL_KERNEL_FROM_SOURCE}" != "1" ] || python3 - <<'PATCH'
+# Patch CMakeLists: remove SM100+ build target and Blackwell-only source files.
+# Eliminates ~50% of compile time on SM86 (RTX 3090).
+RUN python3 - <<'PATCH'
 import re, pathlib, sys
 
 cmake = pathlib.Path('/sglang/sgl-kernel/CMakeLists.txt')
 txt = cmake.read_text()
 
-# 1. Remove SM100+ build target block
 before = len(txt)
 txt = re.sub(
     r'# =+[^\n]*(?:Common SM100\+|SM100\+ Build)[^\n]*\n.*?install\(TARGETS common_ops_sm100_build[^\n]*\n',
@@ -205,48 +181,32 @@ txt = re.sub(
     txt,
     flags=re.DOTALL | re.IGNORECASE,
 )
-removed_sm100_target = len(txt) < before
-if not removed_sm100_target:
+if len(txt) == before:
     print("WARNING: SM100+ build target block not found — skipping", file=sys.stderr)
 
-# 2. Remove SM100-specific source files
-sm100_sources = [
+for src in [
     '    "csrc/expert_specialization/es_sm100_mxfp8_blockscaled.cu"\n',
     '    "csrc/expert_specialization/es_sm100_mxfp8_blockscaled_group_quant.cu"\n',
-]
-for src in sm100_sources:
+]:
     if src in txt:
         txt = txt.replace(src, '')
     else:
         print(f"WARNING: source not found: {src.strip()}", file=sys.stderr)
 
 cmake.write_text(txt)
-print(f"Patched CMakeLists.txt — SM100+ target removed: {removed_sm100_target}")
 PATCH
 
-# Install sgl-kernel — precompiled wheel or source build per SGL_KERNEL_FROM_SOURCE.
-#
-# Source build flags (SM86 optimised):
-#   ENABLE_BELOW_SM90=ON (default): compiles SM80+SM89; SM86 runs SM80 binary.
-#   SGL_KERNEL_ENABLE_SM90A=OFF: suppresses SM90a (auto-enables on CUDA >=12.4).
-#   SGL_KERNEL_ENABLE_SM100A=OFF: suppresses SM100a/SM120a (Blackwell).
-#   SGL_KERNEL_ENABLE_FA3=OFF: suppresses Flash Attention 3 (also enables SM90a).
-#   CMAKE_POLICY_VERSION_MINIMUM=3.5: mscclpp uses cmake_minimum_required < 3.5;
-#     CMake 4.x removed that compat — this flag re-enables it.
+# Build flags: SM80+SM89+SM90, no SM90a/SM100a/FA3.
+# CMAKE_POLICY_VERSION_MINIMUM=3.5: mscclpp requires cmake_minimum_required < 3.5
+# which CMake 4.x removed; this flag re-enables it.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-  if [ "${SGL_KERNEL_FROM_SOURCE}" = "1" ]; then \
-  echo "--- sgl-kernel: building from source (SM86) ---"; \
   CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-  -DSGL_KERNEL_COMPILE_THREADS=2 \
+  -DSGL_KERNEL_COMPILE_THREADS=4 \
   -DSGL_KERNEL_ENABLE_SM90A=OFF \
   -DSGL_KERNEL_ENABLE_SM100A=OFF \
   -DSGL_KERNEL_ENABLE_FA3=OFF" \
-  CMAKE_BUILD_PARALLEL_LEVEL=2 \
-  uv pip install --no-build-isolation --no-deps /sglang/sgl-kernel; \
-  else \
-  echo "--- sgl-kernel: precompiled PyPI wheel (sm80/sm86/sm89/sm90) ---"; \
-  uv pip install --no-deps sgl-kernel; \
-  fi
+  CMAKE_BUILD_PARALLEL_LEVEL=4 \
+  uv pip install --no-build-isolation --no-deps /sglang/sgl-kernel
 
 # ─── runtime ──────────────────────────────────────────────────────────────────
 # cudnn-runtime (~8 GB) instead of cudnn-devel (~15 GB) — saves ~5-8 GB.
