@@ -230,7 +230,7 @@ services:
   chat-ui:
     build:
       context: ./ui
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile
     container_name: chat-ui
 
     ports:
