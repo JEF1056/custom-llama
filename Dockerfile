@@ -167,8 +167,11 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 # First build ~30-60 min; subsequent rebuilds are cached.
 
 # Build backend for scikit-build-core / cmake.
+# cmake is pinned to 3.x: cmake 4.x changed how IMPORTED target include dirs
+# propagate, breaking find_package(Torch) header forwarding to the sm90 build
+# target (ATen/cuda/CUDAContext.h not found despite torch being installed).
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-  uv pip install scikit-build-core cmake ninja
+  uv pip install scikit-build-core "cmake>=3.27,<4" ninja
 
 # Patch CMakeLists: remove SM100+ build target and Blackwell-only source files.
 # Eliminates ~50% of compile time on SM86 (RTX 3090).
