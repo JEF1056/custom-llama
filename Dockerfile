@@ -125,9 +125,9 @@ torch_inc = subprocess.check_output(
     ['python3', '-c', 'import torch, os; print(os.path.join(os.path.dirname(torch.__file__), "include"))'],
     text=True).strip()
 api_inc = f'{torch_inc}/torch/csrc/api/include'
-injection = f'include_directories("{api_inc}")'
+injection = f'include_directories("{torch_inc}")\ninclude_directories("{api_inc}")'
 marker = 'find_package(Torch REQUIRED)'
-if marker in txt and injection not in txt:
+if marker in txt and f'include_directories("{torch_inc}")' not in txt:
     txt = txt.replace(marker, f'{marker}\n{injection}', 1)
 
 cmake.write_text(txt)
