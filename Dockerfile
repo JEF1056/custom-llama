@@ -204,10 +204,14 @@ cmake.write_text(txt)
 PATCH
 
 # Build flags: SM80+SM89+SM90, no SM90a/SM100a/FA3.
-# CMAKE_POLICY_VERSION_MINIMUM=3.5: mscclpp requires cmake_minimum_required < 3.5
-# which CMake 4.x removed; this flag re-enables it.
+# CMAKE_CUDA_FLAGS: the sgl-kernel CMakeLists finds torch (libtorch.so) via
+# find_package(Torch) but does not propagate TORCH_INCLUDE_DIRS to the sm90
+# target's compile command. Injecting the path via CMAKE_CUDA_FLAGS ensures
+# all nvcc invocations get ATen/cuda/ and c10/cuda/ headers.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+  TORCH_INC=$(python3 -c "import torch, os; print(os.path.join(os.path.dirname(torch.__file__), 'include'))") && \
   CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+  -DCMAKE_CUDA_FLAGS=-I${TORCH_INC} \
   -DSGL_KERNEL_COMPILE_THREADS=4 \
   -DSGL_KERNEL_ENABLE_SM90A=OFF \
   -DSGL_KERNEL_ENABLE_SM100A=OFF \
