@@ -211,20 +211,19 @@ RUN python3 - <<'SHIM'
 import os, torch
 inc = os.path.join(os.path.dirname(torch.__file__), 'include')
 dst = os.path.join(inc, 'torch', 'all.h')
-if os.path.exists(dst):
-    print(f'torch/all.h already present: {dst}')
-else:
-    content = (
-        '#pragma once\n'
-        '// Compatibility shim: torch/all.h absent in this PyTorch build.\n'
-        '#include <ATen/ATen.h>\n'
-        '#include <ATen/cuda/CUDAContext.h>\n'
-        '#include <c10/cuda/CUDAStream.h>\n'
-        '#include <c10/cuda/CUDAGuard.h>\n'
-    )
-    with open(dst, 'w') as f:
-        f.write(content)
-    print(f'Created torch/all.h shim at {dst}')
+# Always write: ATen/ATen.h only exposes at:: not torch::; the real C++
+# frontend (torch::Tensor, torch::zeros, etc.) lives under
+# torch/csrc/api/include/torch/torch.h which is reachable from the existing
+# -I.../torch/include include path already passed to nvcc.
+content = (
+    '#pragma once\n'
+    '// Compatibility shim: torch/all.h absent at root include path in\n'
+    '// this PyTorch build. Forward to the C++ frontend headers.\n'
+    '#include <torch/csrc/api/include/torch/torch.h>\n'
+)
+with open(dst, 'w') as f:
+    f.write(content)
+print(f'Wrote torch/all.h shim -> torch/csrc/api/include/torch/torch.h')
 SHIM
 
 # Build flags: SM80+SM89+SM90, no SM90a/SM100a/FA3.
