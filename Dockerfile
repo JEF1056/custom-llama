@@ -203,6 +203,30 @@ for src in [
 cmake.write_text(txt)
 PATCH
 
+# torch/all.h compatibility shim.
+# PyTorch 2.11.0 does not ship torch/all.h; sgl-kernel sources include it
+# directly. Create it when missing so compilation succeeds without patching
+# each source file.
+RUN python3 - <<'SHIM'
+import os, torch
+inc = os.path.join(os.path.dirname(torch.__file__), 'include')
+dst = os.path.join(inc, 'torch', 'all.h')
+if os.path.exists(dst):
+    print(f'torch/all.h already present: {dst}')
+else:
+    content = (
+        '#pragma once\n'
+        '// Compatibility shim: torch/all.h absent in this PyTorch build.\n'
+        '#include <ATen/ATen.h>\n'
+        '#include <ATen/cuda/CUDAContext.h>\n'
+        '#include <c10/cuda/CUDAStream.h>\n'
+        '#include <c10/cuda/CUDAGuard.h>\n'
+    )
+    with open(dst, 'w') as f:
+        f.write(content)
+    print(f'Created torch/all.h shim at {dst}')
+SHIM
+
 # Build flags: SM80+SM89+SM90, no SM90a/SM100a/FA3.
 # CMAKE_CUDA_FLAGS: the sgl-kernel CMakeLists finds torch (libtorch.so) via
 # find_package(Torch) but does not propagate TORCH_INCLUDE_DIRS to the sm90
