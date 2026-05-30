@@ -211,19 +211,73 @@ RUN python3 - <<'SHIM'
 import os, torch
 inc = os.path.join(os.path.dirname(torch.__file__), 'include')
 dst = os.path.join(inc, 'torch', 'all.h')
-# Always write: ATen/ATen.h only exposes at:: not torch::; the real C++
-# frontend (torch::Tensor, torch::zeros, etc.) lives under
-# torch/csrc/api/include/torch/torch.h which is reachable from the existing
-# -I.../torch/include include path already passed to nvcc.
-content = (
-    '#pragma once\n'
-    '// Compatibility shim: torch/all.h absent at root include path in\n'
-    '// this PyTorch build. Forward to the C++ frontend headers.\n'
-    '#include <torch/csrc/api/include/torch/torch.h>\n'
-)
+# The shim must be self-contained. Forwarding to torch/torch.h creates a
+# circular dependency: torch.h itself includes <torch/all.h>, which hits
+# our shim's #pragma once guard, leaving torch:: namespace empty.
+# Instead, build the torch:: namespace directly from ATen/c10 headers
+# (which have stable locations) and enumerate the aliases that sgl-kernel
+# CUDA sources actually require.
+content = """\
+#pragma once
+// Compatibility shim: torch/all.h absent/relocated in PyTorch 2.11+.
+// Self-contained: no forwarding to headers that re-include torch/all.h.
+#include <ATen/ATen.h>
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAStream.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/core/TensorOptions.h>
+#include <c10/core/ScalarType.h>
+#include <c10/core/Device.h>
+
+namespace torch {
+  // Core type aliases
+  using Tensor        = at::Tensor;
+  using TensorOptions = c10::TensorOptions;
+  using ScalarType    = c10::ScalarType;
+  using Device        = c10::Device;
+  using DeviceType    = c10::DeviceType;
+  using Generator     = at::Generator;
+  using Storage       = at::Storage;
+
+  // Tensor factory functions
+  using at::empty;
+  using at::zeros;
+  using at::ones;
+  using at::full;
+  using at::cat;
+  using at::stack;
+  using at::arange;
+  using at::from_blob;
+  using at::tensor;
+
+  // ScalarType constants (c10:: brought into at:: by ATen/ATen.h)
+  constexpr auto kUInt8    = c10::kUInt8;
+  constexpr auto kByte     = c10::kByte;
+  constexpr auto kInt8     = c10::kInt8;
+  constexpr auto kChar     = c10::kChar;
+  constexpr auto kInt16    = c10::kInt16;
+  constexpr auto kShort    = c10::kShort;
+  constexpr auto kInt32    = c10::kInt32;
+  constexpr auto kInt      = c10::kInt;
+  constexpr auto kInt64    = c10::kInt64;
+  constexpr auto kLong     = c10::kLong;
+  constexpr auto kFloat16  = c10::kFloat16;
+  constexpr auto kHalf     = c10::kHalf;
+  constexpr auto kFloat32  = c10::kFloat32;
+  constexpr auto kFloat    = c10::kFloat;
+  constexpr auto kFloat64  = c10::kFloat64;
+  constexpr auto kDouble   = c10::kDouble;
+  constexpr auto kBFloat16 = c10::kBFloat16;
+
+  // Device constants
+  constexpr auto kCPU    = c10::kCPU;
+  constexpr auto kCUDA   = c10::kCUDA;
+  constexpr auto kMeta   = c10::kMeta;
+}  // namespace torch
+"""
 with open(dst, 'w') as f:
     f.write(content)
-print(f'Wrote torch/all.h shim -> torch/csrc/api/include/torch/torch.h')
+print(f'Wrote self-contained torch/all.h shim at {dst}')
 SHIM
 
 # Build flags: SM80+SM89+SM90, no SM90a/SM100a/FA3.
