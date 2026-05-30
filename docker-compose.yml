@@ -68,10 +68,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        # RTX 3090 = SM86. Narrows sgl_kernel nvcc compile from 4 arches to 1,
-        # cutting build time by ~75%. Update if deploying to a different GPU.
-        TORCH_CUDA_ARCH_LIST: "8.6"
     image: sglang-server:latest
     container_name: sglang-server
 

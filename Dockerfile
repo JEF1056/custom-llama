@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1.7
-# SGLang TurboQuant — CUDA 13.0.1, RTX 3090 (SM86 only, no SM90/SM100).
+# SGLang TurboQuant — CUDA 13.0.1, RTX 3090 (SM86).
+# Uses prebuilt sglang-kernel wheel (cu130, includes SM86) — no source compile.
 # Build: docker build -t sglang-turboquant .
 # Run:   docker compose up sglang-server
 
@@ -30,10 +31,7 @@ RUN curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -sSf https://sh.ru
   | sh -s -- -y --no-modify-path --profile minimal \
   && rustc --version && cargo --version
 
-# Override at build time for other GPUs, e.g. --build-arg TORCH_CUDA_ARCH_LIST="9.0"
-ARG TORCH_CUDA_ARCH_LIST="8.6"
-ENV CUDA_HOME=/usr/local/cuda \
-  TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
+ENV CUDA_HOME=/usr/local/cuda
 
 # ─── torch-builder ────────────────────────────────────────────────────────────
 # Installs PyTorch cu130 into a venv; pinned so sglang's --no-build-isolation
@@ -56,7 +54,7 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 FROM base AS repo-cloner
 
 RUN git clone --depth 1 \
-  --branch feature/turboquant \
+  --branch feature/locked-turboquant \
   --recurse-submodules \
   --shallow-submodules \
   https://github.com/JEF1056/sglang-turboquant.git \
@@ -77,12 +75,22 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   --mount=type=cache,target=/root/.cargo/git,sharing=locked \
   uv pip install setuptools_rust
 
+# cmake pinned to 3.x — cmake 4.x broke find_package(Torch) include propagation.
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+  uv pip install scikit-build-core "cmake>=3.27,<4" ninja
+
 COPY --link --from=repo-cloner /sglang /sglang
 
 WORKDIR /sglang
 
+# Install prebuilt sglang-kernel (cu130, SM86 included) — no source compile.
+# Pinned to the version declared in python/pyproject.toml (sglang-kernel==0.4.3).
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+  uv pip install --force-reinstall "sglang-kernel==0.4.3" \
+  --index-url https://docs.sglang.ai/whl/cu130/
+
 # Non-editable install with --no-build-isolation so torch stays as the
-# pinned cu130 wheel; all CUDA deps live in the branch's base requirements.
+# pinned cu130 wheel; sglang-kernel is already satisfied above.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   --mount=type=cache,target=/root/.cargo/registry,sharing=locked \
   --mount=type=cache,target=/root/.cargo/git,sharing=locked \
@@ -92,56 +100,6 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 # without required args). Pin to last safe release.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   uv pip install "kernels==0.14.1"
-
-# cmake pinned to 3.x — cmake 4.x broke find_package(Torch) include propagation.
-RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-  uv pip install scikit-build-core "cmake>=3.27,<4" ninja
-
-# Patch CMakeLists: remove SM90 + SM100 targets (Hopper/Blackwell, not needed
-# for SM86), and inject the missing torch/csrc/api/include path.
-RUN python3 - <<'PATCH'
-import re, pathlib, subprocess, sys
-
-cmake = pathlib.Path('/sglang/sgl-kernel/CMakeLists.txt')
-txt = cmake.read_text()
-
-for pattern, label in [
-    (r'# =+[^\n]*(?:Common SM100\+|SM100\+ Build)[^\n]*\n.*?install\(TARGETS common_ops_sm100_build[^\n]*\n', 'SM100+'),
-    (r'# =+[^\n]*SM90[^\n]*\n.*?install\(TARGETS common_ops_sm90_build[^\n]*\n', 'SM90'),
-]:
-    before = len(txt)
-    txt = re.sub(pattern, '', txt, flags=re.DOTALL | re.IGNORECASE)
-    if len(txt) == before:
-        print(f'WARNING: {label} build target not found', file=sys.stderr)
-
-for src in [
-    '    "csrc/expert_specialization/es_sm100_mxfp8_blockscaled.cu"\n',
-    '    "csrc/expert_specialization/es_sm100_mxfp8_blockscaled_group_quant.cu"\n',
-]:
-    if src in txt:
-        txt = txt.replace(src, '')
-
-torch_inc = subprocess.check_output(
-    ['python3', '-c', 'import torch, os; print(os.path.join(os.path.dirname(torch.__file__), "include"))'],
-    text=True).strip()
-api_inc = f'{torch_inc}/torch/csrc/api/include'
-injection = f'include_directories("{torch_inc}")\ninclude_directories("{api_inc}")'
-marker = 'find_package(Torch REQUIRED)'
-if marker in txt and f'include_directories("{torch_inc}")' not in txt:
-    txt = txt.replace(marker, f'{marker}\n{injection}', 1)
-
-cmake.write_text(txt)
-PATCH
-
-# SM86 only; TORCH_CUDA_ARCH_LIST=8.6 (from base) drives nvcc arch selection.
-RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-  CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-  -DSGL_KERNEL_COMPILE_THREADS=1 \
-  -DSGL_KERNEL_ENABLE_SM90A=OFF \
-  -DSGL_KERNEL_ENABLE_SM100A=OFF \
-  -DSGL_KERNEL_ENABLE_FA3=OFF" \
-  CMAKE_BUILD_PARALLEL_LEVEL=4 \
-  uv pip install --no-build-isolation --no-deps /sglang/sgl-kernel
 
 # ─── runtime ──────────────────────────────────────────────────────────────────
 # cudnn-runtime saves ~7 GB vs devel; Triton/flashinfer ship their own backends.
