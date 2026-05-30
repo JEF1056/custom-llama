@@ -176,11 +176,12 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 # Patch CMakeLists: remove SM100+ build target and Blackwell-only source files.
 # Eliminates ~50% of compile time on SM86 (RTX 3090).
 RUN python3 - <<'PATCH'
-import re, pathlib, sys
+import re, pathlib, subprocess, sys
 
 cmake = pathlib.Path('/sglang/sgl-kernel/CMakeLists.txt')
 txt = cmake.read_text()
 
+# ── Remove SM100+ build target (saves ~50% compile time on SM86) ──────────
 before = len(txt)
 txt = re.sub(
     r'# =+[^\n]*(?:Common SM100\+|SM100\+ Build)[^\n]*\n.*?install\(TARGETS common_ops_sm100_build[^\n]*\n',
@@ -199,6 +200,27 @@ for src in [
         txt = txt.replace(src, '')
     else:
         print(f"WARNING: source not found: {src.strip()}", file=sys.stderr)
+
+# ── Add missing torch C++ API include path ─────────────────────────────────
+# LibTorch requires two include paths:
+#   1. torch/include/               (added by find_package(Torch))
+#   2. torch/include/torch/csrc/api/include/  (NOT added by the sm90 target)
+# Without (2), <torch/types.h> and other C++ frontend headers are not found,
+# causing "namespace torch has no member Tensor" errors.
+torch_inc = subprocess.check_output(
+    ['python3', '-c',
+     'import torch, os; print(os.path.join(os.path.dirname(torch.__file__), "include"))'],
+    text=True).strip()
+api_inc = f'{torch_inc}/torch/csrc/api/include'
+injection = f'include_directories("{api_inc}")'
+# Insert once, right after find_package(Torch REQUIRED)
+marker = 'find_package(Torch REQUIRED)'
+if marker in txt and injection not in txt:
+    txt = txt.replace(marker, f'{marker}\n{injection}', 1)
+    print(f'Injected include_directories for torch/csrc/api/include')
+else:
+    print('WARNING: could not inject include_directories — marker not found or already present',
+          file=sys.stderr)
 
 cmake.write_text(txt)
 PATCH
@@ -220,7 +242,9 @@ dst = os.path.join(inc, 'torch', 'all.h')
 content = """\
 #pragma once
 // Compatibility shim: torch/all.h absent/relocated in PyTorch 2.11+.
-// Self-contained: no forwarding to headers that re-include torch/all.h.
+// Self-contained — no forwarding to any header that re-includes torch/all.h
+// (which would hit the #pragma once guard and leave torch:: empty).
+// Uses only the canonical c10 constant names stable since PyTorch 1.x.
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAStream.h>
@@ -237,7 +261,6 @@ namespace torch {
   using Device        = c10::Device;
   using DeviceType    = c10::DeviceType;
   using Generator     = at::Generator;
-  using Storage       = at::Storage;
 
   // Tensor factory functions
   using at::empty;
@@ -247,32 +270,23 @@ namespace torch {
   using at::cat;
   using at::stack;
   using at::arange;
-  using at::from_blob;
-  using at::tensor;
 
-  // ScalarType constants (c10:: brought into at:: by ATen/ATen.h)
-  constexpr auto kUInt8    = c10::kUInt8;
+  // Canonical ScalarType constants (stable in c10 since PyTorch 1.x).
+  // Avoid kUInt8/kInt8/kInt16/kInt32/kFloat16 etc. — those newer aliases
+  // may not exist in all 2.x builds.
   constexpr auto kByte     = c10::kByte;
-  constexpr auto kInt8     = c10::kInt8;
   constexpr auto kChar     = c10::kChar;
-  constexpr auto kInt16    = c10::kInt16;
   constexpr auto kShort    = c10::kShort;
-  constexpr auto kInt32    = c10::kInt32;
   constexpr auto kInt      = c10::kInt;
-  constexpr auto kInt64    = c10::kInt64;
   constexpr auto kLong     = c10::kLong;
-  constexpr auto kFloat16  = c10::kFloat16;
   constexpr auto kHalf     = c10::kHalf;
-  constexpr auto kFloat32  = c10::kFloat32;
   constexpr auto kFloat    = c10::kFloat;
-  constexpr auto kFloat64  = c10::kFloat64;
   constexpr auto kDouble   = c10::kDouble;
   constexpr auto kBFloat16 = c10::kBFloat16;
 
-  // Device constants
-  constexpr auto kCPU    = c10::kCPU;
-  constexpr auto kCUDA   = c10::kCUDA;
-  constexpr auto kMeta   = c10::kMeta;
+  // Device type constants
+  constexpr auto kCPU  = c10::kCPU;
+  constexpr auto kCUDA = c10::kCUDA;
 }  // namespace torch
 """
 with open(dst, 'w') as f:
