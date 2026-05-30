@@ -136,7 +136,7 @@ PATCH
 # SM86 only; TORCH_CUDA_ARCH_LIST=8.6 (from base) drives nvcc arch selection.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-  -DSGL_KERNEL_COMPILE_THREADS=4 \
+  -DSGL_KERNEL_COMPILE_THREADS=1 \
   -DSGL_KERNEL_ENABLE_SM90A=OFF \
   -DSGL_KERNEL_ENABLE_SM100A=OFF \
   -DSGL_KERNEL_ENABLE_FA3=OFF" \
