@@ -23,6 +23,7 @@ SPEC_ALGO=${SGLANG_SPECULATIVE_ALGO:-}
 SPEC_NUM_STEPS=${SGLANG_SPECULATIVE_NUM_STEPS:-3}
 SPEC_EAGLE_TOPK=${SGLANG_SPECULATIVE_EAGLE_TOPK:-}
 SPEC_NUM_DRAFT_TOKENS=${SGLANG_SPECULATIVE_NUM_DRAFT_TOKENS:-4}
+MMPROJ_PATH=${SGLANG_MMPROJ_PATH:-}
 if [ -z "$MODEL_PATH" ]; then
     echo "ERROR: SGLANG_MODEL_PATH is required"
     echo "Set SGLANG_MODEL_PATH to the absolute path of a GGUF file inside /models"
@@ -46,6 +47,7 @@ echo "  TP:       $TP_SIZE GPU(s)"
 [ -n "$REASONING_PARSER" ] && echo "  Reasoning: $REASONING_PARSER"
 [ -n "$SPEC_ALGO" ]        && echo "  Speculative: $SPEC_ALGO (steps=$SPEC_NUM_STEPS topk=${SPEC_EAGLE_TOPK:-auto} draft=$SPEC_NUM_DRAFT_TOKENS)"
 [ -n "$KV_CACHE_DTYPE" ]   && echo "  KV dtype: $KV_CACHE_DTYPE"
+[ -n "$MMPROJ_PATH" ]      && echo "  MMProj:   $MMPROJ_PATH"
 [ -n "$API_KEY" ]          && echo "  API key:  (set)"
 
 exec python3 -m sglang.launch_server \
@@ -70,4 +72,5 @@ exec python3 -m sglang.launch_server \
     ${SPEC_ALGO:+--speculative-num-steps "$SPEC_NUM_STEPS"} \
     ${SPEC_ALGO:+--speculative-num-draft-tokens "$SPEC_NUM_DRAFT_TOKENS"} \
     ${SPEC_EAGLE_TOPK:+--speculative-eagle-topk "$SPEC_EAGLE_TOPK"} \
+    ${MMPROJ_PATH:+--mmproj "$MMPROJ_PATH"} \
     "$@"
