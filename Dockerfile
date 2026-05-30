@@ -101,6 +101,21 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   uv pip install "kernels==0.14.1"
 
+# ─── venv-trim ────────────────────────────────────────────────────────────────
+# Strip test suites, benchmarks, C++ headers, and debug symbols from the venv.
+# Only the runtime stage copies /opt/venv, so trimming here shrinks exported layers.
+RUN SITE=/opt/venv/lib/python3.12/site-packages && \
+  # Test suites — large and never needed at inference time
+  find /opt/venv -type d \( -name "tests" -o -name "test" -o -name "benchmarks" \) \
+    -exec rm -rf {} + 2>/dev/null || true && \
+  # torch C++ headers (only needed when compiling CUDA extensions)
+  rm -rf "$SITE/torch/include" && \
+  # torch bundled test utilities
+  rm -rf "$SITE/torch/test" && \
+  # CMake / pkg-config files (build-time only)
+  find /opt/venv -type d -name "cmake" -exec rm -rf {} + 2>/dev/null || true && \
+  find /opt/venv -name "*.pdb" -delete 2>/dev/null || true
+
 # ─── runtime ──────────────────────────────────────────────────────────────────
 # cudnn-runtime saves ~7 GB vs devel; Triton/flashinfer ship their own backends.
 FROM nvidia/cuda:${CUDA_VERSION}-cudnn-runtime-ubuntu24.04 AS runtime
