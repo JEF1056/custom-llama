@@ -1,8 +1,8 @@
 # custom-llama
 
-A self-hosted LLM inference server powered by [SGLang](https://github.com/JEF1056/sglang-turboquant) (TurboQuant fork with fused Triton KV cache). Serves GGUF models quantized via the [llama.cpp TurboQuant fork](https://github.com/JEF1056/llama-cpp-turboquant/tree/llama-exp). Exposed publicly via Cloudflare Tunnel with Cloudflare Access authentication.
+A self-hosted LLM inference server powered by [SGLang](https://github.com/JEF1056/sglang-turboquant) (TurboQuant fork with fused Triton KV cache). Serves AutoRound INT4 safetensors or GGUF models. Exposed publicly via Cloudflare Tunnel with Cloudflare Access authentication.
 
-**Default model:** [qwen3.6-27B](https://huggingface.co/unsloth/Qwen3.6-27B-GGUF) — a reasoning model with NEXTN speculative decoding.
+**Default model:** [Qwen3.6-27B AutoRound INT4](https://huggingface.co/Lorbus/Qwen3.6-27B-int4-AutoRound) — 19 GB, MTP heads in BF16, vision support, NEXTN speculative decoding (~90% acceptance on RTX 3090).
 
 ---
 
@@ -14,16 +14,16 @@ No Cloudflare or secrets needed — just the inference server on this machine.
 # 1. Generate .env from defaults (auto-generates SGLANG_API_KEY, MCP_API_KEY)
 python sync-env.py
 
-# 2. Build both images
+# 2. Build images
 docker compose build sglang-server llama-convert mcp-search-server
 
-# 3. Prepare a model
-docker compose run --rm llama-convert download qwen3.5-4b --quant Q4_K_M
+# 3. Download the default AutoRound INT4 model (~19 GB)
+docker compose run --rm llama-convert download qwen3.6-27b-autoround
 
-# 4. Set model path in .env
-# SGLANG_MODEL_PATH=/models/qwen3.5-4b-Q4_K_M.gguf
-# SGLANG_TOKENIZER_PATH=unsloth/Qwen3.5-4B
-# SGLANG_SERVED_MODEL_NAME=qwen3.5-4b
+# 4. .env already defaults to this model — no changes needed
+#    SGLANG_MODEL_PATH=/models/qwen3.6-27b-autoround
+#    SGLANG_QUANTIZATION=auto-round
+#    SGLANG_SPECULATIVE_ALGO=NEXTN
 
 # 5. Start
 docker compose up -d sglang-server mcp-search-server
@@ -52,6 +52,7 @@ Any OpenAI-compatible client (Cursor, Roo Code, opencode, etc.) points at `http:
 
 Built from source from `JEF1056/sglang-turboquant` — a fork of [sgl-project/sglang](https://github.com/sgl-project/sglang) with **TurboQuant PR #23135** merged in:
 
+- **AutoRound INT4** — `--quantization auto-round` loads pre-quantized safetensors with MTP heads preserved in BF16. Preferred over AWQ on RTX 3090: 19 GB vs AWQ's 21.56 GB which forces `--enforce-eager`.
 - **TurboQuant KV cache** — fused Triton kernels read packed 4-bit KV directly during attention (no dequant buffer). 3.88× KV compression, 93–105% of bf16 decode throughput, CUDA graph compatible.
 - **GGUF serving** — `--load-format gguf --quantization gguf` with a HuggingFace tokenizer path.
 - **NEXTN speculative decoding** — uses the model's own MTP heads (`--speculative-algo NEXTN --speculative-eagle-topk 1`), no separate draft model required.
@@ -126,9 +127,9 @@ Edit `.env` and set at minimum:
 # Cloudflare Tunnel token
 CF_TUNNEL_TOKEN=eyJhIjoi...
 
-# Model to serve
-SGLANG_MODEL_PATH=/models/qwen3.6-27b-IQ4_XS.gguf
-SGLANG_TOKENIZER_PATH=Qwen/Qwen3.6-27B
+# Model — defaults already set for AutoRound (no changes needed after download)
+SGLANG_MODEL_PATH=/models/qwen3.6-27b-autoround
+SGLANG_QUANTIZATION=auto-round
 SGLANG_SERVED_MODEL_NAME=qwen3.6-27b
 ```
 
@@ -140,11 +141,18 @@ SGLANG_SERVED_MODEL_NAME=qwen3.6-27b
 # Build the convert image (CPU-only, no GPU needed)
 docker compose build llama-convert
 
-# Option A — download a pre-built GGUF
-docker compose run --rm llama-convert download qwen3.5-4b --quant Q4_K_M
+# Option A — AutoRound INT4 safetensors (recommended for RTX 3090)
+#   19 GB, MTP heads in BF16, vision support, NEXTN spec decoding ~90% acceptance
+docker compose run --rm llama-convert download qwen3.6-27b-autoround
 
-# Option B — convert from safetensors (with MTP head for NEXTN spec decoding)
+# Option B — AutoRound INT4 safetensors, MoE variant (35B active-3B)
+docker compose run --rm llama-convert download qwen3.6-35b-a3b-autoround
+
+# Option C — GGUF with MTP head (for TurboQuant KV cache path)
 docker compose run --rm llama-convert convert-st qwen3.6-27b --quant IQ4_XS --mtp
+
+# Option D — small GGUF for testing
+docker compose run --rm llama-convert download qwen3.5-4b --quant Q4_K_M
 
 # List all available models
 docker compose run --rm llama-convert list
@@ -153,6 +161,16 @@ docker compose run --rm llama-convert list
 > **Gated models:** set `HF_TOKEN=your_token` in `.env`
 >
 > **WSL2 stability:** set `CONVERT_DOWNLOAD_RATE=300M` and `CONVERT_THREADS=4` to prevent vmmem BSODs.
+
+#### Switching to a GGUF model
+
+```bash
+# In .env:
+SGLANG_MODEL_PATH=/models/qwen3.6-27b-IQ4_XS-mtp.gguf
+SGLANG_TOKENIZER_PATH=Qwen/Qwen3.6-27B
+SGLANG_QUANTIZATION=          # leave empty — GGUF sets --quantization gguf automatically
+SGLANG_SPECULATIVE_ALGO=NEXTN # requires --mtp GGUF build
+```
 
 ### Step 5: Build and start
 
@@ -214,17 +232,18 @@ response = client.chat.completions.create(
 
 | Variable | Default | Description |
 |---|---|---|
-| `SGLANG_MODEL_PATH` | — | Absolute path to GGUF inside container |
-| `SGLANG_TOKENIZER_PATH` | — | HF repo ID or local tokenizer path |
-| `SGLANG_SERVED_MODEL_NAME` | — | Model alias for `/v1/models` |
+| `SGLANG_MODEL_PATH` | `/models/qwen3.6-27b-autoround` | Safetensors directory or absolute path to GGUF inside container |
+| `SGLANG_QUANTIZATION` | `auto-round` | Quantization format for safetensors (`auto-round`, `gptq`). Empty for GGUF. |
+| `SGLANG_TOKENIZER_PATH` | — | HF repo ID or local tokenizer path. Leave empty for safetensors (bundled). Required for GGUF. |
+| `SGLANG_SERVED_MODEL_NAME` | `qwen3.6-27b` | Model alias for `/v1/models` |
 | `SGLANG_CONTEXT_LENGTH` | `262144` | Max context window in tokens |
 | `SGLANG_MEM_FRACTION_STATIC` | `0.90` | GPU VRAM fraction for weights + KV |
 | `SGLANG_MAX_RUNNING_REQUESTS` | `3` | Concurrent request slots |
 | `SGLANG_TP_SIZE` | `1` | Tensor parallelism (number of GPUs) |
-| `SGLANG_KV_CACHE_DTYPE` | `turboquant` | KV cache quantization (PR #23135) |
+| `SGLANG_KV_CACHE_DTYPE` | — | KV cache quantization. Leave empty for AutoRound safetensors. |
 | `SGLANG_REASONING_PARSER` | `qwen3` | Reasoning extraction parser |
-| `SGLANG_SPECULATIVE_ALGO` | `NEXTN` | Speculative decoding algorithm |
-| `SGLANG_SPECULATIVE_EAGLE_TOPK` | `1` | Draft tree width (1 = linear) |
+| `SGLANG_SPECULATIVE_ALGO` | `NEXTN` | Speculative decoding algorithm (AutoRound models have MTP heads) |
+| `SGLANG_SPECULATIVE_EAGLE_TOPK` | `1` | Draft tree width (1 = linear, recommended for NEXTN) |
 | `SGLANG_API_KEY` | auto-generated | Bearer token for API auth |
 
 ---
@@ -242,10 +261,11 @@ response = client.chat.completions.create(
 
 ## Troubleshooting
 
-- **Model not loading:** Check `docker compose logs sglang-server`. Common causes: `SGLANG_MODEL_PATH` wrong, missing `SGLANG_TOKENIZER_PATH`, insufficient VRAM.
-- **DeltaNet / unsupported arch:** qwen3.6's hybrid architecture may not load in SGLang. Fall back to a standard model (e.g. `qwen3.5-4b-Q4_K_M.gguf`) to verify the stack, then investigate arch support.
+- **Model not loading:** Check `docker compose logs sglang-server`. Common causes: `SGLANG_MODEL_PATH` wrong, missing `SGLANG_TOKENIZER_PATH` (GGUF only), insufficient VRAM.
+- **AutoRound OOM:** Lower `SGLANG_MEM_FRACTION_STATIC` (try `0.85`) or reduce `SGLANG_CONTEXT_LENGTH`.
+- **NEXTN speculative not working:** For AutoRound models, MTP heads are included — ensure `SGLANG_SPECULATIVE_ALGO=NEXTN` is set. For GGUF, confirm the file was built with `--mtp` (via `convert-st --mtp`).
+- **DeltaNet / unsupported arch:** Qwen3.6's hybrid architecture may not load in all SGLang versions. Fall back to a standard model (e.g. `qwen3.5-4b-Q4_K_M.gguf`) to verify the stack, then investigate arch support.
 - **TurboQuant KV error at startup:** Set `SGLANG_KV_CACHE_DTYPE=auto` and verify the exact dtype string name once PR #23135 is confirmed merged.
-- **NEXTN speculative not working:** Confirm the GGUF was built with `--mtp`. The `SGLANG_SPECULATIVE_ALGO=NEXTN` path uses the model's embedded MTP heads — standard GGUFs won't have them.
 - **Cloudflare Tunnel not connecting:** Verify `CF_TUNNEL_TOKEN`. Check `docker compose logs cloudflared`.
 - **GPU not detected:** Verify NVIDIA Container Toolkit. Run `docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi`.
 - **WSL2 BSOD during download/quantize:** Set `CONVERT_DOWNLOAD_RATE=300M` and `CONVERT_THREADS=4` in `.env`.

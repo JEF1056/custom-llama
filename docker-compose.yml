@@ -75,6 +75,7 @@ services:
 
     volumes:
       - ./models:/models:rw
+      - hf-cache:/root/.cache/huggingface:rw
 
     gpus: all
 
@@ -87,6 +88,8 @@ services:
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
+
+      HF_TOKEN: ${HF_TOKEN:-}
 
       SGLANG_HOST: ${SGLANG_HOST:-0.0.0.0}
       SGLANG_PORT: ${SGLANG_PORT:-8080}
@@ -103,7 +106,6 @@ services:
       SGLANG_DTYPE: ${SGLANG_DTYPE:-auto}
       SGLANG_KV_CACHE_DTYPE: ${SGLANG_KV_CACHE_DTYPE:-auto}
       SGLANG_CHUNKED_PREFILL_SIZE: ${SGLANG_CHUNKED_PREFILL_SIZE:-}
-      SGLANG_MMPROJ_PATH: ${SGLANG_MMPROJ_PATH:-}
 
       SGLANG_REASONING_PARSER: ${SGLANG_REASONING_PARSER:-}
       SGLANG_SPECULATIVE_ALGO: ${SGLANG_SPECULATIVE_ALGO:-}
@@ -282,4 +284,6 @@ services:
 
 volumes:
   mcp-cache:
+    driver: local
+  hf-cache:
     driver: local

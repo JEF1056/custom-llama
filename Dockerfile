@@ -53,6 +53,9 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 # ─── repo-cloner ──────────────────────────────────────────────────────────────
 FROM base AS repo-cloner
 
+# Pass --build-arg CACHEBUST=$(date +%s) to force a fresh clone.
+ARG CACHEBUST=1
+
 RUN git clone --depth 1 \
   --branch feature/locked-turboquant \
   --recurse-submodules \

@@ -118,6 +118,24 @@ MODELS = {
         "size_gb": 14,
         "mmproj": "mmproj.gguf",
     },
+    # AutoRound INT4 safetensors — SGLang flag: --quantization auto-round.
+    # Preferred over AWQ on RTX 3090: 19–21 GB vs AWQ's 21.56 GB which forces --enforce-eager.
+    # MTP head kept in BF16 → ~90% draft acceptance with NEXTN speculative decoding.
+    # Vision tower at original precision.
+    "qwen3.6-27b-autoround": {
+        "hf_repo": "Lorbus/Qwen3.6-27B-int4-AutoRound",
+        "fp16_repo": "Qwen/Qwen3.6-27B",
+        "description": "Qwen 3.6 27B AutoRound INT4 safetensors, MTP+Vision (~19GB)",
+        "size_gb": 19,
+        "hf_type": "autoround",
+    },
+    "qwen3.6-35b-a3b-autoround": {
+        "hf_repo": "shieldstar/Qwen3.6-35B-A3B-int4-AutoRound-EC",
+        "fp16_repo": "Qwen/Qwen3.6-35B-A3B",
+        "description": "Qwen 3.6 35B-A3B AutoRound INT4 safetensors, MTP+Vision (~21GB)",
+        "size_gb": 21,
+        "hf_type": "autoround",
+    },
     "minimax-m2.7": {
         "hf_repo": "unsloth/MiniMax-M2.7-GGUF",
         "fp16_repo": "unsloth/MiniMax-M2.7",
@@ -658,6 +676,48 @@ def download_model(model_name: str, quant: str, output_dir: str, nthreads: int |
         sys.exit(1)
 
     model_info = MODELS[model_name]
+
+    # AutoRound INT4 safetensors — pre-download weights to disk for SGLang.
+    # SGLang loads via --quantization auto-round with the local path.
+    if model_info.get("hf_type") == "autoround":
+        hf_repo = model_info["hf_repo"]
+        model_dir = Path(output_dir) / model_name
+        _section(f"Model: {model_name}  (AutoRound INT4 safetensors)")
+        print(f"  Repository  : {hf_repo}")
+        print(f"  Destination : {model_dir}")
+        print(f"  Size        : ~{model_info.get('size_gb', '?')}GB")
+        if model_dir.exists() and any(model_dir.iterdir()):
+            print(f"\n  ✓ Already on disk: {model_dir} — skipping download.")
+        else:
+            try:
+                from huggingface_hub import snapshot_download
+            except ImportError:
+                print("Error: huggingface_hub is not installed. Run: pip install huggingface_hub")
+                sys.exit(1)
+            hf_token = os.environ.get("HF_TOKEN") or None
+            model_dir.mkdir(parents=True, exist_ok=True)
+            print("\n  Downloading safetensors (this may take a while) ...")
+            snapshot_download(
+                repo_id=hf_repo,
+                local_dir=str(model_dir),
+                token=hf_token,
+                ignore_patterns=["*.md", "*.txt"],
+                max_workers=1,
+            )
+            total = sum(f.stat().st_size for f in model_dir.rglob("*") if f.is_file())
+            print(f"\n  ✓ Downloaded: {model_dir} ({_fmt_bytes(total)})")
+        print()
+        print(f"  Add to your .env:")
+        print(f"    SGLANG_MODEL_PATH=/models/{model_name}")
+        print(f"    SGLANG_QUANTIZATION=auto-round")
+        print()
+        print(f"  MTP speculative decoding (recommended — ~90% acceptance on RTX 3090):")
+        print(f"    SGLANG_SPEC_ALGO=EAGLE_DRAFT  # or MTP if server supports it")
+        print()
+        print(f"  Then start the server:")
+        print(f"    docker compose up sglang-server")
+        return
+
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
@@ -1181,6 +1241,8 @@ def list_models() -> None:
             tags = []
             if info.get("turboquant"):
                 tags.append("TurboQuant")
+            if info.get("hf_type") == "autoround":
+                tags.append("AutoRound INT4 safetensors")
             if "mmproj" in info:
                 tags.append("Multimodal")
             if info.get("mtp_capable") or info.get("mtp_graft_from"):
@@ -1194,6 +1256,12 @@ def list_models() -> None:
     print("  TurboQuant:", ", ".join(TQ_QUANT_OPTIONS))
     print()
     print("Multimodal models automatically download mmproj.gguf for vision support.")
+    print()
+    print("AutoRound INT4 safetensors models are pre-downloaded to ./models/<name>/.")
+    print("  Run: manage_models.py download <name>")
+    print("  Preferred over AWQ on RTX 3090: fits in 19-21 GB vs AWQ's 21.56 GB which")
+    print("  forces --enforce-eager (kills CUDA graphs, 78% decode overhead).")
+    print("  SGLang: --quantization auto-round  + NEXTN speculative decoding (~90% acceptance)")
 
 
 def main():
