@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # =============================================================================
-# SGLang TurboQuant server image — CUDA 12.6.3 + cuDNN
-# Optimized for RTX 3090 (SM86): compiles SM80+SM89+SM90 only.
+# SGLang TurboQuant server image — CUDA 13.0.1 + cuDNN
+# Optimized for RTX 3090 (SM86): compiles SM86 only (no SM90/SM100).
 #
 # Builds sglang from JEF1056/sglang-turboquant (feature/turboquant)
 # using uv for dependency management. Served via entrypoint.sh.
@@ -22,7 +22,7 @@
 #   docker compose up sglang-server
 # =============================================================================
 
-ARG CUDA_VERSION=12.6.3
+ARG CUDA_VERSION=13.0.1
 
 # ─── base: system packages + uv ──────────────────────────────────────────────
 # Shared parent for all build stages; deduped automatically by BuildKit.
@@ -75,12 +75,9 @@ ENV CUDA_HOME=/usr/local/cuda \
 # ─── torch-builder ────────────────────────────────────────────────────────────
 # Runs in parallel with repo-cloner. Installs PyTorch into a dedicated venv.
 #
-# Versions are pinned to match what sglang's pyproject.toml requires.
-# sglang installs deps with --no-build-isolation; if torch is already at the
-# exact version required (local +cu126 suffix satisfies the bare version per
-# PEP 440), uv leaves it alone and the CUDA variant stays in the venv.
-# Without this pin, uv replaces +cu126 torch with a CPU wheel from PyPI,
-# causing sgl-kernel to fail: ATen/cuda headers are absent in CPU torch.
+# PyTorch 2.11.0 defaults to CUDA 13 (cu130) on PyPI. Pinning here ensures
+# uv does not replace the CUDA wheel with a CPU build when sglang installs
+# its own dependencies with --no-build-isolation.
 FROM base AS torch-builder
 
 RUN uv venv /opt/venv --python python3
@@ -90,10 +87,10 @@ ENV VIRTUAL_ENV=/opt/venv \
 
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   uv pip install \
-  "torch==2.11.0+cu126" \
-  "torchvision==0.26.0+cu126" \
-  "torchaudio==2.11.0+cu126" \
-  --index-url https://download.pytorch.org/whl/cu126
+  "torch==2.11.0+cu130" \
+  "torchvision==0.26.0+cu130" \
+  "torchaudio==2.11.0+cu130" \
+  --index-url https://download.pytorch.org/whl/cu130
 
 # ─── repo-cloner ──────────────────────────────────────────────────────────────
 # Runs in parallel with torch-builder (no shared resources).
@@ -110,7 +107,7 @@ RUN git clone --depth 1 \
 # ─── sglang-builder ───────────────────────────────────────────────────────────
 # Merges outputs of the two parallel stages, then installs sglang on top of
 # the pre-built torch venv.
-# NOTE: if flashinfer or triton prebuilt wheels for cu126 are unavailable,
+# NOTE: if flashinfer or triton prebuilt wheels for cu130 are unavailable,
 # the install will fail. Check:
 #   https://github.com/flashinfer-ai/flashinfer/releases
 #   https://github.com/triton-lang/triton/releases
@@ -161,27 +158,29 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   uv pip install "kernels==0.14.1"
 
-# sgl-kernel: compiled from fork source.
-# Precompiled wheels (PyPI and turboquant index) are sm100-only; SM86 requires source build.
-# Compiles SM80+SM89+SM90 (no SM100+/FA3); SM86 runs the SM80 binary.
-# First build ~30-60 min; subsequent rebuilds are cached.
+# sgl-kernel: compiled from fork source, SM86 only.
+# Precompiled wheels target SM100+; SM86 (RTX 3090) requires source build.
+# SM90 and SM100 build targets are patched out — SM86 is Ampere and only
+# needs the base SM80 binary (fully compatible). Build time: ~10-20 min.
 
 # Build backend for scikit-build-core / cmake.
 # cmake is pinned to 3.x: cmake 4.x changed how IMPORTED target include dirs
-# propagate, breaking find_package(Torch) header forwarding to the sm90 build
-# target (ATen/cuda/CUDAContext.h not found despite torch being installed).
+# propagate, breaking find_package(Torch) header forwarding to build targets.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   uv pip install scikit-build-core "cmake>=3.27,<4" ninja
 
-# Patch CMakeLists: remove SM100+ build target and Blackwell-only source files.
-# Eliminates ~50% of compile time on SM86 (RTX 3090).
+# Patch CMakeLists:
+#   1. Remove SM100+ build target (Blackwell-only, not needed for SM86)
+#   2. Remove SM90 build target (Hopper-only, not needed for SM86) — this
+#      also eliminates the header propagation issues that caused build failures
+#   3. Inject torch/csrc/api/include path (LibTorch requires two include roots)
 RUN python3 - <<'PATCH'
 import re, pathlib, subprocess, sys
 
 cmake = pathlib.Path('/sglang/sgl-kernel/CMakeLists.txt')
 txt = cmake.read_text()
 
-# ── Remove SM100+ build target (saves ~50% compile time on SM86) ──────────
+# ── Remove SM100+ build target ────────────────────────────────────────────
 before = len(txt)
 txt = re.sub(
     r'# =+[^\n]*(?:Common SM100\+|SM100\+ Build)[^\n]*\n.*?install\(TARGETS common_ops_sm100_build[^\n]*\n',
@@ -201,108 +200,42 @@ for src in [
     else:
         print(f"WARNING: source not found: {src.strip()}", file=sys.stderr)
 
-# ── Add missing torch C++ API include path ─────────────────────────────────
+# ── Remove SM90 build target ──────────────────────────────────────────────
+before = len(txt)
+txt = re.sub(
+    r'# =+[^\n]*SM90[^\n]*\n.*?install\(TARGETS common_ops_sm90_build[^\n]*\n',
+    '',
+    txt,
+    flags=re.DOTALL | re.IGNORECASE,
+)
+if len(txt) == before:
+    print("WARNING: SM90 build target block not found — skipping", file=sys.stderr)
+
+# ── Add missing torch C++ API include path ────────────────────────────────
 # LibTorch requires two include paths:
-#   1. torch/include/               (added by find_package(Torch))
-#   2. torch/include/torch/csrc/api/include/  (NOT added by the sm90 target)
-# Without (2), <torch/types.h> and other C++ frontend headers are not found,
-# causing "namespace torch has no member Tensor" errors.
+#   1. torch/include/                        (from find_package(Torch))
+#   2. torch/include/torch/csrc/api/include/ (missing from cmake targets)
 torch_inc = subprocess.check_output(
     ['python3', '-c',
      'import torch, os; print(os.path.join(os.path.dirname(torch.__file__), "include"))'],
     text=True).strip()
 api_inc = f'{torch_inc}/torch/csrc/api/include'
 injection = f'include_directories("{api_inc}")'
-# Insert once, right after find_package(Torch REQUIRED)
 marker = 'find_package(Torch REQUIRED)'
 if marker in txt and injection not in txt:
     txt = txt.replace(marker, f'{marker}\n{injection}', 1)
     print(f'Injected include_directories for torch/csrc/api/include')
 else:
-    print('WARNING: could not inject include_directories — marker not found or already present',
-          file=sys.stderr)
+    print('WARNING: could not inject include_directories', file=sys.stderr)
 
 cmake.write_text(txt)
 PATCH
 
-# torch/all.h compatibility shim.
-# PyTorch 2.11.0 does not ship torch/all.h; sgl-kernel sources include it
-# directly. Create it when missing so compilation succeeds without patching
-# each source file.
-RUN python3 - <<'SHIM'
-import os, torch
-inc = os.path.join(os.path.dirname(torch.__file__), 'include')
-dst = os.path.join(inc, 'torch', 'all.h')
-# The shim must be self-contained. Forwarding to torch/torch.h creates a
-# circular dependency: torch.h itself includes <torch/all.h>, which hits
-# our shim's #pragma once guard, leaving torch:: namespace empty.
-# Instead, build the torch:: namespace directly from ATen/c10 headers
-# (which have stable locations) and enumerate the aliases that sgl-kernel
-# CUDA sources actually require.
-content = """\
-#pragma once
-// Compatibility shim: torch/all.h absent/relocated in PyTorch 2.11+.
-// Self-contained — no forwarding to any header that re-includes torch/all.h
-// (which would hit the #pragma once guard and leave torch:: empty).
-// Uses only the canonical c10 constant names stable since PyTorch 1.x.
-#include <ATen/ATen.h>
-#include <ATen/cuda/CUDAContext.h>
-#include <c10/cuda/CUDAStream.h>
-#include <c10/cuda/CUDAGuard.h>
-#include <c10/core/TensorOptions.h>
-#include <c10/core/ScalarType.h>
-#include <c10/core/Device.h>
-
-namespace torch {
-  // Core type aliases
-  using Tensor        = at::Tensor;
-  using TensorOptions = c10::TensorOptions;
-  using ScalarType    = c10::ScalarType;
-  using Device        = c10::Device;
-  using DeviceType    = c10::DeviceType;
-  using Generator     = at::Generator;
-
-  // Tensor factory functions
-  using at::empty;
-  using at::zeros;
-  using at::ones;
-  using at::full;
-  using at::cat;
-  using at::stack;
-  using at::arange;
-
-  // Canonical ScalarType constants (stable in c10 since PyTorch 1.x).
-  // Avoid kUInt8/kInt8/kInt16/kInt32/kFloat16 etc. — those newer aliases
-  // may not exist in all 2.x builds.
-  constexpr auto kByte     = c10::kByte;
-  constexpr auto kChar     = c10::kChar;
-  constexpr auto kShort    = c10::kShort;
-  constexpr auto kInt      = c10::kInt;
-  constexpr auto kLong     = c10::kLong;
-  constexpr auto kHalf     = c10::kHalf;
-  constexpr auto kFloat    = c10::kFloat;
-  constexpr auto kDouble   = c10::kDouble;
-  constexpr auto kBFloat16 = c10::kBFloat16;
-
-  // Device type constants
-  constexpr auto kCPU  = c10::kCPU;
-  constexpr auto kCUDA = c10::kCUDA;
-}  // namespace torch
-"""
-with open(dst, 'w') as f:
-    f.write(content)
-print(f'Wrote self-contained torch/all.h shim at {dst}')
-SHIM
-
-# Build flags: SM80+SM89+SM90, no SM90a/SM100a/FA3.
-# CMAKE_CUDA_FLAGS: the sgl-kernel CMakeLists finds torch (libtorch.so) via
-# find_package(Torch) but does not propagate TORCH_INCLUDE_DIRS to the sm90
-# target's compile command. Injecting the path via CMAKE_CUDA_FLAGS ensures
-# all nvcc invocations get ATen/cuda/ and c10/cuda/ headers.
+# Build sgl-kernel for SM86 only (no SM90/SM100).
+# TORCH_CUDA_ARCH_LIST=8.6 (set in base) controls the nvcc arch flags.
+# SGL_KERNEL_COMPILE_THREADS=4 limits parallel nvcc jobs inside the build.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-  TORCH_INC=$(python3 -c "import torch, os; print(os.path.join(os.path.dirname(torch.__file__), 'include'))") && \
   CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-  -DCMAKE_CUDA_FLAGS=-I${TORCH_INC} \
   -DSGL_KERNEL_COMPILE_THREADS=4 \
   -DSGL_KERNEL_ENABLE_SM90A=OFF \
   -DSGL_KERNEL_ENABLE_SM100A=OFF \
