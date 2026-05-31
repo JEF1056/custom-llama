@@ -105,30 +105,35 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   uv pip install "kernels==0.14.1"
 
 # ─── jit-prewarm ──────────────────────────────────────────────────────────────
-# Pre-compile JIT kernels that would otherwise require nvcc at runtime.
-# The runtime image uses cudnn-runtime (no nvcc); the compiled .so is cached in
-# /root/.cache/tvm-ffi and copied to the runtime stage below.
-# nvcc is available here (devel base), torch/include not yet stripped.
-RUN CUDA_HOME=/usr/local/cuda python3 -c "
-from sglang.jit_kernel.gptq_marlin_repack import _jit_gptq_marlin_repack_module
-_jit_gptq_marlin_repack_module()
-print('gptq_marlin_repack JIT kernel pre-compiled OK')
-"
+# Pre-compile JIT kernels while nvcc + torch/include are still available.
+# Compiled .so is cached in /root/.cache/tvm-ffi and copied to the runtime stage.
+RUN CUDA_HOME=/usr/local/cuda python3 -c "from sglang.jit_kernel.gptq_marlin_repack import _jit_gptq_marlin_repack_module; _jit_gptq_marlin_repack_module(); print('gptq_marlin_repack JIT kernel pre-compiled OK')"
 
 # ─── venv-trim ────────────────────────────────────────────────────────────────
-# Strip test suites, benchmarks, C++ headers, and debug symbols from the venv.
-# Only the runtime stage copies /opt/venv, so trimming here shrinks exported layers.
+# Strip test suites, build-time packages, unused torch components, and debug
+# symbols from the venv before copying to the runtime stage.
 RUN SITE=/opt/venv/lib/python3.12/site-packages && \
-  # Test suites — large and never needed at inference time
+  # Test suites and benchmarks — never needed at inference time
   find /opt/venv -type d \( -name "tests" -o -name "test" -o -name "benchmarks" \) \
     -exec rm -rf {} + 2>/dev/null || true && \
-  # torch C++ headers (only needed when compiling CUDA extensions)
+  # torch C++ headers — only needed when compiling CUDA extensions
   rm -rf "$SITE/torch/include" && \
   # torch bundled test utilities
   rm -rf "$SITE/torch/test" && \
-  # CMake / pkg-config files (build-time only)
+  # torchaudio — not used by text-only inference
+  rm -rf "$SITE"/torchaudio* && \
+  # Build-time packages — cmake, ninja, scikit-build-core, setuptools_rust
+  rm -rf \
+    "$SITE"/cmake* "$SITE"/CMake* \
+    "$SITE"/ninja* \
+    "$SITE"/scikit_build_core* \
+    "$SITE"/setuptools_rust* \
+    "$SITE"/_setuptools_rust* && \
+  # CMake metadata / pkg-config files (build-time only)
   find /opt/venv -type d -name "cmake" -exec rm -rf {} + 2>/dev/null || true && \
-  find /opt/venv -name "*.pdb" -delete 2>/dev/null || true
+  find /opt/venv -name "*.pdb" -delete 2>/dev/null || true && \
+  # Strip debug symbols from all shared libraries (~20-30% size reduction on .so files)
+  find /opt/venv -name '*.so' -exec strip --strip-debug {} \; 2>/dev/null || true
 
 # ─── runtime ──────────────────────────────────────────────────────────────────
 FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS runtime
@@ -139,6 +144,20 @@ RUN apt-get update && \
   apt-get install -y --no-install-recommends \
   python3 python3-dev ca-certificates libnuma1 && \
   rm -rf /var/lib/apt/lists/*
+
+# Strip CUDA devel-only artifacts not needed for inference.
+# Saves ~3–5 GB: static libs, samples, docs, and profiling tools.
+RUN find /usr/local/cuda/lib64 -name '*.a' -delete 2>/dev/null || true && \
+  find /usr/lib -name 'libcudnn_*_static.a' -delete 2>/dev/null || true && \
+  rm -rf \
+    /usr/local/cuda/samples \
+    /usr/local/cuda/extras \
+    /usr/local/cuda/doc \
+    /usr/local/cuda/nsight-compute-* \
+    /usr/local/cuda/nsight-systems-* \
+    /usr/local/cuda/NsightCompute* \
+    /usr/local/cuda/NsightSystems* \
+    /usr/local/cuda/compute-sanitizer
 
 COPY --link --from=sglang-builder /opt/venv /opt/venv
 
