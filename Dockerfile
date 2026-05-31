@@ -104,6 +104,17 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   uv pip install "kernels==0.14.1"
 
+# ─── jit-prewarm ──────────────────────────────────────────────────────────────
+# Pre-compile JIT kernels that would otherwise require nvcc at runtime.
+# The runtime image uses cudnn-runtime (no nvcc); the compiled .so is cached in
+# /root/.cache/tvm-ffi and copied to the runtime stage below.
+# nvcc is available here (devel base), torch/include not yet stripped.
+RUN CUDA_HOME=/usr/local/cuda python3 -c "
+from sglang.jit_kernel.gptq_marlin_repack import _jit_gptq_marlin_repack_module
+_jit_gptq_marlin_repack_module()
+print('gptq_marlin_repack JIT kernel pre-compiled OK')
+"
+
 # ─── venv-trim ────────────────────────────────────────────────────────────────
 # Strip test suites, benchmarks, C++ headers, and debug symbols from the venv.
 # Only the runtime stage copies /opt/venv, so trimming here shrinks exported layers.
@@ -120,8 +131,7 @@ RUN SITE=/opt/venv/lib/python3.12/site-packages && \
   find /opt/venv -name "*.pdb" -delete 2>/dev/null || true
 
 # ─── runtime ──────────────────────────────────────────────────────────────────
-# cudnn-runtime saves ~7 GB vs devel; Triton/flashinfer ship their own backends.
-FROM nvidia/cuda:${CUDA_VERSION}-cudnn-runtime-ubuntu24.04 AS runtime
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -131,6 +141,9 @@ RUN apt-get update && \
   rm -rf /var/lib/apt/lists/*
 
 COPY --link --from=sglang-builder /opt/venv /opt/venv
+
+# Pre-warmed JIT kernel cache (gptq_marlin_repack and any others compiled above).
+COPY --link --from=sglang-builder /root/.cache/tvm-ffi /root/.cache/tvm-ffi
 
 ENV VIRTUAL_ENV=/opt/venv \
   PATH="/opt/venv/bin:$PATH"
