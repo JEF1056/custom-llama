@@ -24,30 +24,19 @@ SPEC_ALGO=${SGLANG_SPECULATIVE_ALGO:-}
 SPEC_NUM_STEPS=${SGLANG_SPECULATIVE_NUM_STEPS:-3}
 SPEC_EAGLE_TOPK=${SGLANG_SPECULATIVE_EAGLE_TOPK:-}
 SPEC_NUM_DRAFT_TOKENS=${SGLANG_SPECULATIVE_NUM_DRAFT_TOKENS:-4}
+
 if [ -z "$MODEL_PATH" ]; then
     echo "ERROR: SGLANG_MODEL_PATH is required"
-    echo "  AutoRound: /models/qwen3.6-27b-autoround  (download first via manage_models.py)"
-    echo "  GGUF:      absolute path to a .gguf file inside /models"
+    echo "  Download a model first: docker compose run --rm model-prep download qwen3.6-27b-autoround"
+    echo "  Then set: SGLANG_MODEL_PATH=/models/qwen3.6-27b-autoround"
     exit 1
-fi
-
-# Detect model type: .gguf file on disk vs safetensors directory / HF repo ID
-if [[ "$MODEL_PATH" == *.gguf ]]; then
-    IS_GGUF=1
-    if [ ! -f "$MODEL_PATH" ]; then
-        echo "ERROR: model file not found: $MODEL_PATH"
-        echo "Run llama-convert to download and quantize a model into /models first."
-        exit 1
-    fi
-else
-    IS_GGUF=0
 fi
 
 echo "Starting SGLang server"
 echo "  Host:     $HOST:$PORT"
 echo "  Model:    $MODEL_PATH"
-[[ $IS_GGUF -eq 0 ]] && echo "  Format:   safetensors${QUANTIZATION:+ ($QUANTIZATION)}"
-[ -n "$TOKENIZER_PATH" ]  && echo "  Tokenizer: $TOKENIZER_PATH"
+echo "  Format:   safetensors${QUANTIZATION:+ ($QUANTIZATION)}"
+[ -n "$TOKENIZER_PATH" ]   && echo "  Tokenizer: $TOKENIZER_PATH"
 [ -n "$SERVED_MODEL_NAME" ] && echo "  Name:     $SERVED_MODEL_NAME"
 echo "  Context:  $CONTEXT_LENGTH tokens"
 echo "  VRAM:     ${MEM_FRACTION} fraction"
@@ -57,17 +46,11 @@ echo "  TP:       $TP_SIZE GPU(s)"
 [ -n "$KV_CACHE_DTYPE" ]   && echo "  KV dtype: $KV_CACHE_DTYPE"
 [ -n "$API_KEY" ]          && echo "  API key:  (set)"
 
-# Build flags that differ between GGUF and safetensors models
 LOAD_ARGS=()
 SPEC_ARGS=()
-if [[ $IS_GGUF -eq 1 ]]; then
-    LOAD_ARGS+=(--load-format gguf --quantization gguf)
-else
-    # Apply quantization format for safetensors models (e.g. auto-round, gptq)
-    [[ -n "$QUANTIZATION" ]] && LOAD_ARGS+=(--quantization "$QUANTIZATION")
-fi
 
-# Speculative decoding applies to both GGUF and safetensors models
+[[ -n "$QUANTIZATION" ]] && LOAD_ARGS+=(--quantization "$QUANTIZATION")
+
 if [[ -n "$SPEC_ALGO" ]]; then
     SPEC_ARGS+=(--speculative-algorithm "$SPEC_ALGO"
                 --speculative-num-steps "$SPEC_NUM_STEPS"

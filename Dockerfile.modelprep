@@ -1,0 +1,29 @@
+# =============================================================================
+# Model prep image — lightweight Python + huggingface_hub for downloading
+# AutoRound INT4 safetensors models into the shared /models volume.
+#
+# Build:
+#   docker compose build model-prep
+#
+# Download a model:
+#   docker compose run --rm model-prep download qwen3.6-27b-autoround
+#   docker compose run --rm model-prep download qwen3.6-35b-a3b-autoround
+#
+# List available models:
+#   docker compose run --rm model-prep list
+# =============================================================================
+FROM python:3.12-slim
+
+RUN apt-get update && \
+  apt-get install -y --no-install-recommends curl ca-certificates && \
+  rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir huggingface_hub hf_transfer
+
+# Enable hf_transfer: Rust-based parallel downloader for higher throughput.
+ENV HF_HUB_ENABLE_HF_TRANSFER=1
+
+COPY scripts/manage_models.py /scripts/manage_models.py
+
+ENTRYPOINT ["python3", "/scripts/manage_models.py"]
+CMD ["--help"]

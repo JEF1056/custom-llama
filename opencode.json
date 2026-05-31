@@ -7,7 +7,7 @@
   "provider": {
     "llama": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "llama.cpp Server",
+      "name": "SGLang Server",
       "options": {
         "baseURL": "http://localhost:8080/v1",
         "includeUsage": true

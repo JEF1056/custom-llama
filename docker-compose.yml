@@ -5,38 +5,27 @@ networks:
 
 services:
   # ---------------------------------------------------------------------------
-  # Model preparation (download / quantize / convert) — run before the server.
-  # All model prep is handled here; the runtime image only serves /models.
+  # Model download — run before the server to pull AutoRound INT4 safetensors.
   #
   # Build once:
-  #   docker compose build llama-convert
+  #   docker compose build model-prep
   #
-  # Then prepare a model (output lands in ./models via the shared volume):
+  # Download a model (output lands in ./models via the shared volume):
+  #   docker compose run --rm model-prep download qwen3.6-27b-autoround
+  #   docker compose run --rm model-prep download qwen3.6-35b-a3b-autoround
   #
-  #   Pre-built GGUF on HuggingFace:
-  #     docker compose run --rm llama-convert download qwen3.5-4b --quant Q4_K_M
+  # List available models:
+  #   docker compose run --rm model-prep list
   #
-  #   No pre-built quant but fp16 GGUF exists (quantized locally):
-  #     docker compose run --rm llama-convert download qwen3.6-27b --quant IQ4_XS
-  #
-  #   Safetensors-only repo (convert → fp16 GGUF → quantize):
-  #     docker compose run --rm llama-convert convert-st qwen3.6-27b --quant IQ4_XS --mtp
-  #
-  #   Re-quantize an existing GGUF already in ./models:
-  #     docker compose run --rm llama-convert convert /models/model-Q8_0.gguf --quant Q4_K_M
-  #
-  #   List all available models:
-  #     docker compose run --rm llama-convert list
-  #
-  # After preparation, start the server as normal:
+  # After download, start the server:
   #   docker compose up sglang-server
   # ---------------------------------------------------------------------------
-  llama-convert:
+  model-prep:
     build:
       context: .
-      dockerfile: Dockerfile.convert
-    image: llama-convert:latest
-    container_name: llama-convert
+      dockerfile: Dockerfile.modelprep
+    image: model-prep:latest
+    container_name: model-prep
     profiles: ["convert"]
 
     volumes:
@@ -45,22 +34,8 @@ services:
     environment:
       HF_TOKEN: ${HF_TOKEN:-}
 
-      # Throttle download write speed to prevent WSL2 vmmem balloon / BSOD.
-      # Uses curl --limit-rate when set (e.g. CONVERT_DOWNLOAD_RATE=300M).
-      # Leave unset to download at full speed.
-      CONVERT_DOWNLOAD_RATE: ${CONVERT_DOWNLOAD_RATE:-}
-
-      # Limit CPU threads used by llama-quantize during local quantization.
-      # Leaving this unset defaults to cpu_count//2, which reserves half the
-      # logical cores for the Windows host and prevents CLOCK_WATCHDOG_TIMEOUT
-      # BSODs caused by Docker saturating every CPU core.
-      # Override in .env: CONVERT_THREADS=4
-      CONVERT_THREADS: ${CONVERT_THREADS:-}
-
-    # No GPU needed — conversion and quantization run on CPU.
-
   # ---------------------------------------------------------------------------
-  # SGLang inference server — JEF1056/sglang-turboquant (carlosfundora/sglang-1-bit-turbo)
+  # SGLang inference server — JEF1056/sglang-turboquant
   # Exposed publicly via Cloudflare Tunnel at chat.jessfan.com with
   # Cloudflare Access authentication.
   # ---------------------------------------------------------------------------
@@ -96,6 +71,7 @@ services:
       SGLANG_API_KEY: ${SGLANG_API_KEY:-}
 
       SGLANG_MODEL_PATH: ${SGLANG_MODEL_PATH:-}
+      SGLANG_QUANTIZATION: ${SGLANG_QUANTIZATION:-}
       SGLANG_TOKENIZER_PATH: ${SGLANG_TOKENIZER_PATH:-}
       SGLANG_SERVED_MODEL_NAME: ${SGLANG_SERVED_MODEL_NAME:-}
 
@@ -254,7 +230,6 @@ services:
 
     develop:
       watch:
-        # Source files — Vite HMR handles the reload, no restart needed
         - action: sync
           path: ./ui/src
           target: /app/src
@@ -264,8 +239,6 @@ services:
         - action: sync
           path: ./ui/index.html
           target: /app/index.html
-
-        # Config files — require Vite server restart
         - action: sync+restart
           path: ./ui/vite.config.ts
           target: /app/vite.config.ts
@@ -275,8 +248,6 @@ services:
         - action: sync+restart
           path: ./ui/tsconfig.json
           target: /app/tsconfig.json
-
-        # Dependency changes — rebuild image to re-run npm install
         - action: rebuild
           path: ./ui/package.json
         - action: rebuild
