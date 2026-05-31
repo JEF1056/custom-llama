@@ -52,9 +52,13 @@ SPEC_ARGS=()
 [[ -n "$QUANTIZATION" ]] && LOAD_ARGS+=(--quantization "$QUANTIZATION")
 
 if [[ -n "$SPEC_ALGO" ]]; then
+    # SGLANG_ENABLE_SPEC_V2 + extra_buffer required for speculative decoding
+    # compatibility with radix cache on Qwen3/Mamba-style models.
+    export SGLANG_ENABLE_SPEC_V2=1
     SPEC_ARGS+=(--speculative-algorithm "$SPEC_ALGO"
                 --speculative-num-steps "$SPEC_NUM_STEPS"
-                --speculative-num-draft-tokens "$SPEC_NUM_DRAFT_TOKENS")
+                --speculative-num-draft-tokens "$SPEC_NUM_DRAFT_TOKENS"
+                --mamba-scheduler-strategy extra_buffer)
     [[ -n "$SPEC_EAGLE_TOPK" ]] && SPEC_ARGS+=(--speculative-eagle-topk "$SPEC_EAGLE_TOPK")
 fi
 
