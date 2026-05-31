@@ -104,18 +104,13 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
   uv pip install "kernels==0.14.1"
 
-# ─── jit-prewarm ──────────────────────────────────────────────────────────────
-# Pre-compile JIT kernels while nvcc + torch/include are still available.
-# Compiled .so is cached in /root/.cache/tvm-ffi and copied to the runtime stage.
-RUN CUDA_HOME=/usr/local/cuda TORCH_CUDA_ARCH_LIST="8.6" python3 -c "from sglang.jit_kernel.gptq_marlin_repack import _jit_gptq_marlin_repack_module; _jit_gptq_marlin_repack_module(); print('gptq_marlin_repack JIT kernel pre-compiled OK')"
-
 # ─── venv-trim ────────────────────────────────────────────────────────────────
 # Strip test suites, build-time packages, unused torch components, and debug
 # symbols from the venv before copying to the runtime stage.
 RUN SITE=/opt/venv/lib/python3.12/site-packages && \
   # Test suites and benchmarks — never needed at inference time
   find /opt/venv -type d \( -name "tests" -o -name "test" -o -name "benchmarks" \) \
-    -exec rm -rf {} + 2>/dev/null || true && \
+  -exec rm -rf {} + 2>/dev/null || true && \
   # torch C++ headers — only needed when compiling CUDA extensions
   rm -rf "$SITE/torch/include" && \
   # torch bundled test utilities
@@ -124,11 +119,11 @@ RUN SITE=/opt/venv/lib/python3.12/site-packages && \
   rm -rf "$SITE"/torchaudio* && \
   # Build-time packages — cmake, ninja, scikit-build-core, setuptools_rust
   rm -rf \
-    "$SITE"/cmake* "$SITE"/CMake* \
-    "$SITE"/ninja* \
-    "$SITE"/scikit_build_core* \
-    "$SITE"/setuptools_rust* \
-    "$SITE"/_setuptools_rust* && \
+  "$SITE"/cmake* "$SITE"/CMake* \
+  "$SITE"/ninja* \
+  "$SITE"/scikit_build_core* \
+  "$SITE"/setuptools_rust* \
+  "$SITE"/_setuptools_rust* && \
   # CMake metadata / pkg-config files (build-time only)
   find /opt/venv -type d -name "cmake" -exec rm -rf {} + 2>/dev/null || true && \
   find /opt/venv -name "*.pdb" -delete 2>/dev/null || true && \
@@ -150,14 +145,14 @@ RUN apt-get update && \
 RUN find /usr/local/cuda/lib64 -name '*.a' -delete 2>/dev/null || true && \
   find /usr/lib -name 'libcudnn_*_static.a' -delete 2>/dev/null || true && \
   rm -rf \
-    /usr/local/cuda/samples \
-    /usr/local/cuda/extras \
-    /usr/local/cuda/doc \
-    /usr/local/cuda/nsight-compute-* \
-    /usr/local/cuda/nsight-systems-* \
-    /usr/local/cuda/NsightCompute* \
-    /usr/local/cuda/NsightSystems* \
-    /usr/local/cuda/compute-sanitizer
+  /usr/local/cuda/samples \
+  /usr/local/cuda/extras \
+  /usr/local/cuda/doc \
+  /usr/local/cuda/nsight-compute-* \
+  /usr/local/cuda/nsight-systems-* \
+  /usr/local/cuda/NsightCompute* \
+  /usr/local/cuda/NsightSystems* \
+  /usr/local/cuda/compute-sanitizer
 
 COPY --link --from=sglang-builder /opt/venv /opt/venv
 
