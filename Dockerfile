@@ -107,7 +107,7 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 # ─── jit-prewarm ──────────────────────────────────────────────────────────────
 # Pre-compile JIT kernels while nvcc + torch/include are still available.
 # Compiled .so is cached in /root/.cache/tvm-ffi and copied to the runtime stage.
-RUN CUDA_HOME=/usr/local/cuda python3 -c "from sglang.jit_kernel.gptq_marlin_repack import _jit_gptq_marlin_repack_module; _jit_gptq_marlin_repack_module(); print('gptq_marlin_repack JIT kernel pre-compiled OK')"
+RUN CUDA_HOME=/usr/local/cuda TORCH_CUDA_ARCH_LIST="8.6" python3 -c "from sglang.jit_kernel.gptq_marlin_repack import _jit_gptq_marlin_repack_module; _jit_gptq_marlin_repack_module(); print('gptq_marlin_repack JIT kernel pre-compiled OK')"
 
 # ─── venv-trim ────────────────────────────────────────────────────────────────
 # Strip test suites, build-time packages, unused torch components, and debug
