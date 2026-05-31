@@ -156,9 +156,6 @@ RUN find /usr/local/cuda/lib64 -name '*.a' -delete 2>/dev/null || true && \
 
 COPY --link --from=sglang-builder /opt/venv /opt/venv
 
-# Pre-warmed JIT kernel cache (gptq_marlin_repack and any others compiled above).
-COPY --link --from=sglang-builder /root/.cache/tvm-ffi /root/.cache/tvm-ffi
-
 ENV VIRTUAL_ENV=/opt/venv \
   PATH="/opt/venv/bin:$PATH"
 
