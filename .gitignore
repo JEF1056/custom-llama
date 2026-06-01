@@ -23,6 +23,7 @@ Thumbs.db
 plans
 .roo
 .roomodes
+.opencode.json
 
 # Chat UI
 ui/node_modules/
