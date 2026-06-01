@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Sync .env.default → root .env and opencode.json.default → opencode.json.
+"""Sync .env.default → root .env.
 
 Root .env.default is the single source of truth.  Running this script:
   - Writes / updates root .env (all variables; consumed by docker-compose)
-  - Bootstraps opencode.json from opencode.json.default (first run only)
 
 Root .env behaviour:
   - New variables are ADDED (with their default value).
@@ -12,19 +11,16 @@ Root .env behaviour:
   - Stale variables (removed from .env.default) are DELETED.
   - Auto-generated tokens (SGLANG_API_KEY, MCP_API_KEY) are created on first run.
 
-opencode.json behaviour:
-  - Always overwritten from opencode.json.default (source of truth).
-  - Edit opencode.json.default to make persistent changes.
+opencode.json uses {env:VAR} native interpolation — no sync needed.
 
 Usage:
-    python sync-env.py              # sync root .env + opencode.json
+    python sync-env.py              # sync root .env
     python sync-env.py --dry-run    # preview changes without writing
     python sync-env.py --regenerate # force-regenerate token variables
 """
 import argparse
 import re
 import secrets
-import shutil
 import sys
 from pathlib import Path
 
@@ -210,37 +206,14 @@ def sync_target(
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
-def sync_opencode(
-    default_path: Path,
-    target_path: Path,
-    dry_run: bool,
-) -> None:
-    """Sync opencode.json.default → opencode.json (always overwrites)."""
-    if not default_path.exists():
-        print(f"  [opencode.json] Skipped: {default_path} not found.")
-        return
-
-    if target_path.exists() and target_path.read_bytes() == default_path.read_bytes():
-        print(f"  [opencode.json] No changes needed.")
-        return
-
-    action = "Update" if target_path.exists() else "Create"
-    print(f"  [opencode.json] {action}: {target_path}")
-    if not dry_run:
-        shutil.copy2(default_path, target_path)
-        print(f"  [opencode.json] ✓ Wrote {target_path}")
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Sync .env.default → root .env and opencode.json.default → opencode.json"
+        description="Sync .env.default → root .env"
     )
-    parser.add_argument("--dry-run",        action="store_true", help="Preview changes without writing")
-    parser.add_argument("--regenerate",     action="store_true", help="Force-regenerate auto-generated tokens")
-    parser.add_argument("--default-file",   default=".env.default",        help="Path to the root .env.default")
-    parser.add_argument("--env-file",       default=".env",                help="Path to the root .env output")
-    parser.add_argument("--opencode-default", default="opencode.json.default", help="Path to opencode.json.default")
-    parser.add_argument("--opencode-file",    default="opencode.json",         help="Path to opencode.json output")
+    parser.add_argument("--dry-run",      action="store_true", help="Preview changes without writing")
+    parser.add_argument("--regenerate",   action="store_true", help="Force-regenerate auto-generated tokens")
+    parser.add_argument("--default-file", default=".env.default", help="Path to the root .env.default")
+    parser.add_argument("--env-file",     default=".env",         help="Path to the root .env output")
     args = parser.parse_args()
 
     default_path = Path(args.default_file)
@@ -265,13 +238,6 @@ def main() -> None:
         regenerate=args.regenerate,
         dry_run=args.dry_run,
         label=args.env_file,
-    )
-
-    # ── 2. opencode.json (bootstrap from default; never auto-overwrite) ──────────
-    sync_opencode(
-        default_path=Path(args.opencode_default),
-        target_path=Path(args.opencode_file),
-        dry_run=args.dry_run,
     )
 
     if not changed and not args.dry_run:
