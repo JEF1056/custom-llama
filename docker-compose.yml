@@ -93,6 +93,8 @@ services:
       SGLANG_ENABLE_MIXED_CHUNK: ${SGLANG_ENABLE_MIXED_CHUNK:-}
       PYTORCH_CUDA_ALLOC_CONF: ${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 
+    restart: unless-stopped
+
     networks:
       - llama-net
 

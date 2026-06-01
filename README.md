@@ -38,6 +38,50 @@ curl http://localhost:8080/v1/models
 
 Any OpenAI-compatible client (Cursor, Roo Code, opencode, etc.) points at `http://localhost:8080/v1`.
 
+### Local port overrides (`docker-compose.override.yml`)
+
+Create this file at the project root to expose all services to your local machine. It is gitignored — **do not commit it**.
+
+```yaml
+# docker-compose.override.yml
+# Exposes all services to localhost for local development.
+# gitignored — do not commit.
+services:
+  sglang-server:
+    restart: "no"
+    ports:
+      - "8080:8080"
+    networks:
+      - llama-net
+      - host-bridge
+
+  mcp-search-server:
+    ports:
+      - "3100:3100"
+    networks:
+      - llama-net
+      - host-bridge
+
+  chat-ui:
+    ports:
+      - "5173:5173"
+    networks:
+      - llama-net
+      - host-bridge
+
+networks:
+  host-bridge:
+    driver: bridge
+```
+
+| Service | Local URL |
+|---|---|
+| `sglang-server` | `http://localhost:8080` |
+| `mcp-search-server` | `http://localhost:3100` |
+| `chat-ui` | `http://localhost:5173` |
+
+> **Note:** `sglang-server` intentionally has no port mapping in `docker-compose.yml` — it is only reachable via Cloudflare Tunnel in production. The override adds the localhost binding for local dev only.
+
 ---
 
 ## Images
