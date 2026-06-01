@@ -12,6 +12,7 @@ TOKENIZER_PATH=${SGLANG_TOKENIZER_PATH:-}
 SERVED_MODEL_NAME=${SGLANG_SERVED_MODEL_NAME:-}
 API_KEY=${SGLANG_API_KEY:-}
 CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-145000}
+MEM_FRACTION=${SGLANG_MEM_FRACTION_STATIC:-0.85}
 MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-}
 TP_SIZE=${SGLANG_TP_SIZE:-1}
 DTYPE=${SGLANG_DTYPE:-float16}
@@ -52,6 +53,7 @@ echo "  Format:   safetensors${QUANTIZATION:+ ($QUANTIZATION)}"
 [ -n "$TOKENIZER_PATH" ]   && echo "  Tokenizer: $TOKENIZER_PATH"
 [ -n "$SERVED_MODEL_NAME" ] && echo "  Name:     $SERVED_MODEL_NAME"
 echo "  Context:  $CONTEXT_LENGTH tokens"
+echo "  VRAM:     ${MEM_FRACTION} fraction"
 echo "  TP:       $TP_SIZE GPU(s)"
 [ -n "$REASONING_PARSER" ] && echo "  Reasoning: $REASONING_PARSER"
 [ -n "$SPEC_ALGO" ]        && echo "  Speculative: $SPEC_ALGO (steps=$SPEC_NUM_STEPS topk=${SPEC_EAGLE_TOPK:-auto} draft=$SPEC_NUM_DRAFT_TOKENS)"
@@ -82,6 +84,7 @@ exec python3 -m sglang.launch_server \
     --port "$PORT" \
     "${LOAD_ARGS[@]}" \
     --context-length "$CONTEXT_LENGTH" \
+    --mem-fraction-static "$MEM_FRACTION" \
     --dtype "$DTYPE" \
     --tp-size "$TP_SIZE" \
     --trust-remote-code \
