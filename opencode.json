@@ -3,9 +3,9 @@
   "plugin": [
     "@opencode_weave/weave"
   ],
-  "model": "llama/qwen3.5-27b",
+  "model": "jessfan/qwen3.6-27b",
   "provider": {
-    "llama": {
+    "jessfan": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "SGLang Server",
       "options": {
@@ -13,11 +13,11 @@
         "includeUsage": true
       },
       "models": {
-        "qwen3.5-27b": {
-          "name": "Qwen3.5-27B",
+        "qwen3.6-27b": {
+          "name": "Qwen3.6-27B",
           "limit": {
-            "context": 75000,
-            "output": 50000
+            "context": 100000,
+            "output": 64000
           },
           "modalities": {
             "input": [
