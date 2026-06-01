@@ -29,7 +29,7 @@
               "text"
             ]
           },
-          "reasoning": true,
+          "reasoning": false,
           "tool_call": true
         }
       }

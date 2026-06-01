@@ -18,10 +18,18 @@ TP_SIZE=${SGLANG_TP_SIZE:-1}
 DTYPE=${SGLANG_DTYPE:-auto}
 KV_CACHE_DTYPE=${SGLANG_KV_CACHE_DTYPE:-}
 CHUNKED_PREFILL_SIZE=${SGLANG_CHUNKED_PREFILL_SIZE:-}
+MAX_TOTAL_TOKENS=${SGLANG_MAX_TOTAL_TOKENS:-}
+MAX_QUEUED_REQUESTS=${SGLANG_MAX_QUEUED_REQUESTS:-}
 REASONING_PARSER=${SGLANG_REASONING_PARSER:-}
 QUANTIZATION=${SGLANG_QUANTIZATION:-}
+SCHEDULE_POLICY=${SGLANG_SCHEDULE_POLICY:-fcfs}
+SAMPLING_DEFAULTS=${SGLANG_SAMPLING_DEFAULTS:-}
 NUM_CONTINUOUS_DECODE_STEPS=${SGLANG_NUM_CONTINUOUS_DECODE_STEPS:-1}
 ENABLE_MIXED_CHUNK=${SGLANG_ENABLE_MIXED_CHUNK:-}
+MAMBA_SCHEDULER_STRATEGY=${SGLANG_MAMBA_SCHEDULER_STRATEGY:-extra_buffer}
+LOG_LEVEL=${SGLANG_LOG_LEVEL:-info}
+LOG_REQUESTS=${SGLANG_LOG_REQUESTS:-}
+ENABLE_METRICS=${SGLANG_ENABLE_METRICS:-}
 SPEC_ALGO=${SGLANG_SPECULATIVE_ALGO:-}
 SPEC_NUM_STEPS=${SGLANG_SPECULATIVE_NUM_STEPS:-3}
 SPEC_EAGLE_TOPK=${SGLANG_SPECULATIVE_EAGLE_TOPK:-}
@@ -60,7 +68,7 @@ if [[ -n "$SPEC_ALGO" ]]; then
     SPEC_ARGS+=(--speculative-algorithm "$SPEC_ALGO"
                 --speculative-num-steps "$SPEC_NUM_STEPS"
                 --speculative-num-draft-tokens "$SPEC_NUM_DRAFT_TOKENS"
-                --mamba-scheduler-strategy extra_buffer)
+                --mamba-scheduler-strategy "$MAMBA_SCHEDULER_STRATEGY")
     [[ -n "$SPEC_EAGLE_TOPK" ]] && SPEC_ARGS+=(--speculative-eagle-topk "$SPEC_EAGLE_TOPK")
 fi
 
@@ -78,10 +86,17 @@ exec python3 -m sglang.launch_server \
     ${SERVED_MODEL_NAME:+--served-model-name "$SERVED_MODEL_NAME"} \
     ${API_KEY:+--api-key "$API_KEY"} \
     ${MAX_RUNNING_REQUESTS:+--max-running-requests "$MAX_RUNNING_REQUESTS"} \
+    ${MAX_TOTAL_TOKENS:+--max-total-tokens "$MAX_TOTAL_TOKENS"} \
+    ${MAX_QUEUED_REQUESTS:+--max-queued-requests "$MAX_QUEUED_REQUESTS"} \
     ${REASONING_PARSER:+--reasoning-parser "$REASONING_PARSER"} \
     ${CHUNKED_PREFILL_SIZE:+--chunked-prefill-size "$CHUNKED_PREFILL_SIZE"} \
     ${KV_CACHE_DTYPE:+--kv-cache-dtype "$KV_CACHE_DTYPE"} \
+    --schedule-policy "$SCHEDULE_POLICY" \
+    ${SAMPLING_DEFAULTS:+--sampling-defaults "$SAMPLING_DEFAULTS"} \
     --num-continuous-decode-steps "$NUM_CONTINUOUS_DECODE_STEPS" \
     ${ENABLE_MIXED_CHUNK:+--enable-mixed-chunk} \
+    --log-level "$LOG_LEVEL" \
+    ${LOG_REQUESTS:+--log-requests} \
+    ${ENABLE_METRICS:+--enable-metrics} \
     "${SPEC_ARGS[@]}" \
     "$@"
