@@ -12,13 +12,11 @@ TOKENIZER_PATH=${SGLANG_TOKENIZER_PATH:-}
 SERVED_MODEL_NAME=${SGLANG_SERVED_MODEL_NAME:-}
 API_KEY=${SGLANG_API_KEY:-}
 CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-145000}
-MEM_FRACTION=${SGLANG_MEM_FRACTION_STATIC:-0.92}
 MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-}
 TP_SIZE=${SGLANG_TP_SIZE:-1}
 DTYPE=${SGLANG_DTYPE:-float16}
 KV_CACHE_DTYPE=${SGLANG_KV_CACHE_DTYPE:-}
 CHUNKED_PREFILL_SIZE=${SGLANG_CHUNKED_PREFILL_SIZE:-}
-MAX_TOTAL_TOKENS=${SGLANG_MAX_TOTAL_TOKENS:-}
 MAX_QUEUED_REQUESTS=${SGLANG_MAX_QUEUED_REQUESTS:-}
 REASONING_PARSER=${SGLANG_REASONING_PARSER:-}
 QUANTIZATION=${SGLANG_QUANTIZATION:-}
@@ -53,7 +51,6 @@ echo "  Format:   safetensors${QUANTIZATION:+ ($QUANTIZATION)}"
 [ -n "$TOKENIZER_PATH" ]   && echo "  Tokenizer: $TOKENIZER_PATH"
 [ -n "$SERVED_MODEL_NAME" ] && echo "  Name:     $SERVED_MODEL_NAME"
 echo "  Context:  $CONTEXT_LENGTH tokens"
-echo "  VRAM:     ${MEM_FRACTION} fraction"
 echo "  TP:       $TP_SIZE GPU(s)"
 [ -n "$REASONING_PARSER" ] && echo "  Reasoning: $REASONING_PARSER"
 [ -n "$SPEC_ALGO" ]        && echo "  Speculative: $SPEC_ALGO (steps=$SPEC_NUM_STEPS topk=${SPEC_EAGLE_TOPK:-auto} draft=$SPEC_NUM_DRAFT_TOKENS)"
@@ -83,7 +80,6 @@ exec python3 -m sglang.launch_server \
     --port "$PORT" \
     "${LOAD_ARGS[@]}" \
     --context-length "$CONTEXT_LENGTH" \
-    --mem-fraction-static "$MEM_FRACTION" \
     --dtype "$DTYPE" \
     --tp-size "$TP_SIZE" \
     --trust-remote-code \
@@ -91,7 +87,6 @@ exec python3 -m sglang.launch_server \
     ${SERVED_MODEL_NAME:+--served-model-name "$SERVED_MODEL_NAME"} \
     ${API_KEY:+--api-key "$API_KEY"} \
     ${MAX_RUNNING_REQUESTS:+--max-running-requests "$MAX_RUNNING_REQUESTS"} \
-    ${MAX_TOTAL_TOKENS:+--max-total-tokens "$MAX_TOTAL_TOKENS"} \
     ${MAX_QUEUED_REQUESTS:+--max-queued-requests "$MAX_QUEUED_REQUESTS"} \
     ${REASONING_PARSER:+--reasoning-parser "$REASONING_PARSER"} \
     ${CHUNKED_PREFILL_SIZE:+--chunked-prefill-size "$CHUNKED_PREFILL_SIZE"} \
