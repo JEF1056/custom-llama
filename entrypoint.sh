@@ -26,7 +26,6 @@ SAMPLING_DEFAULTS=${SGLANG_SAMPLING_DEFAULTS:-}
 NUM_CONTINUOUS_DECODE_STEPS=${SGLANG_NUM_CONTINUOUS_DECODE_STEPS:-5}
 ENABLE_MIXED_CHUNK=${SGLANG_ENABLE_MIXED_CHUNK:-}
 ENABLE_MULTIMODAL=${SGLANG_ENABLE_MULTIMODAL:-}
-ENABLE_PIECEWISE_CUDA_GRAPH=${SGLANG_ENABLE_PIECEWISE_CUDA_GRAPH:-}
 MAMBA_SCHEDULER_STRATEGY=${SGLANG_MAMBA_SCHEDULER_STRATEGY:-extra_buffer}
 MAMBA_SSM_DTYPE=${SGLANG_MAMBA_SSM_DTYPE:-}
 MAMBA_FULL_MEMORY_RATIO=${SGLANG_MAMBA_FULL_MEMORY_RATIO:-}
@@ -59,7 +58,6 @@ echo "  TP:       $TP_SIZE GPU(s)"
 [ -n "$SPEC_ALGO" ]        && echo "  Speculative: $SPEC_ALGO (steps=$SPEC_NUM_STEPS topk=${SPEC_EAGLE_TOPK:-auto} draft=$SPEC_NUM_DRAFT_TOKENS)"
 [ -n "$KV_CACHE_DTYPE" ]   && echo "  KV dtype: $KV_CACHE_DTYPE"
 [ -n "$ENABLE_MULTIMODAL" ] && echo "  Vision:   enabled"
-[ -n "$ENABLE_PIECEWISE_CUDA_GRAPH" ] && echo "  Piecewise CUDA graph: enabled"
 echo "  Mamba:    strategy=$MAMBA_SCHEDULER_STRATEGY${MAMBA_SSM_DTYPE:+ ssm_dtype=$MAMBA_SSM_DTYPE}${MAMBA_FULL_MEMORY_RATIO:+ full_mem_ratio=$MAMBA_FULL_MEMORY_RATIO}"
 [ -n "$API_KEY" ]          && echo "  API key:  (set)"
 
@@ -105,7 +103,6 @@ exec python3 -m sglang.launch_server \
     ${SAMPLING_DEFAULTS:+--sampling-defaults "$SAMPLING_DEFAULTS"} \
     --num-continuous-decode-steps "$NUM_CONTINUOUS_DECODE_STEPS" \
     ${ENABLE_MIXED_CHUNK:+--enable-mixed-chunk} \
-    ${ENABLE_PIECEWISE_CUDA_GRAPH:+--enable-piecewise-cuda-graph} \
     --log-level "$LOG_LEVEL" \
     ${LOG_REQUESTS:+--log-requests} \
     ${ENABLE_METRICS:+--enable-metrics} \
