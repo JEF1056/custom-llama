@@ -243,6 +243,52 @@ def main() -> None:
     if not changed and not args.dry_run:
         print("All env files up to date.")
 
+    # ── 2. opencode.json (substitute {env:VAR} from root .env) ───────────────
+    sync_opencode(
+        env_path=root_env_path,
+        template=Path("opencode-default.json"),
+        output=Path("opencode.json"),
+        dry_run=args.dry_run,
+    )
+
+
+def sync_opencode(
+    env_path: Path,
+    template: Path,
+    output: Path,
+    dry_run: bool,
+) -> None:
+    """Substitute {env:VAR} placeholders in template → output using values from env_path."""
+    if not template.exists():
+        print(f"  [opencode] Skip: {template} not found.", file=sys.stderr)
+        return
+
+    env = parse_env(env_path) if env_path.exists() else {}
+    text = template.read_text(encoding="utf-8")
+
+    missing: list[str] = []
+
+    def replacer(m: re.Match) -> str:
+        var = m.group(1)
+        val = env.get(var, "")
+        if val == "":
+            missing.append(var)
+            return m.group(0)
+        return val
+
+    result = re.sub(r"\{env:([^}]+)\}", replacer, text)
+
+    if dry_run:
+        print(f"  [opencode] Would write {output}")
+        if missing:
+            print(f"  [opencode] Unresolved (missing/empty): {', '.join(missing)}")
+        return
+
+    output.write_text(result, encoding="utf-8")
+    print(f"  [opencode] ✓ Wrote {output}")
+    if missing:
+        print(f"  [opencode] Warning — unresolved placeholders: {', '.join(missing)}")
+
 
 if __name__ == "__main__":
     main()
