@@ -80,8 +80,7 @@ if [[ -n "$SPEC_ALGO" ]]; then
     [[ -n "$SPEC_EAGLE_TOPK" ]] && SPEC_ARGS+=(--speculative-eagle-topk "$SPEC_EAGLE_TOPK")
 fi
 
-exec python3 -m sglang.launch_server \
-    --model-path "$MODEL_PATH" \
+exec sglang serve "$MODEL_PATH" \
     --host "$HOST" \
     --port "$PORT" \
     "${LOAD_ARGS[@]}" \

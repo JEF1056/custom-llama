@@ -137,7 +137,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && \
   apt-get install -y --no-install-recommends \
-  python3 python3-dev ca-certificates libnuma1 && \
+  python3 python3-dev ca-certificates libnuma1 \
+  ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev && \
   rm -rf /var/lib/apt/lists/*
 
 # Strip CUDA devel-only artifacts not needed for inference.
