@@ -115,8 +115,6 @@ RUN SITE=/opt/venv/lib/python3.12/site-packages && \
   rm -rf "$SITE/torch/include" && \
   # torch bundled test utilities
   rm -rf "$SITE/torch/test" && \
-  # torchaudio — not used by text-only inference
-  rm -rf "$SITE"/torchaudio* && \
   # Build-time packages — cmake, ninja, scikit-build-core, setuptools_rust
   rm -rf \
   "$SITE"/cmake* "$SITE"/CMake* \
