@@ -57,7 +57,7 @@ FROM base AS repo-cloner
 ARG CACHEBUST=1
 
 RUN git clone --depth 1 \
-  --branch feature/locked-turboquant \
+  --branch feature/turboquant-rebase-main \
   --recurse-submodules \
   --shallow-submodules \
   https://github.com/JEF1056/sglang-turboquant.git \
@@ -89,7 +89,7 @@ WORKDIR /sglang
 # Install prebuilt sglang-kernel (cu130, SM86 included) — no source compile.
 # Pinned to the version declared in python/pyproject.toml (sglang-kernel==0.4.3).
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-  uv pip install --force-reinstall "sglang-kernel==0.4.2.post2" \
+  uv pip install --force-reinstall "sglang-kernel==0.4.3" \
   --index-url https://docs.sglang.ai/whl/cu130/
 
 # Non-editable install with --no-build-isolation so torch stays as the
