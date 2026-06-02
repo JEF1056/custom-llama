@@ -41,6 +41,7 @@ SPEC_ALGO=${SGLANG_SPECULATIVE_ALGO:-}
 SPEC_NUM_STEPS=${SGLANG_SPECULATIVE_NUM_STEPS:-3}
 SPEC_EAGLE_TOPK=${SGLANG_SPECULATIVE_EAGLE_TOPK:-}
 SPEC_NUM_DRAFT_TOKENS=${SGLANG_SPECULATIVE_NUM_DRAFT_TOKENS:-3}
+ENFORCE_PCG=${SGLANG_ENFORCE_PIECEWISE_CUDA_GRAPH:-}
 
 if [ -z "$MODEL_PATH" ]; then
     echo "ERROR: SGLANG_MODEL_PATH is required"
@@ -63,6 +64,7 @@ echo "  TP:       $TP_SIZE GPU(s)"
 [ -n "$KV_CACHE_DTYPE" ]   && echo "  KV dtype: $KV_CACHE_DTYPE${TURBOQUANT_KEY_BITS:+ (K${TURBOQUANT_KEY_BITS}/V${TURBOQUANT_VALUE_BITS})}"
 [ -n "$ENABLE_MULTIMODAL" ] && echo "  Vision:   enabled"
 echo "  Mamba:    strategy=$MAMBA_SCHEDULER_STRATEGY${MAMBA_SSM_DTYPE:+ ssm_dtype=$MAMBA_SSM_DTYPE}${MAMBA_FULL_MEMORY_RATIO:+ full_mem_ratio=$MAMBA_FULL_MEMORY_RATIO}"
+[ -n "$ENFORCE_PCG" ]      && echo "  PCG:      piecewise cuda graph enabled"
 [ -n "$API_KEY" ]          && echo "  API key:  (set)"
 
 LOAD_ARGS=()
@@ -111,6 +113,7 @@ exec sglang serve \
     ${SAMPLING_DEFAULTS:+--sampling-defaults "$SAMPLING_DEFAULTS"} \
     --num-continuous-decode-steps "$NUM_CONTINUOUS_DECODE_STEPS" \
     ${ENABLE_MIXED_CHUNK:+--enable-mixed-chunk} \
+    ${ENFORCE_PCG:+--enforce-piecewise-cuda-graph} \
     --log-level "$LOG_LEVEL" \
     ${LOG_REQUESTS:+--log-requests} \
     ${ENABLE_METRICS:+--enable-metrics} \
