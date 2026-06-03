@@ -25,6 +25,7 @@ ARG VLLM_FORK_BRANCH=turboquant-k4v2-nc
 # If empty, this layer is a no-op and the official image is used as-is.
 RUN if [ -n "${VLLM_FORK_REPO}" ]; then \
       echo "Building from fork: ${VLLM_FORK_REPO}@${VLLM_FORK_BRANCH}" \
+      && apt-get update -qq && apt-get install -y -qq git > /dev/null && rm -rf /var/lib/apt/lists/* \
       && git clone --depth 1 --branch "${VLLM_FORK_BRANCH}" "${VLLM_FORK_REPO}" /tmp/vllm-fork \
       && VLLM_SITE=$(python3 -c "import vllm; import pathlib; print(pathlib.Path(vllm.__path__[0]).parent)") \
       && cp -a /tmp/vllm-fork/vllm "${VLLM_SITE}/vllm" \
