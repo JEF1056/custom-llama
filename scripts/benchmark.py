@@ -958,6 +958,85 @@ STRESS_SCENARIOS: list[dict[str, Any]] = [
         ],
     },
     {
+        "name": "long_context_90k",
+        "description": "~90k token input context, short generation — tests KV cache near limit",
+        "max_tokens": 512,
+        "system": "You are a code reviewer. Be concise.",
+        "user": (
+            "Review the following codebase for critical bugs and security issues. "
+            "Output only the top 5 issues, one line each.\n\n"
+            + "\n".join(
+                f"# module_{m}/service.py\n"
+                + "\n".join(
+                    f"class Handler{m}_{c}:\n"
+                    f"    \"\"\"Handles requests for module {m}, component {c}.\"\"\"\n"
+                    f"    def __init__(self, db_url: str, api_key: str, timeout: int = 30):\n"
+                    f"        self.db_url = db_url\n"
+                    f"        self.api_key = api_key\n"
+                    f"        self.timeout = timeout\n"
+                    f"        self._cache: dict[str, Any] = {{}}\n"
+                    f"        self._retry_count = 0\n"
+                    f"\n"
+                    f"    def process(self, request_id: str, payload: dict) -> dict:\n"
+                    f"        if not request_id:\n"
+                    f"            raise ValueError('request_id is required')\n"
+                    f"        result = self._validate(payload)\n"
+                    f"        transformed = self._transform(result, config_version={m * 10 + c})\n"
+                    f"        self._cache[request_id] = transformed\n"
+                    f"        return {{'status': 'ok', 'data': transformed, 'handler': '{m}_{c}'}}\n"
+                    f"\n"
+                    f"    def _validate(self, payload: dict) -> dict:\n"
+                    f"        required = ['user_id', 'action', 'timestamp']\n"
+                    f"        for field in required:\n"
+                    f"            if field not in payload:\n"
+                    f"                raise ValueError(f'Missing required field: {{field}}')\n"
+                    f"        return {{k: v for k, v in payload.items() if v is not None}}\n"
+                    f"\n"
+                    f"    def _transform(self, data: dict, config_version: int) -> dict:\n"
+                    f"        output = {{}}\n"
+                    f"        for key, value in data.items():\n"
+                    f"            if isinstance(value, str):\n"
+                    f"                output[key] = value.strip().lower()\n"
+                    f"            elif isinstance(value, (int, float)):\n"
+                    f"                output[key] = value * (1 + config_version / 1000)\n"
+                    f"            else:\n"
+                    f"                output[key] = value\n"
+                    f"        output['_version'] = config_version\n"
+                    f"        return output\n"
+                    for c in range(20)
+                )
+                for m in range(15)
+            )
+        ),
+    },
+    {
+        "name": "long_context_gen_4k",
+        "description": "~80k token input + 4096 token generation — sustained output near context limit",
+        "max_tokens": 4096,
+        "system": "You are an expert code auditor writing a detailed security report.",
+        "user": (
+            "Perform a comprehensive security audit of the following codebase. "
+            "For each module, identify vulnerabilities, rate their severity (Critical/High/Medium/Low), "
+            "provide a fix, and explain the attack vector. Write the full report.\n\n"
+            + "\n".join(
+                f"# service_{m}/handler.py\n"
+                + "\n".join(
+                    f"def handle_{m}_{f}(request: dict, db: 'Connection', config: dict) -> dict:\n"
+                    f"    user_id = request.get('user_id', 'anonymous')\n"
+                    f"    query = f\"SELECT * FROM users WHERE id = '{{user_id}}'\"\n"
+                    f"    result = db.execute(query)\n"
+                    f"    if not result:\n"
+                    f"        return {{'error': 'not_found', 'handler': '{m}_{f}'}}\n"
+                    f"    token = hashlib.md5(f'{{user_id}}:{{config[\"secret\"]}}'.encode()).hexdigest()\n"
+                    f"    return {{'data': result, 'token': token, 'cache_key': f'user_{{user_id}}_{m}_{f}'}}\n"
+                    f"\n"
+                    for f in range(25)
+                )
+                for m in range(12)
+            )
+        ),
+    },
+    {
         "name": "parallel_2_slots",
         "description": "2 concurrent requests (max_num_seqs=2)",
         "max_tokens": 1024,
