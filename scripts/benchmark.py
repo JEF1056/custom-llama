@@ -44,7 +44,8 @@ HEALTH_URL = f"{API_BASE}/health"
 CHAT_URL = f"{API_BASE}/v1/chat/completions"
 METRICS_URL = f"{API_BASE}/metrics"
 
-MAX_TOKENS = 1024
+MAX_TOKENS = 4096
+THINKING_BUDGET = 2048  # tokens reserved for <think> reasoning
 HEALTH_POLL_INTERVAL = 10  # seconds
 HEALTH_TIMEOUT = 420  # 7 minutes — covers 5-min model load + compilation
 
@@ -334,20 +335,18 @@ def run_scenario(
         "model": "qwen3.6-27b",
         "messages": messages,
         "max_tokens": MAX_TOKENS,
-        "temperature": 0,
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 20,
+        "repetition_penalty": 1.0,
         "stream": True,
         "stream_options": {"include_usage": True},
-    }
-
-    # Disable thinking for consistent throughput measurement
-    extra_body: dict[str, Any] = {
-        "chat_template_kwargs": {"enable_thinking": False},
+        "chat_template_kwargs": {"enable_thinking": True},
+        "thinking": {"type": "enabled", "budget_tokens": THINKING_BUDGET},
     }
 
     if dry:
-        extra_body.update(DRY_ON_PARAMS)
-
-    body.update(extra_body)
+        body.update(DRY_ON_PARAMS)
 
     if scenario.tools:
         body["tools"] = scenario.tools
@@ -414,11 +413,18 @@ def run_scenario(
         "chunks": chunks_received,
     }
 
-    # Compute per-run speculative decoding acceptance from counter deltas
+    # Compute per-run speculative decoding acceptance from counter deltas.
+    # vLLM flushes Prometheus counters asynchronously — brief delay ensures
+    # the /metrics endpoint reflects tokens from this request.
+    time.sleep(1.0)
     spec_after = _scrape_raw_spec_counters()
     spec_metrics = compute_spec_metrics(spec_before, spec_after)
     if spec_metrics:
         result["spec_metrics"] = spec_metrics
+    else:
+        # Log raw values for debugging when no delta is detected
+        if spec_before or spec_after:
+            print(f"  [spec debug] before={spec_before} after={spec_after}")
 
     return result
 
@@ -911,10 +917,14 @@ def _run_single_stream(
         "model": "qwen3.6-27b",
         "messages": messages,
         "max_tokens": max_tokens,
-        "temperature": 0,
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 20,
+        "repetition_penalty": 1.0,
         "stream": True,
         "stream_options": {"include_usage": True},
-        "chat_template_kwargs": {"enable_thinking": False},
+        "chat_template_kwargs": {"enable_thinking": True},
+        "thinking": {"type": "enabled", "budget_tokens": THINKING_BUDGET},
     }
     if dry:
         body.update(DRY_ON_PARAMS)
@@ -969,6 +979,7 @@ def _run_single_stream(
         "total_time_s": round(total_time, 3),
         "chunks": chunks,
     }
+    time.sleep(1.0)  # let vLLM flush Prometheus counters
     spec_after = _scrape_raw_spec_counters()
     spec_m = compute_spec_metrics(spec_before, spec_after)
     if spec_m:
@@ -1059,6 +1070,7 @@ def run_phase_5(
                         stress["prompts"], stress["max_tokens"],
                         dry_winner, api_key,
                     )
+                    time.sleep(1.0)  # let vLLM flush Prometheus counters
                     spec_after_par = _scrape_raw_spec_counters()
                     spec_m = compute_spec_metrics(spec_before_par, spec_after_par)
                     if spec_m:
