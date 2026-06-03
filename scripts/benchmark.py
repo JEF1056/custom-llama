@@ -72,35 +72,37 @@ SPEC_CONFIGS: dict[str, str] = {
     "mtp_n4": json.dumps({"method": "mtp", "num_speculative_tokens": 4}),
 
     # Ngram only — sweep lookup window size
+    # prompt_lookup_min >= 8 required for Qwen3 to avoid tool-call corruption
+    # (see https://github.com/vllm-project/vllm/issues/40875)
     "ngram_tight": json.dumps({
-        "method": "ngram", "num_speculative_tokens": 2,
-        "prompt_lookup_max": 6, "prompt_lookup_min": 3,
-    }),
-    "ngram_default": json.dumps({
-        "method": "ngram", "num_speculative_tokens": 2,
+        "method": "ngram", "num_speculative_tokens": 3,
         "prompt_lookup_max": 10, "prompt_lookup_min": 8,
     }),
+    "ngram_default": json.dumps({
+        "method": "ngram", "num_speculative_tokens": 5,
+        "prompt_lookup_max": 15, "prompt_lookup_min": 8,
+    }),
     "ngram_wide": json.dumps({
-        "method": "ngram", "num_speculative_tokens": 2,
-        "prompt_lookup_max": 15, "prompt_lookup_min": 5,
+        "method": "ngram", "num_speculative_tokens": 10,
+        "prompt_lookup_max": 30, "prompt_lookup_min": 8,
     }),
 
     # Ngram-first + MTP — sweep token count (ngram settings = default)
     "ngram_mtp_n1": json.dumps({
         "method": "mtp", "num_speculative_tokens": 1,
-        "ngram_first": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+        "ngram_first": True, "prompt_lookup_max": 15, "prompt_lookup_min": 8,
     }),
     "ngram_mtp_n2": json.dumps({
         "method": "mtp", "num_speculative_tokens": 2,
-        "ngram_first": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+        "ngram_first": True, "prompt_lookup_max": 15, "prompt_lookup_min": 8,
     }),
     "ngram_mtp_n3": json.dumps({
         "method": "mtp", "num_speculative_tokens": 3,
-        "ngram_first": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+        "ngram_first": True, "prompt_lookup_max": 15, "prompt_lookup_min": 8,
     }),
     "ngram_mtp_n4": json.dumps({
         "method": "mtp", "num_speculative_tokens": 4,
-        "ngram_first": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+        "ngram_first": True, "prompt_lookup_max": 15, "prompt_lookup_min": 8,
     }),
 }
 
