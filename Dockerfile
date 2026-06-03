@@ -28,7 +28,7 @@ RUN if [ -n "${VLLM_FORK_REPO}" ]; then \
       && apt-get update -qq && apt-get install -y -qq git > /dev/null && rm -rf /var/lib/apt/lists/* \
       && git clone --depth 1 --branch "${VLLM_FORK_BRANCH}" "${VLLM_FORK_REPO}" /tmp/vllm-fork \
       && VLLM_SITE=$(python3 -c "import vllm; import pathlib; print(pathlib.Path(vllm.__path__[0]).parent)") \
-      && cp -a /tmp/vllm-fork/vllm "${VLLM_SITE}/vllm" \
+      && cp -a /tmp/vllm-fork/vllm/. "${VLLM_SITE}/vllm/" \
       && rm -rf /tmp/vllm-fork \
       && python3 -c "import vllm; print(f'vLLM {vllm.__version__} (fork overlay)')"; \
     else \
