@@ -44,7 +44,7 @@ HEALTH_URL = f"{API_BASE}/health"
 CHAT_URL = f"{API_BASE}/v1/chat/completions"
 METRICS_URL = f"{API_BASE}/metrics"
 
-MAX_TOKENS = 1024
+MAX_TOKENS = 2048
 HEALTH_POLL_INTERVAL = 10  # seconds
 HEALTH_TIMEOUT = 420  # 7 minutes — covers 5-min model load + compilation
 
