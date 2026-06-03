@@ -114,14 +114,23 @@ SCENARIOS: list[Scenario] = [
     Scenario(
         name="general_text",
         description="Fluent prose — raw decode speed, low ngram repeat",
-        system="You are a thoughtful essayist who writes in clear, engaging prose.",
+        system="You are a thoughtful essayist who writes in clear, engaging prose. Always write at maximum length.",
         user=(
             "Write a detailed essay analyzing how artificial intelligence is transforming "
-            "modern education. Structure your essay with an introduction, three body sections "
-            "(benefits, risks, and policy recommendations), and a conclusion. Use specific "
-            "examples and cite hypothetical studies to support each point. Each section should "
-            "be at least two paragraphs. Do not use bullet points or numbered lists — write "
-            "in flowing paragraph form only."
+            "modern education. Structure your essay with:\n"
+            "- An introduction that sets the historical context (at least 3 paragraphs)\n"
+            "- Section 1: Benefits of AI in education — personalized learning, accessibility, "
+            "automated grading, intelligent tutoring systems (at least 4 paragraphs)\n"
+            "- Section 2: Risks and challenges — academic integrity, bias in AI systems, "
+            "digital divide, teacher displacement, data privacy (at least 4 paragraphs)\n"
+            "- Section 3: Policy recommendations — regulation frameworks, teacher training, "
+            "equity measures, international cooperation (at least 4 paragraphs)\n"
+            "- Section 4: Case studies — discuss at least 3 hypothetical implementations "
+            "in different countries with specific outcomes and statistics (at least 3 paragraphs)\n"
+            "- A conclusion with future outlook (at least 2 paragraphs)\n\n"
+            "Use specific examples and cite hypothetical studies to support each point. "
+            "Do not use bullet points or numbered lists — write in flowing paragraph form only. "
+            "Each paragraph should be at least 4 sentences long."
         ),
     ),
     Scenario(
@@ -129,21 +138,30 @@ SCENARIOS: list[Scenario] = [
         description="Repetitive syntax — ngram speculation advantage",
         system="You are an expert Python developer. Write clean, production-ready code with comprehensive type hints and docstrings.",
         user=(
-            "Write a Python module that implements a `TaskScheduler` class with the following "
-            "features:\n"
-            "1. A priority queue backed by `heapq` where tasks have a name, priority (int), "
-            "and an async callable.\n"
-            "2. Delayed execution: tasks can be scheduled to run after a specified delay in "
-            "seconds.\n"
-            "3. Retry logic: if a task raises an exception, retry up to N times with "
-            "exponential backoff (base 2 seconds).\n"
-            "4. A worker pool of configurable size that pulls tasks from the queue "
-            "concurrently using `asyncio`.\n"
-            "5. Graceful shutdown: cancel pending tasks and wait for running tasks to finish.\n"
-            "6. Include a `TaskResult` dataclass that captures task name, success/failure, "
-            "duration, retry count, and error message if any.\n\n"
-            "Write the complete module with all imports, classes, and a brief `if __name__` "
-            "demo that schedules 5 example tasks."
+            "Write a Python module that implements a complete `TaskScheduler` system with the "
+            "following features:\n"
+            "1. A `Task` dataclass with name, priority (int), async callable, metadata dict, "
+            "created_at timestamp, and tags list.\n"
+            "2. A `TaskResult` dataclass with task name, success/failure, duration, retry "
+            "count, error message, start/end timestamps, and output value.\n"
+            "3. A `TaskScheduler` class with:\n"
+            "   a. Priority queue backed by `heapq`\n"
+            "   b. Delayed execution with specified delay in seconds\n"
+            "   c. Retry logic up to N times with exponential backoff (base 2 seconds)\n"
+            "   d. Configurable worker pool using `asyncio`\n"
+            "   e. Graceful shutdown: cancel pending, wait for running\n"
+            "   f. Task dependency graph — tasks can depend on other tasks\n"
+            "   g. Event hooks: on_task_start, on_task_complete, on_task_failure\n"
+            "   h. Statistics tracking: total runs, success rate, avg duration per task\n"
+            "4. A `TaskMonitor` class that logs task progress and can generate a summary "
+            "report as a formatted string.\n"
+            "5. A comprehensive `if __name__` demo that:\n"
+            "   a. Creates 10 example tasks with various priorities and dependencies\n"
+            "   b. Includes tasks that deliberately fail to test retry logic\n"
+            "   c. Uses event hooks to print progress\n"
+            "   d. Prints the final statistics report\n\n"
+            "Write the complete module with all imports, classes, and full implementation. "
+            "Include docstrings for every class and method."
         ),
     ),
     Scenario(
@@ -155,18 +173,26 @@ SCENARIOS: list[Scenario] = [
             "- file_read(path: str) → file contents as string\n"
             "- code_execute(language: str, code: str) → execution output\n"
             "- database_query(sql: str) → query results as JSON\n\n"
-            "For each step, show your reasoning, which tool you would call and why, "
-            "and what you expect the result to look like. Be thorough and methodical."
+            "For each step, show your detailed reasoning (at least 3-4 sentences), "
+            "which tool you would call and why, the exact tool call with arguments, "
+            "a hypothetical response, and your analysis of that response. "
+            "Be extremely thorough and methodical."
         ),
         user=(
             "I need you to research and compile a comprehensive performance comparison of "
             "LLM inference engines on consumer GPUs (RTX 3090, 4090, 4080). Specifically:\n"
-            "1. Find the latest benchmarks for vLLM, llama.cpp, TensorRT-LLM, and SGLang.\n"
-            "2. Compare tokens/second for 7B, 13B, and 27B parameter models.\n"
-            "3. Build a comparison table in CSV format.\n"
-            "4. Calculate which engine gives the best tok/s per dollar of GPU cost.\n"
-            "5. Write an executive summary with a recommendation.\n\n"
-            "Show your complete step-by-step plan with tool calls for each step."
+            "1. Find the latest benchmarks for vLLM, llama.cpp, TensorRT-LLM, SGLang, and "
+            "ExLlamaV2 — search for each individually.\n"
+            "2. Compare tokens/second for 7B, 13B, 27B, and 70B parameter models.\n"
+            "3. Research GPU prices from at least 3 retailers.\n"
+            "4. Build a detailed comparison table in CSV format with all data.\n"
+            "5. Write analysis code in Python to calculate tok/s per dollar for each combo.\n"
+            "6. Run the analysis code and interpret the results.\n"
+            "7. Query a database to check if we have any prior benchmark data to compare against.\n"
+            "8. Write a detailed executive summary with charts described in ASCII, specific "
+            "recommendations for different budget tiers, and caveats.\n\n"
+            "Show your complete step-by-step plan with tool calls for each step. "
+            "Include hypothetical tool responses and your analysis of each."
         ),
     ),
     Scenario(
@@ -199,7 +225,19 @@ SCENARIOS: list[Scenario] = [
             "Q5: Describe the OAuth 2.0 authorization code flow.\n"
             "FORMAT: A numbered step-by-step list (at least 8 steps) where each step "
             "names the actor (Client, Auth Server, Resource Server, User) and the HTTP "
-            "method used. End with a sequence diagram in ASCII art."
+            "method used. End with a sequence diagram in ASCII art.\n\n"
+            "Q6: Explain the differences between SQL and NoSQL databases.\n"
+            "FORMAT: A comparison table with at least 10 rows, followed by a decision "
+            "matrix showing which type to use for 5 different application scenarios "
+            "(social media, banking, IoT, e-commerce, analytics). Each scenario needs "
+            "3-4 sentences justifying the choice.\n\n"
+            "Q7: Describe the phases of a compiler.\n"
+            "FORMAT: For each of the 6 phases (lexical analysis, syntax analysis, "
+            "semantic analysis, intermediate code gen, optimization, code gen), provide:\n"
+            "  - A 2-sentence description\n"
+            "  - Input and output examples\n"
+            "  - A Python code snippet (5-8 lines) demonstrating the concept\n"
+            "  - One common error that occurs at this phase"
         ),
     ),
     Scenario(
