@@ -316,6 +316,132 @@ def _section_crossval(results: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _section_stress_test(results: list[dict]) -> str:
+    """Phase 5: Stress test results."""
+    ok = [r for r in _ok_results(results) if r.get("phase") == 5]
+    if not ok:
+        return "## Phase 5: Stress Test\n\nNo stress test results.\n"
+
+    scenarios = sorted(set(r["scenario"] for r in ok))
+
+    lines = ["## Phase 5: Stress Test (Optimal Config)\n"]
+
+    # Split parallel vs sequential results
+    parallel_results = [r for r in ok if r.get("parallel_n")]
+    sequential_results = [r for r in ok if not r.get("parallel_n")]
+    seq_scenarios = sorted(set(r["scenario"] for r in sequential_results))
+
+    # Sequential summary table
+    if sequential_results:
+        lines.append("### Sequential Tests\n")
+        lines.append("| Test | Max Tokens | Runs | Mean tok/s | Min | Max | Mean TTFT |")
+        lines.append("|------|-----------|------|-----------|-----|-----|-----------|")
+
+        for sc_name in seq_scenarios:
+            sc_results = [r for r in sequential_results if r["scenario"] == sc_name]
+            tps_vals = [r["metrics"]["overall_tps"] for r in sc_results if r["metrics"].get("overall_tps")]
+            ttft_vals = [r["metrics"]["ttft_s"] for r in sc_results if r["metrics"].get("ttft_s")]
+            max_tok = sc_results[0].get("stress_max_tokens", "?") if sc_results else "?"
+
+            if tps_vals:
+                m_tps = round(statistics.mean(tps_vals), 1)
+                min_tps = round(min(tps_vals), 1)
+                max_tps = round(max(tps_vals), 1)
+            else:
+                m_tps = min_tps = max_tps = 0
+
+            m_ttft = round(statistics.mean(ttft_vals), 2) if ttft_vals else 0
+
+            lines.append(f"| {sc_name} | {max_tok} | {len(sc_results)} | {m_tps} | {min_tps} | {max_tps} | {m_ttft}s |")
+
+    # Parallel slot analysis
+    if parallel_results:
+        lines.append("\n### Parallel Slot Performance\n")
+        par_scenarios = sorted(set(r["scenario"] for r in parallel_results))
+
+        lines.append("| Test | Slots | Runs | Aggregate tok/s | Per-req tok/s (mean) | Per-req tok/s (min) | Wall time |")
+        lines.append("|------|-------|------|----------------|---------------------|--------------------:|-----------|")
+
+        for sc_name in par_scenarios:
+            sc_runs = [r for r in parallel_results if r["scenario"] == sc_name]
+            n_slots = sc_runs[0].get("parallel_n", "?")
+            agg_tps = [r["metrics"]["aggregate_tps"] for r in sc_runs if r["metrics"].get("aggregate_tps")]
+            per_tps = [r["metrics"]["per_request_tps_mean"] for r in sc_runs if r["metrics"].get("per_request_tps_mean")]
+            per_min = [r["metrics"]["per_request_tps_min"] for r in sc_runs if r["metrics"].get("per_request_tps_min")]
+            wall = [r["metrics"]["wall_time_s"] for r in sc_runs if r["metrics"].get("wall_time_s")]
+
+            m_agg = round(statistics.mean(agg_tps), 1) if agg_tps else 0
+            m_per = round(statistics.mean(per_tps), 1) if per_tps else 0
+            m_pmin = round(statistics.mean(per_min), 1) if per_min else 0
+            m_wall = round(statistics.mean(wall), 1) if wall else 0
+
+            lines.append(f"| {sc_name} | {n_slots} | {len(sc_runs)} | {m_agg} | {m_per} | {m_pmin} | {m_wall}s |")
+
+        # Compare single vs parallel throughput
+        # Find single-request baseline from sequential tests
+        single_tps_vals = []
+        for r in sequential_results:
+            if r["metrics"].get("overall_tps") and r.get("stress_max_tokens") == 1024:
+                single_tps_vals.append(r["metrics"]["overall_tps"])
+        if not single_tps_vals:
+            # Fall back to any sequential result
+            single_tps_vals = [r["metrics"]["overall_tps"] for r in sequential_results if r["metrics"].get("overall_tps")]
+
+        if single_tps_vals:
+            single_baseline = statistics.mean(single_tps_vals)
+            lines.append(f"\n**Single-request baseline**: {round(single_baseline, 1)} tok/s\n")
+            for sc_name in par_scenarios:
+                sc_runs = [r for r in parallel_results if r["scenario"] == sc_name]
+                n_slots = sc_runs[0].get("parallel_n", "?")
+                per_tps = [r["metrics"]["per_request_tps_mean"] for r in sc_runs if r["metrics"].get("per_request_tps_mean")]
+                agg_tps = [r["metrics"]["aggregate_tps"] for r in sc_runs if r["metrics"].get("aggregate_tps")]
+                if per_tps:
+                    m_per = statistics.mean(per_tps)
+                    m_agg = statistics.mean(agg_tps) if agg_tps else 0
+                    degradation = _pct_change(single_baseline, m_per)
+                    lines.append(f"- **{n_slots} slots**: per-request {degradation} vs single | aggregate {round(m_agg, 1)} tok/s total throughput")
+
+    # Sustained generation analysis
+    sustained = [r for r in ok if "sustained" in r["scenario"]]
+    if sustained:
+        lines.append("\n### Sustained Generation Analysis\n")
+        for sc_name in sorted(set(r["scenario"] for r in sustained)):
+            sc_runs = [r for r in sustained if r["scenario"] == sc_name]
+            tps_vals = [r["metrics"]["overall_tps"] for r in sc_runs if r["metrics"].get("overall_tps")]
+            tok_vals = [r["metrics"]["completion_tokens"] for r in sc_runs if r["metrics"].get("completion_tokens")]
+            if tps_vals and tok_vals:
+                m, s = _mean_std(tps_vals)
+                avg_tok = round(statistics.mean(tok_vals))
+                lines.append(f"- **{sc_name}**: {m} +/-{s} tok/s, avg {avg_tok} tokens generated")
+
+    # Burst analysis
+    burst = [r for r in ok if r.get("burst_index") is not None]
+    if burst:
+        lines.append("\n### Rapid Burst Analysis\n")
+        by_run: dict[int, list[float]] = defaultdict(list)
+        for r in burst:
+            if r["metrics"].get("overall_tps"):
+                by_run[r["run"]].append(r["metrics"]["overall_tps"])
+
+        all_burst_tps = [r["metrics"]["overall_tps"] for r in burst if r["metrics"].get("overall_tps")]
+        if all_burst_tps:
+            lines.append(f"- **{len(all_burst_tps)} total burst requests** across {len(by_run)} runs")
+            lines.append(f"- Mean: {round(statistics.mean(all_burst_tps), 1)} tok/s")
+            lines.append(f"- Min: {round(min(all_burst_tps), 1)} tok/s | Max: {round(max(all_burst_tps), 1)} tok/s")
+            if len(all_burst_tps) > 1:
+                lines.append(f"- Stddev: {round(statistics.stdev(all_burst_tps), 1)} (lower = more consistent)")
+
+    # Spec metrics if available
+    spec_runs = [r for r in ok if r.get("metrics", {}).get("spec_metrics", {}).get("spec_acceptance_rate")]
+    if spec_runs:
+        rates = [r["metrics"]["spec_metrics"]["spec_acceptance_rate"] * 100 for r in spec_runs]
+        lines.append(f"\n### Speculative Acceptance Under Stress\n")
+        lines.append(f"- Mean acceptance rate: **{round(statistics.mean(rates), 1)}%**")
+        lines.append(f"- Range: {round(min(rates), 1)}% — {round(max(rates), 1)}%")
+
+    return "\n".join(lines) + "\n"
+
+
 def _section_best_per_scenario(results: list[dict]) -> str:
     """Best config per scenario type."""
     ok = _ok_results(results)
@@ -420,6 +546,7 @@ def generate_report(results_path: Path, report_path: Path) -> None:
         ),
         _section_dry(results),
         _section_crossval(results),
+        _section_stress_test(results),
         _section_best_per_scenario(results),
         _section_recommended_env(results),
         f"\n---\n\n_Raw data: `{results_path.name}`_\n",

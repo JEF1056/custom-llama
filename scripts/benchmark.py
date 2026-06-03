@@ -13,6 +13,7 @@ Results are flushed to JSONL after every individual run.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import os
 import shutil
@@ -773,6 +774,376 @@ def run_phase_4(
 
 
 # ---------------------------------------------------------------------------
+# Phase 5: Stress test
+# ---------------------------------------------------------------------------
+
+# Stress test scenarios — longer outputs and sustained generation
+STRESS_SCENARIOS: list[dict[str, Any]] = [
+    {
+        "name": "sustained_2k",
+        "description": "Sustained 2048-token generation",
+        "max_tokens": 2048,
+        "system": "You are a detailed technical writer.",
+        "user": (
+            "Write a comprehensive tutorial on building a distributed task queue "
+            "system from scratch in Python. Cover architecture decisions, message "
+            "serialization, worker lifecycle, failure recovery, exactly-once delivery, "
+            "monitoring, and deployment. Include full code examples for each component."
+        ),
+    },
+    {
+        "name": "sustained_4k",
+        "description": "Sustained 4096-token generation",
+        "max_tokens": 4096,
+        "system": "You are an expert software architect.",
+        "user": (
+            "Design and fully implement a real-time collaborative text editor backend "
+            "in Python using operational transforms. Include: the OT algorithm with "
+            "transform functions for insert/delete, a server that manages document state "
+            "and client connections via WebSockets, conflict resolution logic, undo/redo "
+            "support, persistence layer, and comprehensive test suite. Write all the code."
+        ),
+    },
+    {
+        "name": "long_context_response",
+        "description": "Long input context + generation",
+        "max_tokens": 1024,
+        "system": "You are a thorough code reviewer.",
+        "user": (
+            "Review the following code and provide detailed feedback on every function, "
+            "including bugs, performance issues, security vulnerabilities, and style "
+            "improvements. Be extremely thorough.\n\n"
+            + "```python\n"
+            + "\n".join(
+                f"def process_item_{i}(data: dict, config: dict) -> dict:\n"
+                f"    result = {{}}\n"
+                f"    for key in data:\n"
+                f"        if config.get('transform_{i}'):\n"
+                f"            result[key] = data[key] * {i + 1}\n"
+                f"        else:\n"
+                f"            result[key] = data[key]\n"
+                f"    return result\n"
+                for i in range(50)
+            )
+            + "```\n"
+        ),
+    },
+    {
+        "name": "rapid_short_burst",
+        "description": "10 rapid short requests back-to-back",
+        "max_tokens": 128,
+        "system": "Answer in one sentence.",
+        "user": "What is {topic}?",
+        "burst": 10,  # special: run N times in quick succession
+        "burst_topics": [
+            "quantum computing", "photosynthesis", "the Turing test",
+            "CRISPR gene editing", "blockchain consensus", "neural plasticity",
+            "dark matter", "the halting problem", "RISC-V architecture", "mRNA vaccines",
+        ],
+    },
+    {
+        "name": "parallel_2_slots",
+        "description": "2 concurrent requests (max_num_seqs=2)",
+        "max_tokens": 1024,
+        "parallel": 2,
+        "prompts": [
+            {
+                "system": "You are an expert Python developer.",
+                "user": "Write a complete async HTTP client library with connection pooling, retry logic, and rate limiting. Include type hints and docstrings.",
+            },
+            {
+                "system": "You are a thoughtful essayist.",
+                "user": "Write a detailed essay on the future of renewable energy, covering solar, wind, hydrogen, and nuclear fusion. Discuss costs, scalability, and policy implications.",
+            },
+        ],
+    },
+    {
+        "name": "parallel_3_slots",
+        "description": "3 concurrent requests (tests beyond default max_num_seqs=2)",
+        "max_tokens": 512,
+        "parallel": 3,
+        "prompts": [
+            {
+                "system": "You are a concise technical writer.",
+                "user": "Explain how B-trees work and why they're used in databases. Include pseudocode for insert and search.",
+            },
+            {
+                "system": "You are a concise technical writer.",
+                "user": "Explain how consistent hashing works and why it's used in distributed systems. Include pseudocode.",
+            },
+            {
+                "system": "You are a concise technical writer.",
+                "user": "Explain how the Raft consensus algorithm works. Include pseudocode for leader election and log replication.",
+            },
+        ],
+    },
+]
+
+
+def _run_single_stream(
+    messages: list[dict], max_tokens: int, dry: bool, api_key: str,
+) -> dict[str, Any]:
+    """Run a single streaming request. Thread-safe (no shared state)."""
+    body: dict[str, Any] = {
+        "model": "qwen3.6-27b",
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": 0,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+    if dry:
+        body.update(DRY_ON_PARAMS)
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    t_start = time.monotonic()
+    t_first: float | None = None
+    t_last = t_start
+    prompt_tokens = completion_tokens = chunks = 0
+
+    with httpx.Client(timeout=httpx.Timeout(600.0, connect=30.0)) as client:
+        with client.stream("POST", CHAT_URL, json=body, headers=headers) as resp:
+            if resp.status_code != 200:
+                raise RuntimeError(f"API {resp.status_code}")
+            for raw_line in resp.iter_lines():
+                if not raw_line.startswith("data: "):
+                    continue
+                data_str = raw_line[6:]
+                if data_str.strip() == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                usage = chunk.get("usage")
+                if usage:
+                    prompt_tokens = usage.get("prompt_tokens", 0)
+                    completion_tokens = usage.get("completion_tokens", 0)
+                choices = chunk.get("choices", [])
+                if choices:
+                    delta = choices[0].get("delta", {})
+                    if delta.get("content") or delta.get("tool_calls"):
+                        now = time.monotonic()
+                        if t_first is None:
+                            t_first = now
+                        t_last = now
+                        chunks += 1
+
+    total_time = t_last - t_start
+    ttft = (t_first - t_start) if t_first else total_time
+    decode_time = (t_last - t_first) if t_first else 0.001
+
+    return {
+        "ttft_s": round(ttft, 3),
+        "decode_tps": round(completion_tokens / decode_time, 2) if decode_time > 0 else 0,
+        "overall_tps": round(completion_tokens / total_time, 2) if total_time > 0 else 0,
+        "completion_tokens": completion_tokens,
+        "prompt_tokens": prompt_tokens,
+        "total_time_s": round(total_time, 3),
+        "chunks": chunks,
+    }
+
+
+def _run_parallel_requests(
+    prompts: list[dict], max_tokens: int, dry: bool, api_key: str,
+) -> dict[str, Any]:
+    """Fire N requests concurrently, return aggregate metrics."""
+    messages_list = [
+        [{"role": "system", "content": p["system"]}, {"role": "user", "content": p["user"]}]
+        for p in prompts
+    ]
+    n = len(messages_list)
+    wall_start = time.monotonic()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=n) as pool:
+        futures = [
+            pool.submit(_run_single_stream, msgs, max_tokens, dry, api_key)
+            for msgs in messages_list
+        ]
+        results = []
+        for f in concurrent.futures.as_completed(futures):
+            results.append(f.result())
+
+    wall_time = time.monotonic() - wall_start
+    total_tokens = sum(r["completion_tokens"] for r in results)
+    per_req_tps = [r["overall_tps"] for r in results]
+    per_req_ttft = [r["ttft_s"] for r in results]
+
+    return {
+        "parallel_n": n,
+        "wall_time_s": round(wall_time, 3),
+        "aggregate_tps": round(total_tokens / wall_time, 2) if wall_time > 0 else 0,
+        "per_request_tps_mean": round(statistics.mean(per_req_tps), 2),
+        "per_request_tps_min": round(min(per_req_tps), 2),
+        "per_request_tps_max": round(max(per_req_tps), 2),
+        "per_request_ttft_mean": round(statistics.mean(per_req_ttft), 3),
+        "total_completion_tokens": total_tokens,
+        "individual_results": results,
+    }
+
+
+def run_phase_5(
+    results_path: Path, completed: set[tuple], api_key: str,
+    spec_winner: str, kv_winner: str, dry_winner: bool,
+) -> None:
+    """Phase 5: Stress test the optimal config with sustained, burst, and parallel workloads."""
+    _log("\n=== Phase 5: Stress Test ===")
+    _log(f"Config: kv={kv_winner} spec={spec_winner or '(none)'} dry={dry_winner}")
+
+    restart_server(kv_winner, spec_winner)
+    wait_for_health()
+    # Warmup
+    run_scenario(SCENARIOS[0], dry=False, api_key=api_key)
+
+    # Count total tracker steps
+    total_steps = 0
+    for s in STRESS_SCENARIOS:
+        if s.get("parallel"):
+            total_steps += 3  # 3 runs, 1 step each
+        elif s.get("burst"):
+            total_steps += s["burst"] * 3
+        else:
+            total_steps += 3
+    tracker = ProgressTracker(total_steps, "Phase 5: Stress")
+
+    for stress in STRESS_SCENARIOS:
+        is_parallel = stress.get("parallel", 0) > 0
+        is_burst = stress.get("burst", 0) > 0
+
+        for run_num in range(1, 4):  # 3 runs
+
+            # --- Parallel slot test ---
+            if is_parallel:
+                key = (5, kv_winner, spec_winner, dry_winner,
+                       stress["name"], run_num)
+                if key in completed:
+                    tracker.update(f"{stress['name']} run {run_num} (cached)")
+                    continue
+
+                run_start = time.monotonic()
+                try:
+                    metrics = _run_parallel_requests(
+                        stress["prompts"], stress["max_tokens"],
+                        dry_winner, api_key,
+                    )
+                    spec_m = scrape_spec_metrics()
+                    if spec_m:
+                        metrics["spec_metrics"] = spec_m
+                    status = "ok"
+                    error = None
+                    _log(f"  {stress['name']} run {run_num}: "
+                         f"aggregate={metrics['aggregate_tps']:.1f} tok/s, "
+                         f"per_req_mean={metrics['per_request_tps_mean']:.1f} tok/s, "
+                         f"wall={metrics['wall_time_s']:.1f}s")
+                except Exception as e:
+                    _log(f"\nERROR: {stress['name']} run {run_num}: {e}")
+                    metrics = {}
+                    status = "error"
+                    error = str(e)
+
+                result = {
+                    "phase": 5,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "server_config": {
+                        "kv_cache_dtype": kv_winner,
+                        "speculative_config": spec_winner,
+                        "config_label": f"stress_{stress['name']}",
+                    },
+                    "request_config": {"dry": dry_winner},
+                    "scenario": stress["name"],
+                    "run": run_num,
+                    "stress_max_tokens": stress["max_tokens"],
+                    "parallel_n": stress["parallel"],
+                    "metrics": metrics,
+                    "status": status,
+                    "error": error,
+                }
+                flush_result(result, results_path)
+
+                run_duration = time.monotonic() - run_start
+                tps = metrics.get("aggregate_tps") if metrics else None
+                tracker.update(
+                    f"{stress['name']} run {run_num}",
+                    last_tps=tps, duration=run_duration,
+                )
+                continue
+
+            # --- Burst and sequential tests ---
+            iterations = stress.get("burst", 1) if is_burst else 1
+            burst_results: list[dict[str, Any]] = []
+
+            for burst_i in range(iterations):
+                key = (5, kv_winner, spec_winner, dry_winner,
+                       stress["name"], run_num * 100 + burst_i)
+                if key in completed:
+                    tracker.update(f"{stress['name']} run {run_num} (cached)")
+                    continue
+
+                user_msg = stress["user"]
+                if is_burst and stress.get("burst_topics"):
+                    user_msg = user_msg.format(topic=stress["burst_topics"][burst_i])
+
+                messages = [
+                    {"role": "system", "content": stress["system"]},
+                    {"role": "user", "content": user_msg},
+                ]
+
+                run_start = time.monotonic()
+                try:
+                    metrics = _run_single_stream(
+                        messages, stress["max_tokens"], dry_winner, api_key,
+                    )
+                    spec_m = scrape_spec_metrics()
+                    if spec_m:
+                        metrics["spec_metrics"] = spec_m
+                    status = "ok"
+                    error = None
+                    burst_results.append(metrics)
+                except Exception as e:
+                    _log(f"\nERROR: {stress['name']} run {run_num}: {e}")
+                    metrics = {}
+                    status = "error"
+                    error = str(e)
+
+                result = {
+                    "phase": 5,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "server_config": {
+                        "kv_cache_dtype": kv_winner,
+                        "speculative_config": spec_winner,
+                        "config_label": f"stress_{stress['name']}",
+                    },
+                    "request_config": {"dry": dry_winner},
+                    "scenario": stress["name"],
+                    "run": run_num,
+                    "burst_index": burst_i if is_burst else None,
+                    "stress_max_tokens": stress["max_tokens"],
+                    "metrics": metrics,
+                    "status": status,
+                    "error": error,
+                }
+                flush_result(result, results_path)
+
+                run_duration = time.monotonic() - run_start
+                tps = metrics.get("overall_tps") if metrics else None
+                tracker.update(
+                    f"{stress['name']} run {run_num}" + (f" burst {burst_i+1}/{iterations}" if is_burst else ""),
+                    last_tps=tps, duration=run_duration,
+                )
+
+            if is_burst and burst_results:
+                tps_vals = [m["overall_tps"] for m in burst_results]
+                _log(f"  {stress['name']} run {run_num}: {len(burst_results)} bursts, "
+                     f"mean={statistics.mean(tps_vals):.1f} min={min(tps_vals):.1f} max={max(tps_vals):.1f} tok/s")
+
+    tracker.finish()
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -845,7 +1216,7 @@ def _log(msg: str) -> None:
 def main():
     parser = argparse.ArgumentParser(description="vLLM benchmark orchestrator")
     parser.add_argument("--runs", type=int, default=3, help="Runs per scenario (default: 3)")
-    parser.add_argument("--phase", type=int, choices=[1, 2, 3, 4], help="Run only this phase")
+    parser.add_argument("--phase", type=int, choices=[1, 2, 3, 4, 5], help="Run only this phase")
     parser.add_argument("--resume", action="store_true", help="Resume from existing JSONL")
     parser.add_argument("--report-only", action="store_true", help="Regenerate report from JSONL")
     parser.add_argument("--results-file", type=str, help="Path to existing JSONL (for resume/report)")
@@ -908,11 +1279,25 @@ def main():
         if existing:
             kv_winner = _pick_winner(existing, "kv_cache_dtype")
 
+    dry_winner = False  # default
+
     if args.phase is None or args.phase == 3:
         run_phase_3(args.runs, results_path, completed, api_key, spec_winner, kv_winner)
 
+    # Determine DRY winner from Phase 3 results
+    p3 = [r for r in load_results(results_path) if r.get("phase") == 3 and r.get("status") == "ok"]
+    if p3:
+        dry_off_tps = [r["metrics"]["overall_tps"] for r in p3 if not r["request_config"]["dry"]]
+        dry_on_tps = [r["metrics"]["overall_tps"] for r in p3 if r["request_config"]["dry"]]
+        if dry_off_tps and dry_on_tps:
+            dry_winner = statistics.mean(dry_on_tps) >= statistics.mean(dry_off_tps)
+            _log(f"DRY winner: {'on' if dry_winner else 'off'}")
+
     if args.phase is None or args.phase == 4:
         run_phase_4(results_path, completed, api_key, spec_winner, kv_winner)
+
+    if args.phase is None or args.phase == 5:
+        run_phase_5(results_path, completed, api_key, spec_winner, kv_winner, dry_winner)
 
     total_time = time.monotonic() - bench_start
     _log(f"\nBenchmark complete in {_fmt_duration(total_time)}")
