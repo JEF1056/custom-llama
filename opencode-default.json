@@ -9,8 +9,8 @@
       "npm": "@ai-sdk/openai-compatible",
       "name": "vLLM Server",
       "options": {
-        "baseURL": "http://localhost:{env:VLLM_PORT}/v1",
-        "apiKey": "{env:VLLM_API_KEY}",
+        "baseURL": "http://localhost:{env:LLM_PORT}/v1",
+        "apiKey": "{env:LLM_API_KEY}",
         "includeUsage": true
       },
       "models": {

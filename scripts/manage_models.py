@@ -83,8 +83,8 @@ def download_model(model_name: str, output_dir: str) -> None:
 
     print()
     print(f"  Add to your .env:")
-    print(f"    VLLM_MODEL_PATH=/models/{model_name}")
-    print(f"    VLLM_QUANTIZATION=auto-round")
+    print(f"    LLM_MODEL_PATH=/models/{model_name}")
+    print(f"    LLM_QUANTIZATION=auto-round")
     print()
     print(f"  Then start the server:")
     print(f"    docker compose up vllm-server")
@@ -98,7 +98,7 @@ def list_models() -> None:
         print(f"  {key:35s} {info['description']}")
     print()
     print("Download: manage_models.py download <name>")
-    print("vLLM:     --quantization auto-round  (set VLLM_QUANTIZATION=auto-round)")
+    print("vLLM:     --quantization auto-round  (set LLM_QUANTIZATION=auto-round)")
 
 
 def main():

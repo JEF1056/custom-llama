@@ -9,7 +9,7 @@ Root .env behaviour:
   - Non-secret variables are UPDATED when .env.default changes.
   - Secret variables are PRESERVED (never overwritten after initial write).
   - Stale variables (removed from .env.default) are DELETED.
-  - Auto-generated tokens (VLLM_API_KEY, MCP_API_KEY) are created on first run.
+  - Auto-generated tokens (LLM_API_KEY, MCP_API_KEY) are created on first run.
 
 opencode.json uses {env:VAR} native interpolation — no sync needed.
 
@@ -35,7 +35,7 @@ GLOBAL_SECRETS: set[str] = {
 }
 
 # Auto-generated as random tokens on first run (re-generated with --regenerate)
-AUTO_GENERATE_TOKENS: frozenset[str] = frozenset({"VLLM_API_KEY", "MCP_API_KEY"})
+AUTO_GENERATE_TOKENS: frozenset[str] = frozenset({"LLM_API_KEY", "MCP_API_KEY"})
 
 # ── Env file parser ────────────────────────────────────────────────────────────
 
@@ -229,7 +229,7 @@ def main() -> None:
 
     # ── 1. Root .env (all variables; consumed by docker-compose) ──────────────
     root_env_path = Path(args.env_file)
-    root_secrets = GLOBAL_SECRETS | {"MCP_API_KEY", "SEARCH_API_KEY", "VLLM_API_KEY"}
+    root_secrets = GLOBAL_SECRETS | {"MCP_API_KEY", "SEARCH_API_KEY", "LLM_API_KEY"}
     changed |= sync_target(
         source_defaults=all_defaults,
         target=root_env_path,
