@@ -17,10 +17,11 @@ from typing import Any
 
 
 def load_results(path: Path) -> list[dict[str, Any]]:
+    """Lines starting with # are treated as comments and skipped."""
     results = []
     for line in path.read_text().splitlines():
         line = line.strip()
-        if line:
+        if line and not line.startswith("#"):
             results.append(json.loads(line))
     return results
 
@@ -150,9 +151,13 @@ def _section_phase(
         row = [cfg]
         all_tps = []
         for sc in scenarios:
-            m, s = _mean_std(data[cfg].get(sc, []))
-            row.append(f"{m} +/-{s}")
-            all_tps.append(m)
+            vals = data[cfg].get(sc, [])
+            if vals:
+                m, s = _mean_std(vals)
+                row.append(f"{m} +/-{s}")
+                all_tps.append(m)
+            else:
+                row.append("—")
         overall = round(statistics.mean(all_tps), 1) if all_tps else 0
         config_overall[cfg] = overall
         row.append(f"**{overall}**")
@@ -180,8 +185,12 @@ def _section_phase(
     for cfg in configs:
         row = [cfg]
         for sc in scenarios:
-            m, s = _mean_std(ttft_data[cfg].get(sc, []))
-            row.append(f"{m} +/-{s}")
+            vals = ttft_data[cfg].get(sc, [])
+            if vals:
+                m, s = _mean_std(vals)
+                row.append(f"{m} +/-{s}")
+            else:
+                row.append("—")
         lines.append("| " + " | ".join(str(x) for x in row) + " |")
 
     return "\n".join(lines) + "\n"
@@ -275,12 +284,17 @@ def _section_dry(results: list[dict]) -> str:
 
     off_total, on_total = [], []
     for sc in scenarios:
-        m_off, s_off = _mean_std(dry_off.get(sc, []))
-        m_on, s_on = _mean_std(dry_on.get(sc, []))
-        pct = _pct_change(m_off, m_on)
-        lines.append(f"| {sc} | {m_off} +/-{s_off} | {m_on} +/-{s_on} | {pct} |")
-        off_total.append(m_off)
-        on_total.append(m_on)
+        off_vals = dry_off.get(sc, [])
+        on_vals = dry_on.get(sc, [])
+        off_cell = f"{_mean_std(off_vals)[0]} +/-{_mean_std(off_vals)[1]}" if off_vals else "—"
+        on_cell = f"{_mean_std(on_vals)[0]} +/-{_mean_std(on_vals)[1]}" if on_vals else "—"
+        if off_vals and on_vals:
+            pct = _pct_change(_mean_std(off_vals)[0], _mean_std(on_vals)[0])
+            off_total.append(_mean_std(off_vals)[0])
+            on_total.append(_mean_std(on_vals)[0])
+        else:
+            pct = "—"
+        lines.append(f"| {sc} | {off_cell} | {on_cell} | {pct} |")
 
     if off_total and on_total:
         mean_off = round(statistics.mean(off_total), 1)
@@ -322,9 +336,13 @@ def _section_crossval(results: list[dict]) -> str:
         row = [combo]
         all_means = []
         for sc in scenarios:
-            m, s = _mean_std(scenario_data.get(sc, []))
-            row.append(f"{m} +/-{s}")
-            all_means.append(m)
+            vals = scenario_data.get(sc, [])
+            if vals:
+                m, s = _mean_std(vals)
+                row.append(f"{m} +/-{s}")
+                all_means.append(m)
+            else:
+                row.append("—")
         overall = round(statistics.mean(all_means), 1) if all_means else 0
         row.append(f"**{overall}**")
         lines.append("| " + " | ".join(str(x) for x in row) + " |")

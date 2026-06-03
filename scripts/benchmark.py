@@ -441,13 +441,13 @@ def flush_result(result: dict[str, Any], path: Path) -> None:
 
 
 def load_results(path: Path) -> list[dict[str, Any]]:
-    """Load all results from JSONL."""
+    """Load all results from JSONL. Lines starting with # are comments."""
     if not path.exists():
         return []
     results = []
     for line in path.read_text().splitlines():
         line = line.strip()
-        if line:
+        if line and not line.startswith("#"):
             results.append(json.loads(line))
     return results
 
