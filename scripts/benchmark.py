@@ -500,10 +500,37 @@ def _run_config_sweep(
                     tracker.update(f"{label} x {scenario.name} run {run_num} (cached)")
             continue
 
-        restart_server(kv, spec)
-        restart_time_start = time.monotonic()
-        wait_for_health()
-        restart_duration = time.monotonic() - restart_time_start
+        try:
+            restart_server(kv, spec)
+            restart_time_start = time.monotonic()
+            wait_for_health()
+            restart_duration = time.monotonic() - restart_time_start
+        except (TimeoutError, RuntimeError) as e:
+            _log(f"Server failed for {label}: {e} — skipping config")
+            for scenario in SCENARIOS:
+                for run_num in range(1, runs_per_scenario + 1):
+                    key = (phase, kv, spec, dry, scenario.name, run_num)
+                    if key not in completed:
+                        result = {
+                            "phase": phase,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "server_config": {
+                                "kv_cache_dtype": kv,
+                                "speculative_config": spec,
+                                "config_label": label,
+                            },
+                            "request_config": {"dry": dry},
+                            "scenario": scenario.name,
+                            "run": run_num,
+                            "metrics": {},
+                            "status": "error",
+                            "error": f"server_startup_failed: {e}",
+                            "restart_duration_s": 0,
+                        }
+                        flush_result(result, results_path)
+                        all_results.append(result)
+                    tracker.update(f"{label} x {scenario.name} run {run_num} (server failed)")
+            continue
 
         # Warmup — discard
         try:
