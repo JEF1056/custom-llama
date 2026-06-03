@@ -7,7 +7,7 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     proxy: {
-      // Dev-only: proxy /v1 → SGLang and /mcp-dev → MCP server.
+      // Dev-only: proxy /v1 → vLLM and /mcp-dev → MCP server.
       // Override targets via env vars when running inside Docker.
       '/v1': {
         target: process.env.PROXY_API_TARGET ?? 'http://localhost:8080',

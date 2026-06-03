@@ -8,7 +8,7 @@ import sys
 import argparse
 from pathlib import Path
 
-# AutoRound INT4 safetensors — loaded by SGLang with --quantization auto-round.
+# AutoRound INT4 safetensors — loaded by vLLM with --quantization auto-round.
 # Preferred over AWQ on RTX 3090: 19–21 GB vs AWQ's 21.56 GB which forces
 # --enforce-eager (kills CUDA graphs, 78% decode overhead).
 # MTP head kept in BF16 → ~90% draft acceptance with NEXTN speculative decoding.
@@ -83,12 +83,11 @@ def download_model(model_name: str, output_dir: str) -> None:
 
     print()
     print(f"  Add to your .env:")
-    print(f"    SGLANG_MODEL_PATH=/models/{model_name}")
-    print(f"    SGLANG_QUANTIZATION=auto-round")
-    print(f"    SGLANG_SPECULATIVE_ALGO=NEXTN")
+    print(f"    VLLM_MODEL_PATH=/models/{model_name}")
+    print(f"    VLLM_QUANTIZATION=auto-round")
     print()
     print(f"  Then start the server:")
-    print(f"    docker compose up sglang-server")
+    print(f"    docker compose up vllm-server")
 
 
 def list_models() -> None:
@@ -99,13 +98,12 @@ def list_models() -> None:
         print(f"  {key:35s} {info['description']}")
     print()
     print("Download: manage_models.py download <name>")
-    print("SGLang:   --quantization auto-round  (set SGLANG_QUANTIZATION=auto-round)")
-    print("Spec dec: NEXTN (~90% acceptance — MTP heads preserved in BF16)")
+    print("vLLM:     --quantization auto-round  (set VLLM_QUANTIZATION=auto-round)")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Download AutoRound INT4 safetensors models for SGLang"
+        description="Download AutoRound INT4 safetensors models for vLLM"
     )
     subparsers = parser.add_subparsers(dest="command", help="Command to execute")
 

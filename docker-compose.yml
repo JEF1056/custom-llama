@@ -1,11 +1,11 @@
 networks:
-  # Shared network for sglang-server and MCP server to communicate.
+  # Shared network for vllm-server and MCP server to communicate.
   # Note: NOT internal — cloudflared needs internet access to connect to Cloudflare.
   llama-net:
 
 services:
   # ---------------------------------------------------------------------------
-  # Model download — run before the server to pull AutoRound INT4 safetensors.
+  # Model download — run before the server to pull safetensors weights.
   #
   # Build once:
   #   docker compose build model-prep
@@ -18,7 +18,7 @@ services:
   #   docker compose run --rm model-prep list
   #
   # After download, start the server:
-  #   docker compose up sglang-server
+  #   docker compose up vllm-server
   # ---------------------------------------------------------------------------
   model-prep:
     build:
@@ -35,16 +35,16 @@ services:
       HF_TOKEN: ${HF_TOKEN:-}
 
   # ---------------------------------------------------------------------------
-  # SGLang inference server — JEF1056/sglang-turboquant
+  # vLLM inference server — OpenAI-compatible API (v0.22.0)
   # Exposed publicly via Cloudflare Tunnel at chat.jessfan.com with
   # Cloudflare Access authentication.
   # ---------------------------------------------------------------------------
-  sglang-server:
+  vllm-server:
     build:
       context: .
       dockerfile: Dockerfile
-    image: sglang-server:latest
-    container_name: sglang-server
+    image: vllm-server:latest
+    container_name: vllm-server
 
     # No host port mapping — accessible only via Cloudflare Tunnel.
 
@@ -66,51 +66,37 @@ services:
 
       HF_TOKEN: ${HF_TOKEN:-}
 
-      SGLANG_HOST: ${SGLANG_HOST:-0.0.0.0}
-      SGLANG_PORT: ${SGLANG_PORT:-8080}
-      SGLANG_API_KEY: ${SGLANG_API_KEY:-}
+      VLLM_HOST: ${VLLM_HOST:-0.0.0.0}
+      VLLM_PORT: ${VLLM_PORT:-8080}
+      VLLM_API_KEY: ${VLLM_API_KEY:-}
 
-      SGLANG_MODEL_PATH: ${SGLANG_MODEL_PATH:-}
-      SGLANG_QUANTIZATION: ${SGLANG_QUANTIZATION:-}
-      SGLANG_TOKENIZER_PATH: ${SGLANG_TOKENIZER_PATH:-}
-      SGLANG_SERVED_MODEL_NAME: ${SGLANG_SERVED_MODEL_NAME:-}
+      VLLM_MODEL_PATH: ${VLLM_MODEL_PATH:-}
+      VLLM_QUANTIZATION: ${VLLM_QUANTIZATION:-}
+      VLLM_TOKENIZER_PATH: ${VLLM_TOKENIZER_PATH:-}
+      VLLM_SERVED_MODEL_NAME: ${VLLM_SERVED_MODEL_NAME:-}
 
-      SGLANG_CONTEXT_LENGTH: ${SGLANG_CONTEXT_LENGTH:-72500}
-      SGLANG_MEM_FRACTION_STATIC: ${SGLANG_MEM_FRACTION_STATIC:-0.88}
-      SGLANG_MAX_RUNNING_REQUESTS: ${SGLANG_MAX_RUNNING_REQUESTS:-2}
-      SGLANG_TP_SIZE: ${SGLANG_TP_SIZE:-1}
-      SGLANG_DTYPE: ${SGLANG_DTYPE:-auto}
-      SGLANG_KV_CACHE_DTYPE: ${SGLANG_KV_CACHE_DTYPE:-auto}
-      SGLANG_CHUNKED_PREFILL_SIZE: ${SGLANG_CHUNKED_PREFILL_SIZE:-}
-      SGLANG_MAX_QUEUED_REQUESTS: ${SGLANG_MAX_QUEUED_REQUESTS:-}
+      VLLM_MAX_MODEL_LEN: ${VLLM_MAX_MODEL_LEN:-128000}
+      VLLM_GPU_MEMORY_UTILIZATION: ${VLLM_GPU_MEMORY_UTILIZATION:-0.95}
+      VLLM_MAX_NUM_SEQS: ${VLLM_MAX_NUM_SEQS:-1}
+      VLLM_TP_SIZE: ${VLLM_TP_SIZE:-1}
+      VLLM_DTYPE: ${VLLM_DTYPE:-auto}
+      VLLM_KV_CACHE_DTYPE: ${VLLM_KV_CACHE_DTYPE:-turboquant_4bit_nc}
+      VLLM_MAX_NUM_BATCHED_TOKENS: ${VLLM_MAX_NUM_BATCHED_TOKENS:-}
+      VLLM_ENABLE_CHUNKED_PREFILL: ${VLLM_ENABLE_CHUNKED_PREFILL:-1}
+      VLLM_ENABLE_PREFIX_CACHING: ${VLLM_ENABLE_PREFIX_CACHING:-}
+      VLLM_SWAP_SPACE: ${VLLM_SWAP_SPACE:-4}
+      VLLM_ENFORCE_EAGER: ${VLLM_ENFORCE_EAGER:-1}
+      VLLM_MAX_SEQ_LEN_TO_CAPTURE: ${VLLM_MAX_SEQ_LEN_TO_CAPTURE:-}
 
-      SGLANG_TURBOQUANT_KEY_BITS: ${SGLANG_TURBOQUANT_KEY_BITS:-}
-      SGLANG_TURBOQUANT_VALUE_BITS: ${SGLANG_TURBOQUANT_VALUE_BITS:-}
-      SGLANG_TURBOQUANT_PROTECTED_LAYERS_HEAD: ${SGLANG_TURBOQUANT_PROTECTED_LAYERS_HEAD:-}
-      SGLANG_TURBOQUANT_PROTECTED_LAYERS_TAIL: ${SGLANG_TURBOQUANT_PROTECTED_LAYERS_TAIL:-}
+      VLLM_ENABLE_REASONING: ${VLLM_ENABLE_REASONING:-1}
+      VLLM_REASONING_PARSER: ${VLLM_REASONING_PARSER:-qwen3}
 
-      SGLANG_REASONING_PARSER: ${SGLANG_REASONING_PARSER:-}
-      SGLANG_SPECULATIVE_ALGO: ${SGLANG_SPECULATIVE_ALGO:-}
-      SGLANG_SPECULATIVE_NUM_STEPS: ${SGLANG_SPECULATIVE_NUM_STEPS:-3}
-      SGLANG_SPECULATIVE_EAGLE_TOPK: ${SGLANG_SPECULATIVE_EAGLE_TOPK:-}
-      SGLANG_SPECULATIVE_NUM_DRAFT_TOKENS: ${SGLANG_SPECULATIVE_NUM_DRAFT_TOKENS:-4}
+      VLLM_SPECULATIVE_CONFIG: "${VLLM_SPECULATIVE_CONFIG:-}"
 
-      SGLANG_SCHEDULE_POLICY: ${SGLANG_SCHEDULE_POLICY:-fcfs}
-      SGLANG_SAMPLING_DEFAULTS: ${SGLANG_SAMPLING_DEFAULTS:-}
-      SGLANG_NUM_CONTINUOUS_DECODE_STEPS: ${SGLANG_NUM_CONTINUOUS_DECODE_STEPS:-1}
-      SGLANG_ENABLE_MIXED_CHUNK: ${SGLANG_ENABLE_MIXED_CHUNK:-}
-      SGLANG_ENABLE_MULTIMODAL: ${SGLANG_ENABLE_MULTIMODAL:-}
-      SGLANG_ENFORCE_PIECEWISE_CUDA_GRAPH: ${SGLANG_ENFORCE_PIECEWISE_CUDA_GRAPH:-}
+      VLLM_SCHEDULING_POLICY: ${VLLM_SCHEDULING_POLICY:-}
 
-      SGLANG_MAMBA_SCHEDULER_STRATEGY: ${SGLANG_MAMBA_SCHEDULER_STRATEGY:-extra_buffer}
-      SGLANG_MAMBA_SSM_DTYPE: ${SGLANG_MAMBA_SSM_DTYPE:-}
-      SGLANG_MAMBA_FULL_MEMORY_RATIO: ${SGLANG_MAMBA_FULL_MEMORY_RATIO:-}
-      SGLANG_MAX_MAMBA_CACHE_SIZE: ${SGLANG_MAX_MAMBA_CACHE_SIZE:-}
-      SGLANG_DISABLE_CUDA_GRAPH: ${SGLANG_DISABLE_CUDA_GRAPH:-}
-
-      SGLANG_LOG_LEVEL: ${SGLANG_LOG_LEVEL:-info}
-      SGLANG_LOG_REQUESTS: ${SGLANG_LOG_REQUESTS:-}
-      SGLANG_ENABLE_METRICS: ${SGLANG_ENABLE_METRICS:-}
+      VLLM_DISABLE_LOG_REQUESTS: ${VLLM_DISABLE_LOG_REQUESTS:-}
+      VLLM_ENABLE_METRICS: ${VLLM_ENABLE_METRICS:-}
 
       PYTORCH_CUDA_ALLOC_CONF: ${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 
@@ -120,21 +106,21 @@ services:
       - llama-net
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${SGLANG_PORT:-8080}/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:${VLLM_PORT:-8080}/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 300s  # allow up to 5 min for large model to load from disk
 
   # ---------------------------------------------------------------------------
-  # Cloudflare Tunnel — exposes both sglang-server and mcp-search-server publicly:
-  #   - chat.jessfan.com → http://sglang-server:8080
+  # Cloudflare Tunnel — exposes both vllm-server and mcp-search-server publicly:
+  #   - chat.jessfan.com → http://vllm-server:8080
   #   - mcp.jessfan.com  → http://mcp-search-server:3100
   # Both use Cloudflare Access authentication. Makes an outbound connection to Cloudflare.
   #
   # One-time setup in Cloudflare Zero Trust → Networks → Tunnels:
   #   1. Create tunnel → Docker → copy token to CF_TUNNEL_TOKEN in .env
-  #   2. Add Public Hostname: chat.jessfan.com → http://sglang-server:8080
+  #   2. Add Public Hostname: chat.jessfan.com → http://vllm-server:8080
   #   3. Add Public Hostname: mcp.jessfan.com → http://mcp-search-server:3100
   #   (Cloudflare creates the CNAME DNS records automatically.)
   #
@@ -156,7 +142,7 @@ services:
       - llama-net
     restart: unless-stopped
     depends_on:
-      - sglang-server
+      - vllm-server
       - mcp-search-server
 
   # ---------------------------------------------------------------------------
@@ -239,7 +225,7 @@ services:
 
     environment:
       # Proxy targets resolved via Docker network
-      PROXY_API_TARGET: http://sglang-server:${SGLANG_PORT:-8080}
+      PROXY_API_TARGET: http://vllm-server:${VLLM_PORT:-8080}
       PROXY_MCP_TARGET: http://mcp-search-server:${MCP_SERVER_PORT:-3100}
 
       # Firebase config — set in .env
