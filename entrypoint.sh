@@ -61,6 +61,10 @@ echo "  Seqs:     $MAX_NUM_SEQS concurrent"
 [ -n "$OVERRIDE_GENERATION_CONFIG" ] && echo "  Gen config: $OVERRIDE_GENERATION_CONFIG"
 [ -n "$API_KEY" ]           && echo "  API key:  (set)"
 
+# Prevent numba/OpenMP segfault: numba's default 'omp' backend (libgomp)
+# conflicts with PyTorch's libomp in the same process.
+export NUMBA_THREADING_LAYER=workqueue
+
 exec vllm serve "$MODEL_PATH" \
     --host "$HOST" \
     --port "$PORT" \
