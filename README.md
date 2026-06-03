@@ -12,7 +12,7 @@ No Cloudflare or secrets needed — just the inference server on this machine.
 
 ```bash
 # 1. Generate .env from defaults (auto-generates LLM_API_KEY, MCP_API_KEY)
-python sync-env.py
+python3 sync-env.py
 
 # 2. Build images
 docker compose build vllm-server model-prep mcp-search-server
@@ -73,11 +73,11 @@ networks:
     driver: bridge
 ```
 
-| Service | Local URL |
-|---|---|
-| `vllm-server` | `http://localhost:8080` |
+| Service             | Local URL               |
+| ------------------- | ----------------------- |
+| `vllm-server`       | `http://localhost:8080` |
 | `mcp-search-server` | `http://localhost:3100` |
-| `chat-ui` | `http://localhost:5173` |
+| `chat-ui`           | `http://localhost:5173` |
 
 > **Note:** `vllm-server` intentionally has no port mapping in `docker-compose.yml` — it is only reachable via Cloudflare Tunnel in production. The override adds the localhost binding for local dev only.
 
@@ -85,11 +85,11 @@ networks:
 
 ## Images
 
-| Image | Dockerfile | Purpose |
-|---|---|---|
-| `vllm-server` | `Dockerfile` | vLLM v0.22.0 inference server (official or fork) |
-| `model-prep` | `Dockerfile.modelprep` | Lightweight Python image for downloading AutoRound models |
-| `mcp-search-server` | `mcp-search-server/Dockerfile` | Web search MCP tool |
+| Image               | Dockerfile                     | Purpose                                                   |
+| ------------------- | ------------------------------ | --------------------------------------------------------- |
+| `vllm-server`       | `Dockerfile`                   | vLLM v0.22.0 inference server (official or fork)          |
+| `model-prep`        | `Dockerfile.modelprep`         | Lightweight Python image for downloading AutoRound models |
+| `mcp-search-server` | `mcp-search-server/Dockerfile` | Web search MCP tool                                       |
 
 ### vLLM server (`Dockerfile`)
 
@@ -141,10 +141,10 @@ Lightweight Python 3.12 + `huggingface_hub` + `hf_transfer`. Downloads AutoRound
                     └─────────────────────────┘
 ```
 
-| Interface | URL | Auth |
-|---|---|---|
-| **Local** | `http://localhost:8080/v1` | None (requires `docker-compose.override.yml`) |
-| **Public** | `https://chat.jessfan.com/v1` | Cloudflare Access (Google OAuth / Email) |
+| Interface  | URL                           | Auth                                          |
+| ---------- | ----------------------------- | --------------------------------------------- |
+| **Local**  | `http://localhost:8080/v1`    | None (requires `docker-compose.override.yml`) |
+| **Public** | `https://chat.jessfan.com/v1` | Cloudflare Access (Google OAuth / Email)      |
 
 ---
 
@@ -160,7 +160,7 @@ Lightweight Python 3.12 + `huggingface_hub` + `hf_transfer`. Downloads AutoRound
 ### Step 2: Configure `.env`
 
 ```bash
-python sync-env.py
+python3 sync-env.py
 ```
 
 Edit `.env` and set at minimum:
@@ -208,6 +208,7 @@ docker compose up -d
 ```
 
 Check logs:
+
 ```bash
 docker compose logs -f vllm-server     # allow up to 5 min for large model load
 docker compose logs -f cloudflared     # should show "connected"
@@ -249,46 +250,46 @@ response = client.chat.completions.create(
 
 ## Key environment variables
 
-| Variable | Default | Description |
-|---|---|---|
-| `LLM_MODEL_PATH` | `/models/qwen3.6-27b-autoround` | Local safetensors directory inside container |
-| `LLM_QUANTIZATION` | — | Auto-detected from checkpoint; override with `gptq`, `awq`, etc. |
-| `LLM_TOKENIZER_PATH` | — | Leave empty — bundled in model repo |
-| `LLM_SERVED_MODEL_NAME` | `qwen3.6-27b` | Model alias for `/v1/models` |
-| `LLM_MAX_MODEL_LEN` | `128000` | Max context window in tokens |
-| `LLM_GPU_MEMORY_UTILIZATION` | `0.95` | GPU VRAM fraction for weights + KV |
-| `LLM_MAX_NUM_SEQS` | `1` | Concurrent request slots (1 for 128K context) |
-| `LLM_TP_SIZE` | `1` | Tensor parallelism (number of GPUs) |
-| `LLM_KV_CACHE_DTYPE` | `turboquant_k4v2_nc` | KV cache quantization (5.0× compression) |
-| `LLM_REASONING_PARSER` | `qwen3` | Reasoning extraction parser |
-| `LLM_SPECULATIVE_CONFIG` | `{"method":"mtp","num_speculative_tokens":1}` | MTP speculative decoding config |
-| `LLM_ENFORCE_EAGER` | — | Set to `1` to save ~1.5 GB VRAM (slower decode) |
-| `LLM_API_KEY` | auto-generated | Bearer token for API auth |
+| Variable                     | Default                                       | Description                                                      |
+| ---------------------------- | --------------------------------------------- | ---------------------------------------------------------------- |
+| `LLM_MODEL_PATH`             | `/models/qwen3.6-27b-autoround`               | Local safetensors directory inside container                     |
+| `LLM_QUANTIZATION`           | —                                             | Auto-detected from checkpoint; override with `gptq`, `awq`, etc. |
+| `LLM_TOKENIZER_PATH`         | —                                             | Leave empty — bundled in model repo                              |
+| `LLM_SERVED_MODEL_NAME`      | `qwen3.6-27b`                                 | Model alias for `/v1/models`                                     |
+| `LLM_MAX_MODEL_LEN`          | `128000`                                      | Max context window in tokens                                     |
+| `LLM_GPU_MEMORY_UTILIZATION` | `0.95`                                        | GPU VRAM fraction for weights + KV                               |
+| `LLM_MAX_NUM_SEQS`           | `1`                                           | Concurrent request slots (1 for 128K context)                    |
+| `LLM_TP_SIZE`                | `1`                                           | Tensor parallelism (number of GPUs)                              |
+| `LLM_KV_CACHE_DTYPE`         | `turboquant_k4v2_nc`                          | KV cache quantization (5.0× compression)                         |
+| `LLM_REASONING_PARSER`       | `qwen3`                                       | Reasoning extraction parser                                      |
+| `LLM_SPECULATIVE_CONFIG`     | `{"method":"mtp","num_speculative_tokens":1}` | MTP speculative decoding config                                  |
+| `LLM_ENFORCE_EAGER`          | —                                             | Set to `1` to save ~1.5 GB VRAM (slower decode)                  |
+| `LLM_API_KEY`                | auto-generated                                | Bearer token for API auth                                        |
 
 ### RTX 3090 VRAM budget
 
 Qwen3.6-27B is a **hybrid model**: 64 layers total, but only **16 full-attention layers** cache KV (the other 48 are linear-attention with fixed-size recurrent state). This dramatically reduces KV cache cost vs. a pure transformer.
 
-| Component | VRAM | Notes |
-|---|---|---|
-| INT4 weights + scales | ~15.5 GB | 27B × 0.5 B/param + 15% group overhead |
-| Embeddings + LM head (BF16) | ~2.4 GB | vocab 248K × hidden 5120 × 2 × 2B |
-| Vision tower (BF16) | ~0.4 GB | 27-layer ViT encoder |
-| MTP heads (BF16) | ~0.2 GB | Native multi-token prediction |
-| Linear attn state (fixed) | ~0.1 GB | 48 layers, does not grow with context |
-| CUDA context + activations | ~0.5 GB | |
-| **Total non-KV** | **~19.1 GB** | |
-| **KV cache budget** | **~3.7 GB raw** | 22.8 GB usable − 19.1 GB |
+| Component                   | VRAM            | Notes                                  |
+| --------------------------- | --------------- | -------------------------------------- |
+| INT4 weights + scales       | ~15.5 GB        | 27B × 0.5 B/param + 15% group overhead |
+| Embeddings + LM head (BF16) | ~2.4 GB         | vocab 248K × hidden 5120 × 2 × 2B      |
+| Vision tower (BF16)         | ~0.4 GB         | 27-layer ViT encoder                   |
+| MTP heads (BF16)            | ~0.2 GB         | Native multi-token prediction          |
+| Linear attn state (fixed)   | ~0.1 GB         | 48 layers, does not grow with context  |
+| CUDA context + activations  | ~0.5 GB         |                                        |
+| **Total non-KV**            | **~19.1 GB**    |                                        |
+| **KV cache budget**         | **~3.7 GB raw** | 22.8 GB usable − 19.1 GB               |
 
 **KV cache per token:** 2 × 16 layers × 4 KV heads × 256 dim × 2B = **64 KB**
 
-| KV dtype | Compression | Token capacity | Max context (×1 seq) |
-|---|---|---|---|
-| BF16 (auto) | 1× | ~59K | 59K |
-| fp8 | 2× | ~118K | 118K |
-| turboquant_k8v4 | 2.6× | ~154K | 154K |
-| turboquant_4bit_nc | 3.8× | ~225K | 225K |
-| **turboquant_k4v2_nc** | **5.0×** | **~295K** | **295K** |
+| KV dtype               | Compression | Token capacity | Max context (×1 seq) |
+| ---------------------- | ----------- | -------------- | -------------------- |
+| BF16 (auto)            | 1×          | ~59K           | 59K                  |
+| fp8                    | 2×          | ~118K          | 118K                 |
+| turboquant_k8v4        | 2.6×        | ~154K          | 154K                 |
+| turboquant_4bit_nc     | 3.8×        | ~225K          | 225K                 |
+| **turboquant_k4v2_nc** | **5.0×**    | **~295K**      | **295K**             |
 
 128K fits with ~167K tokens of headroom.
 
@@ -296,13 +297,13 @@ Qwen3.6-27B is a **hybrid model**: 64 layers total, but only **16 full-attention
 
 ## Docker Compose services
 
-| Service | Purpose |
-|---|---|
-| `vllm-server` | vLLM inference server (port 8080) |
-| `cloudflared` | Cloudflare Tunnel — exposes vllm-server publicly |
-| `model-prep` | Download AutoRound models into `./models/` — profile: `convert` |
-| `mcp-search-server` | Web search MCP tool (port 3100) |
-| `chat-ui` | Vite + React chat interface (port 5173) |
+| Service             | Purpose                                                         |
+| ------------------- | --------------------------------------------------------------- |
+| `vllm-server`       | vLLM inference server (port 8080)                               |
+| `cloudflared`       | Cloudflare Tunnel — exposes vllm-server publicly                |
+| `model-prep`        | Download AutoRound models into `./models/` — profile: `convert` |
+| `mcp-search-server` | Web search MCP tool (port 3100)                                 |
+| `chat-ui`           | Vite + React chat interface (port 5173)                         |
 
 ---
 
@@ -321,12 +322,12 @@ This runs all 4 phases (~2.75 hours total) and generates a Markdown report.
 
 ### Phases (most → least impactful)
 
-| Phase | What it sweeps | Restarts | Est. time |
-|-------|---------------|----------|-----------|
-| 1 — Speculative decoding | none / MTP / ngram / ngram+MTP | 4 | ~55 min |
-| 2 — KV cache dtype | rotorquant vs turboquant (k4v2, 3bit) | 3-4 | ~55 min |
-| 3 — DRY sampling | on vs off (per-request toggle) | 0-1 | ~15 min |
-| 4 — Cross-validation | top 3 configs, 5 runs each | ≤3 | ~40 min |
+| Phase                    | What it sweeps                        | Restarts | Est. time |
+| ------------------------ | ------------------------------------- | -------- | --------- |
+| 1 — Speculative decoding | none / MTP / ngram / ngram+MTP        | 4        | ~55 min   |
+| 2 — KV cache dtype       | rotorquant vs turboquant (k4v2, 3bit) | 3-4      | ~55 min   |
+| 3 — DRY sampling         | on vs off (per-request toggle)        | 0-1      | ~15 min   |
+| 4 — Cross-validation     | top 3 configs, 5 runs each            | ≤3       | ~40 min   |
 
 Each phase isolates one variable. The winner carries forward as the baseline for the next phase.
 

@@ -69,6 +69,7 @@ SPEC_CONFIGS: dict[str, str] = {
     "mtp_n1": json.dumps({"method": "mtp", "num_speculative_tokens": 1}),
     "mtp_n2": json.dumps({"method": "mtp", "num_speculative_tokens": 2}),
     "mtp_n3": json.dumps({"method": "mtp", "num_speculative_tokens": 3}),
+    "mtp_n4": json.dumps({"method": "mtp", "num_speculative_tokens": 4}),
 
     # Ngram only — sweep lookup window size
     "ngram_tight": json.dumps({
@@ -95,6 +96,10 @@ SPEC_CONFIGS: dict[str, str] = {
     }),
     "ngram_mtp_n3": json.dumps({
         "method": "mtp", "num_speculative_tokens": 3,
+        "ngram_first": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+    }),
+    "ngram_mtp_n4": json.dumps({
+        "method": "mtp", "num_speculative_tokens": 4,
         "ngram_first": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
     }),
 }
