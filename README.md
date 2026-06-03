@@ -306,6 +306,54 @@ Qwen3.6-27B is a **hybrid model**: 64 layers total, but only **16 full-attention
 
 ---
 
+## Benchmarking
+
+A phased benchmarking framework measures tokens/second across different server configurations to find the optimal `.env.default` settings.
+
+### Quick start
+
+```bash
+pip install httpx
+python scripts/benchmark.py
+```
+
+This runs all 4 phases (~2.75 hours total) and generates a Markdown report.
+
+### Phases (most → least impactful)
+
+| Phase | What it sweeps | Restarts | Est. time |
+|-------|---------------|----------|-----------|
+| 1 — Speculative decoding | none / MTP / ngram / ngram+MTP | 4 | ~55 min |
+| 2 — KV cache dtype | rotorquant vs turboquant (k4v2, 3bit) | 3-4 | ~55 min |
+| 3 — DRY sampling | on vs off (per-request toggle) | 0-1 | ~15 min |
+| 4 — Cross-validation | top 3 configs, 5 runs each | ≤3 | ~40 min |
+
+Each phase isolates one variable. The winner carries forward as the baseline for the next phase.
+
+### Options
+
+```bash
+python scripts/benchmark.py --phase 1       # run only Phase 1
+python scripts/benchmark.py --runs 5        # 5 runs per scenario (default 3)
+python scripts/benchmark.py --resume        # resume an interrupted run
+python scripts/benchmark.py --report-only   # regenerate report from existing data
+```
+
+### Output
+
+- `benchmark/results/{timestamp}_runs.jsonl` — raw data, one JSON object per run (flushed immediately)
+- `benchmark/results/{timestamp}_report.md` — Markdown report with tables, % comparisons, and a recommended `.env.default` config block
+
+### How it works
+
+1. For each config, the script sets env vars and runs `docker compose -f docker-compose.yml -f docker-compose.benchmark.yml up -d --force-recreate vllm-server` (no `.env` modification).
+2. Waits for `/health` (up to 7 min for model load + compilation).
+3. Runs 5 scenarios (general text, coding, agentic, instruction following, tool calling) × N runs each.
+4. Measures TTFT and decode tokens/second via streaming API with `stream_options: {"include_usage": true}`.
+5. Progress bar with ETA updates after every run.
+
+---
+
 ## Troubleshooting
 
 - **Model not loading:** Check `docker compose logs vllm-server`. Common causes: `LLM_MODEL_PATH` wrong, model directory empty, insufficient VRAM.
