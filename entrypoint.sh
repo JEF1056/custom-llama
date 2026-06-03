@@ -59,6 +59,8 @@ echo "  Seqs:     $MAX_NUM_SEQS concurrent"
 [ -n "$CPU_OFFLOAD_GB" ] && [ "$CPU_OFFLOAD_GB" != "0" ] && echo "  CPU offload: ${CPU_OFFLOAD_GB} GB"
 [ -n "$OPTIMIZATION_LEVEL" ] && echo "  Optimization: -O$OPTIMIZATION_LEVEL"
 [ -n "$OVERRIDE_GENERATION_CONFIG" ] && echo "  Gen config: $OVERRIDE_GENERATION_CONFIG"
+[ -n "$VLLM_DRY_MULTIPLIER" ] && [ "$VLLM_DRY_MULTIPLIER" != "0" ] && [ "$VLLM_DRY_MULTIPLIER" != "0.0" ] && \
+    echo "  DRY:      mul=$VLLM_DRY_MULTIPLIER base=${VLLM_DRY_BASE:-1.75} len=${VLLM_DRY_ALLOWED_LENGTH:-2} last_n=${VLLM_DRY_PENALTY_LAST_N:--1}"
 [ -n "$API_KEY" ]           && echo "  API key:  (set)"
 
 # Prevent numba/OpenMP segfault: numba's default 'omp' backend (libgomp)

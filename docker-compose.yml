@@ -106,6 +106,12 @@ services:
 
       LLM_DISABLE_LOG_REQUESTS: ${LLM_DISABLE_LOG_REQUESTS:-}
 
+      # DRY sampling server-wide defaults (applied when no per-request override)
+      VLLM_DRY_MULTIPLIER: ${VLLM_DRY_MULTIPLIER:-0.4}
+      VLLM_DRY_BASE: ${VLLM_DRY_BASE:-1.75}
+      VLLM_DRY_ALLOWED_LENGTH: ${VLLM_DRY_ALLOWED_LENGTH:-128}
+      VLLM_DRY_PENALTY_LAST_N: ${VLLM_DRY_PENALTY_LAST_N:-2048}
+
       PYTORCH_CUDA_ALLOC_CONF: ${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:False,max_split_size_mb:512}
       VLLM_MARLIN_USE_ATOMIC_ADD: "1"
 
