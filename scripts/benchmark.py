@@ -470,6 +470,41 @@ def result_key(r: dict) -> tuple:
 # Phase runners
 # ---------------------------------------------------------------------------
 
+def _flush_remaining_as_error(
+    phase: int, kv: str, spec: str, label: str, dry: bool,
+    runs_per_scenario: int, completed: set[tuple],
+    results_path: Path, all_results: list[dict[str, Any]],
+    tracker: ProgressTracker, error_msg: str,
+) -> None:
+    """Record all un-completed runs for this config as errors."""
+    for scenario in SCENARIOS:
+        for run_num in range(1, runs_per_scenario + 1):
+            key = (phase, kv, spec, dry, scenario.name, run_num)
+            if key in completed:
+                continue
+            # Check if already flushed this run (e.g. the failing run itself)
+            completed.add(key)
+            result = {
+                "phase": phase,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "server_config": {
+                    "kv_cache_dtype": kv,
+                    "speculative_config": spec,
+                    "config_label": label,
+                },
+                "request_config": {"dry": dry},
+                "scenario": scenario.name,
+                "run": run_num,
+                "metrics": {},
+                "status": "error",
+                "error": error_msg,
+                "restart_duration_s": 0,
+            }
+            flush_result(result, results_path)
+            all_results.append(result)
+            tracker.update(f"{label} x {scenario.name} run {run_num} (server crashed)")
+
+
 def _run_config_sweep(
     *,
     phase: int,
@@ -488,6 +523,7 @@ def _run_config_sweep(
     total = len(configs) * len(SCENARIOS) * runs_per_scenario
     tracker = ProgressTracker(total, f"Phase {phase}: {phase_name}")
     all_results: list[dict[str, Any]] = []
+    last_kv, last_spec = None, None
 
     for cfg in configs:
         kv = cfg.get("kv_cache_dtype", fixed_kv)
@@ -507,18 +543,37 @@ def _run_config_sweep(
                     tracker.update(f"{label} x {scenario.name} run {run_num} (cached)")
             continue
 
-        restart_server(kv, spec)
-        restart_time_start = time.monotonic()
-        wait_for_health()
-        restart_duration = time.monotonic() - restart_time_start
+        # Only restart if server config changed
+        if kv != last_kv or spec != last_spec:
+            try:
+                restart_server(kv, spec)
+                restart_time_start = time.monotonic()
+                wait_for_health()
+                restart_duration = time.monotonic() - restart_time_start
+                last_kv, last_spec = kv, spec
+            except (TimeoutError, RuntimeError) as e:
+                _log(f"Server failed for {label}: {e} — skipping config")
+                last_kv, last_spec = None, None
+                _flush_remaining_as_error(
+                    phase, kv, spec, label, dry, runs_per_scenario,
+                    completed, results_path, all_results, tracker,
+                    f"server_startup_failed: {e}",
+                )
+                continue
 
-        # Warmup — discard
-        try:
-            run_scenario(SCENARIOS[0], dry=False, api_key=api_key)
-        except Exception as e:
-            _log(f"Warmup failed ({e}), continuing anyway")
+            # Warmup — discard
+            try:
+                run_scenario(SCENARIOS[0], dry=False, api_key=api_key)
+            except Exception as e:
+                _log(f"Warmup failed ({e}), continuing anyway")
+        else:
+            restart_duration = 0.0
+            _log(f"Server already running with kv={kv} spec={spec or '(none)'} — skipping restart")
 
+        server_crashed = False
         for scenario in SCENARIOS:
+            if server_crashed:
+                break
             for run_num in range(1, runs_per_scenario + 1):
                 key = (phase, kv, spec, dry, scenario.name, run_num)
                 if key in completed:
@@ -530,6 +585,13 @@ def _run_config_sweep(
                     metrics = run_scenario(scenario, dry=dry, api_key=api_key)
                     status = "ok"
                     error = None
+                except (httpx.ConnectError, httpx.RemoteProtocolError,
+                        ConnectionError) as e:
+                    _log(f"\nSERVER CRASHED: {label} x {scenario.name} run {run_num}: {e}")
+                    server_crashed = True
+                    metrics = {}
+                    status = "error"
+                    error = f"server_crashed: {e}"
                 except Exception as e:
                     _log(f"\nERROR: {label} x {scenario.name} run {run_num}: {e}")
                     metrics = {}
@@ -554,6 +616,7 @@ def _run_config_sweep(
                 }
                 flush_result(result, results_path)
                 all_results.append(result)
+                completed.add(key)
 
                 run_duration = time.monotonic() - run_start
                 tps = metrics.get("overall_tps") if metrics else None
@@ -562,6 +625,18 @@ def _run_config_sweep(
                     last_tps=tps,
                     duration=run_duration,
                 )
+
+                if server_crashed:
+                    break
+
+        # Server crashed mid-batch — flush remaining runs as errors, move on
+        if server_crashed:
+            last_kv, last_spec = None, None
+            _flush_remaining_as_error(
+                phase, kv, spec, label, dry, runs_per_scenario,
+                completed, results_path, all_results, tracker,
+                "server_crashed: container exited mid-batch",
+            )
 
     tracker.finish()
     return all_results
