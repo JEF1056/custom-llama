@@ -22,6 +22,7 @@ MAX_NUM_BATCHED_TOKENS=${LLM_MAX_NUM_BATCHED_TOKENS:-}
 ENABLE_CHUNKED_PREFILL=${LLM_ENABLE_CHUNKED_PREFILL:-}
 ENABLE_PREFIX_CACHING=${LLM_ENABLE_PREFIX_CACHING:-}
 REASONING_PARSER=${LLM_REASONING_PARSER:-}
+REASONING_CONFIG=${LLM_REASONING_CONFIG:-}
 TOOL_CALL_PARSER=${LLM_TOOL_CALL_PARSER:-}
 SPECULATIVE_CONFIG=${LLM_SPECULATIVE_CONFIG:-}
 ENFORCE_EAGER=${LLM_ENFORCE_EAGER:-}
@@ -31,6 +32,7 @@ CPU_OFFLOAD_GB=${LLM_CPU_OFFLOAD_GB:-}
 OPTIMIZATION_LEVEL=${LLM_OPTIMIZATION_LEVEL:-}
 MAX_NUM_PARTIAL_PREFILLS=${LLM_MAX_NUM_PARTIAL_PREFILLS:-}
 LONG_PREFILL_TOKEN_THRESHOLD=${LLM_LONG_PREFILL_TOKEN_THRESHOLD:-}
+OVERRIDE_GENERATION_CONFIG=${LLM_OVERRIDE_GENERATION_CONFIG:-}
 
 if [ -z "$MODEL_PATH" ]; then
     echo "ERROR: LLM_MODEL_PATH is required"
@@ -50,11 +52,13 @@ echo "  GPU mem:  ${GPU_MEMORY_UTILIZATION} utilization"
 echo "  TP:       $TP_SIZE GPU(s)"
 echo "  Seqs:     $MAX_NUM_SEQS concurrent"
 [ -n "$REASONING_PARSER" ]  && echo "  Reasoning: $REASONING_PARSER"
+[ -n "$REASONING_CONFIG" ]  && echo "  Reasoning config: $REASONING_CONFIG"
 [ -n "$SPECULATIVE_CONFIG" ] && echo "  Speculative: $SPECULATIVE_CONFIG"
 [ "$KV_CACHE_DTYPE" != "auto" ] && echo "  KV dtype: $KV_CACHE_DTYPE"
 [ -n "$ENFORCE_EAGER" ]     && echo "  CUDA graph: disabled (enforce eager)"
 [ -n "$CPU_OFFLOAD_GB" ] && [ "$CPU_OFFLOAD_GB" != "0" ] && echo "  CPU offload: ${CPU_OFFLOAD_GB} GB"
 [ -n "$OPTIMIZATION_LEVEL" ] && echo "  Optimization: -O$OPTIMIZATION_LEVEL"
+[ -n "$OVERRIDE_GENERATION_CONFIG" ] && echo "  Gen config: $OVERRIDE_GENERATION_CONFIG"
 [ -n "$API_KEY" ]           && echo "  API key:  (set)"
 
 exec vllm serve "$MODEL_PATH" \
@@ -75,6 +79,7 @@ exec vllm serve "$MODEL_PATH" \
     ${ENABLE_CHUNKED_PREFILL:+--enable-chunked-prefill} \
     ${ENABLE_PREFIX_CACHING:+--enable-prefix-caching} \
     ${REASONING_PARSER:+--reasoning-parser "$REASONING_PARSER"} \
+    ${REASONING_CONFIG:+--reasoning-config "$REASONING_CONFIG"} \
     ${TOOL_CALL_PARSER:+--enable-auto-tool-choice --tool-call-parser "$TOOL_CALL_PARSER"} \
     ${SPECULATIVE_CONFIG:+--speculative-config "$SPECULATIVE_CONFIG"} \
     ${ENFORCE_EAGER:+--enforce-eager} \
@@ -84,4 +89,5 @@ exec vllm serve "$MODEL_PATH" \
     ${OPTIMIZATION_LEVEL:+-O "$OPTIMIZATION_LEVEL"} \
     ${MAX_NUM_PARTIAL_PREFILLS:+--max-num-partial-prefills "$MAX_NUM_PARTIAL_PREFILLS"} \
     ${LONG_PREFILL_TOKEN_THRESHOLD:+--long-prefill-token-threshold "$LONG_PREFILL_TOKEN_THRESHOLD"} \
+    ${OVERRIDE_GENERATION_CONFIG:+--override-generation-config "$OVERRIDE_GENERATION_CONFIG"} \
     "$@"
