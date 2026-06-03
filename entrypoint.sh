@@ -11,7 +11,7 @@ MODEL_PATH=${SGLANG_MODEL_PATH:-}
 TOKENIZER_PATH=${SGLANG_TOKENIZER_PATH:-}
 SERVED_MODEL_NAME=${SGLANG_SERVED_MODEL_NAME:-}
 API_KEY=${SGLANG_API_KEY:-}
-CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-145000}
+CONTEXT_LENGTH=${SGLANG_CONTEXT_LENGTH:-72500}
 MEM_FRACTION=${SGLANG_MEM_FRACTION_STATIC:-0.85}
 MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-}
 TP_SIZE=${SGLANG_TP_SIZE:-1}
@@ -42,6 +42,7 @@ SPEC_NUM_STEPS=${SGLANG_SPECULATIVE_NUM_STEPS:-3}
 SPEC_EAGLE_TOPK=${SGLANG_SPECULATIVE_EAGLE_TOPK:-}
 SPEC_NUM_DRAFT_TOKENS=${SGLANG_SPECULATIVE_NUM_DRAFT_TOKENS:-3}
 ENFORCE_PCG=${SGLANG_ENFORCE_PIECEWISE_CUDA_GRAPH:-}
+DISABLE_CUDA_GRAPH=${SGLANG_DISABLE_CUDA_GRAPH:-}
 
 if [ -z "$MODEL_PATH" ]; then
     echo "ERROR: SGLANG_MODEL_PATH is required"
@@ -65,6 +66,7 @@ echo "  TP:       $TP_SIZE GPU(s)"
 [ -n "$ENABLE_MULTIMODAL" ] && echo "  Vision:   enabled"
 echo "  Mamba:    strategy=$MAMBA_SCHEDULER_STRATEGY${MAMBA_SSM_DTYPE:+ ssm_dtype=$MAMBA_SSM_DTYPE}${MAMBA_FULL_MEMORY_RATIO:+ full_mem_ratio=$MAMBA_FULL_MEMORY_RATIO}"
 [ -n "$ENFORCE_PCG" ]      && echo "  PCG:      piecewise cuda graph enabled"
+[ -n "$DISABLE_CUDA_GRAPH" ] && echo "  CUDA graph: disabled (saves ~1.5 GB VRAM)"
 [ -n "$API_KEY" ]          && echo "  API key:  (set)"
 
 LOAD_ARGS=()
@@ -114,6 +116,7 @@ exec sglang serve \
     --num-continuous-decode-steps "$NUM_CONTINUOUS_DECODE_STEPS" \
     ${ENABLE_MIXED_CHUNK:+--enable-mixed-chunk} \
     ${ENFORCE_PCG:+--enforce-piecewise-cuda-graph} \
+    ${DISABLE_CUDA_GRAPH:+--disable-cuda-graph} \
     --log-level "$LOG_LEVEL" \
     ${LOG_REQUESTS:+--log-requests} \
     ${ENABLE_METRICS:+--enable-metrics} \
