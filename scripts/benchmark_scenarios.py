@@ -205,13 +205,22 @@ SCENARIOS: list[Scenario] = [
     Scenario(
         name="tool_calling",
         description="Tool call JSON generation — ngram excels at templates",
-        system="You are a helpful assistant with access to tools.",
+        system=(
+            "You are a helpful travel planning assistant with access to tools. "
+            "You MUST use tools for every factual query. For each tool call, first "
+            "explain your reasoning in 2-3 sentences, then make the call. After all "
+            "tool calls, write a detailed travel summary with packing recommendations."
+        ),
         user=(
-            "I'm planning a weekend trip to San Francisco. Can you:\n"
-            "1. Check the current weather in San Francisco in Fahrenheit\n"
-            "2. Convert that temperature to Celsius so I know what to pack\n"
-            "3. Search for outdoor events happening this weekend in San Francisco\n\n"
-            "Use the available tools to help me with each of these tasks."
+            "I'm planning a weekend trip visiting three cities: San Francisco, "
+            "Seattle, and Portland. For each city:\n"
+            "1. Check the current weather in Fahrenheit\n"
+            "2. Convert each temperature to Celsius\n"
+            "3. Search for outdoor events happening this weekend\n"
+            "4. Search for food events happening this weekend\n\n"
+            "After gathering all information, write a detailed day-by-day itinerary "
+            "covering all three cities with weather-appropriate clothing suggestions "
+            "for each day. Use the available tools for every lookup."
         ),
         tools=TOOLS_WEATHER,
     ),

@@ -74,11 +74,13 @@ def _section_executive_summary(results: list[dict]) -> str:
         sc = r["server_config"]
         rc = r["request_config"]
         key = f"kv={sc['kv_cache_dtype']} | spec={_spec_label(sc['speculative_config'])} | dry={'on' if rc['dry'] else 'off'}"
-        combo_tps.setdefault(key, []).append(r["metrics"]["overall_tps"])
+        tps_key = "decode_tps" if r["scenario"] == "tool_calling" else "overall_tps"
+        combo_tps.setdefault(key, []).append(r["metrics"][tps_key])
 
     ranked = sorted(combo_tps.items(), key=lambda x: statistics.mean(x[1]), reverse=True)
 
     lines = ["## Executive Summary\n"]
+    lines.append("_Note: tool_calling uses decode_tps (strips TTFT) for stable comparison._\n")
     lines.append("| Rank | Configuration | Mean tok/s | Std |")
     lines.append("|------|---------------|-----------|-----|")
     for i, (key, tps_list) in enumerate(ranked[:5], 1):
@@ -128,11 +130,13 @@ def _section_phase(
     configs = sorted(set(label_fn(r["server_config"][config_field]) for r in ok))
 
     # Build data: config → scenario → [tps]
+    # Use decode_tps for tool_calling (output length varies, overall_tps is TTFT-dominated)
     data: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     ttft_data: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     for r in ok:
         cfg_label = label_fn(r["server_config"][config_field])
-        data[cfg_label][r["scenario"]].append(r["metrics"]["overall_tps"])
+        tps_key = "decode_tps" if r["scenario"] == "tool_calling" else "overall_tps"
+        data[cfg_label][r["scenario"]].append(r["metrics"][tps_key])
         ttft_data[cfg_label][r["scenario"]].append(r["metrics"]["ttft_s"])
 
     # Overall tok/s table
@@ -276,7 +280,8 @@ def _section_dry(results: list[dict]) -> str:
     dry_on: dict[str, list[float]] = defaultdict(list)
     for r in ok:
         bucket = dry_on if r["request_config"]["dry"] else dry_off
-        bucket[r["scenario"]].append(r["metrics"]["overall_tps"])
+        tps_key = "decode_tps" if r["scenario"] == "tool_calling" else "overall_tps"
+        bucket[r["scenario"]].append(r["metrics"][tps_key])
 
     lines = ["## Phase 3: DRY Sampling Impact\n"]
     lines.append("| Scenario | DRY Off (tok/s) | DRY On (tok/s) | Throughput Cost |")
@@ -324,7 +329,8 @@ def _section_crossval(results: list[dict]) -> str:
         sc = r["server_config"]
         rc = r["request_config"]
         key = f"kv={sc['kv_cache_dtype'][:12]} spec={_spec_label(sc['speculative_config'])} dry={'on' if rc['dry'] else 'off'}"
-        combo_data[key][r["scenario"]].append(r["metrics"]["overall_tps"])
+        tps_key = "decode_tps" if r["scenario"] == "tool_calling" else "overall_tps"
+        combo_data[key][r["scenario"]].append(r["metrics"][tps_key])
 
     lines = ["## Phase 4: Cross-validation (5 runs)\n"]
     header = "| Configuration | " + " | ".join(scenarios) + " | **Mean** |"
@@ -495,12 +501,14 @@ def _section_best_per_scenario(results: list[dict]) -> str:
             s = r["server_config"]
             rc = r["request_config"]
             key = f"kv={s['kv_cache_dtype']} spec={_spec_label(s['speculative_config'])} dry={'on' if rc['dry'] else 'off'}"
-            combo_tps.setdefault(key, []).append(r["metrics"]["overall_tps"])
+            tps_key = "decode_tps" if sc == "tool_calling" else "overall_tps"
+            combo_tps.setdefault(key, []).append(r["metrics"][tps_key])
 
         if combo_tps:
             best = max(combo_tps, key=lambda k: statistics.mean(combo_tps[k]))
             m = round(statistics.mean(combo_tps[best]), 1)
-            lines.append(f"| {sc} | {best} | {m} |")
+            suffix = " (decode)" if sc == "tool_calling" else ""
+            lines.append(f"| {sc} | {best} | {m}{suffix} |")
 
     return "\n".join(lines) + "\n"
 
@@ -516,7 +524,8 @@ def _section_recommended_env(results: list[dict]) -> str:
         sc = r["server_config"]
         rc = r["request_config"]
         combo = (sc["kv_cache_dtype"], sc["speculative_config"], rc["dry"])
-        combo_tps.setdefault(combo, []).append(r["metrics"]["overall_tps"])
+        tps_key = "decode_tps" if r["scenario"] == "tool_calling" else "overall_tps"
+        combo_tps.setdefault(combo, []).append(r["metrics"][tps_key])
 
     if not combo_tps:
         return ""
