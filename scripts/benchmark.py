@@ -69,7 +69,6 @@ SPEC_CONFIGS: dict[str, str] = {
     "mtp_n1": json.dumps({"method": "mtp", "num_speculative_tokens": 1}),
     "mtp_n2": json.dumps({"method": "mtp", "num_speculative_tokens": 2}),
     "mtp_n3": json.dumps({"method": "mtp", "num_speculative_tokens": 3}),
-    "mtp_n4": json.dumps({"method": "mtp", "num_speculative_tokens": 4}),
 
     # Ngram only — sweep lookup window size
     "ngram_tight": json.dumps({
@@ -96,10 +95,6 @@ SPEC_CONFIGS: dict[str, str] = {
     }),
     "ngram_mtp_n3": json.dumps({
         "method": "mtp", "num_speculative_tokens": 3,
-        "ngram_first": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
-    }),
-    "ngram_mtp_n4": json.dumps({
-        "method": "mtp", "num_speculative_tokens": 4,
         "ngram_first": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
     }),
 }
@@ -198,7 +193,7 @@ def restart_server(
         "docker", "compose", *COMPOSE_FILES,
         "up", "-d", "--force-recreate", "vllm-server",
     ]
-    _log(f"Restarting server: kv={kv_cache_dtype} spec={speculative_config or '(none)'}")
+    _log(f"Restarting server: kv={kv_cache_dtype} spec={speculative_config or '(none)'} dry={dry_config or '(none)'}")
     _log(f"  cmd: {' '.join(cmd)}")
     result = subprocess.run(
         cmd, env=env, cwd=PROJECT_ROOT,
@@ -491,6 +486,19 @@ def _run_config_sweep(
         kv = cfg.get("kv_cache_dtype", fixed_kv)
         spec = cfg.get("speculative_config", fixed_spec)
         label = cfg[config_label_key]
+
+        # Skip entire config if all its runs are already completed
+        all_cached = all(
+            (phase, kv, spec, dry, scenario.name, run_num) in completed
+            for scenario in SCENARIOS
+            for run_num in range(1, runs_per_scenario + 1)
+        )
+        if all_cached:
+            _log(f"Skipping {label} — all runs cached")
+            for scenario in SCENARIOS:
+                for run_num in range(1, runs_per_scenario + 1):
+                    tracker.update(f"{label} x {scenario.name} run {run_num} (cached)")
+            continue
 
         restart_server(kv, spec)
         restart_time_start = time.monotonic()
