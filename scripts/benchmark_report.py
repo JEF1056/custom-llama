@@ -201,18 +201,19 @@ def _section_spec_acceptance(results: list[dict]) -> str:
     scenarios = sorted(set(r["scenario"] for r in has_spec))
     configs = sorted(set(r["server_config"].get("config_label", "?") for r in has_spec))
 
-    # config → scenario → [acceptance_rate]
+    # config → scenario → [acceptance_pct] (already 0-100 from compute_spec_metrics)
     data: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     for r in has_spec:
         label = r["server_config"].get("config_label", "?")
-        ar = r["metrics"]["spec_metrics"].get("spec_acceptance_rate")
+        sm = r["metrics"]["spec_metrics"]
+        ar = sm.get("acceptance_pct")
         if ar is not None:
             data[label][r["scenario"]].append(ar)
 
     if not any(data.values()):
         return ""
 
-    lines = ["### Speculative Acceptance Rate\n"]
+    lines = ["### Speculative Acceptance Rate (per-run)\n"]
     header = "| Config | " + " | ".join(scenarios) + " | **Mean** |"
     sep = "|--------|" + "|".join(["------"] * len(scenarios)) + "|--------|"
     lines.append(header)
@@ -224,7 +225,7 @@ def _section_spec_acceptance(results: list[dict]) -> str:
         for sc in scenarios:
             vals = data[cfg].get(sc, [])
             if vals:
-                m = round(statistics.mean(vals) * 100, 1)
+                m = round(statistics.mean(vals), 1)
                 row.append(f"{m}%")
                 all_rates.append(m)
             else:
@@ -235,7 +236,22 @@ def _section_spec_acceptance(results: list[dict]) -> str:
             row.append("—")
         lines.append("| " + " | ".join(str(x) for x in row) + " |")
 
-    lines.append("\n_Acceptance rate = fraction of draft tokens accepted by the verifier. Higher is better._\n")
+    # Also show drafted/accepted token counts
+    lines.append("")
+    lines.append("#### Draft Token Efficiency\n")
+    lines.append("| Config | Drafted/run | Accepted/run | Efficiency |")
+    lines.append("|--------|-----------|-------------|------------|")
+    for cfg in configs:
+        cfg_results = [r for r in has_spec if r["server_config"].get("config_label") == cfg]
+        drafted = [r["metrics"]["spec_metrics"].get("drafted_tokens", 0) for r in cfg_results]
+        accepted = [r["metrics"]["spec_metrics"].get("accepted_tokens", 0) for r in cfg_results]
+        if drafted and any(d > 0 for d in drafted):
+            m_d = round(statistics.mean(drafted))
+            m_a = round(statistics.mean(accepted))
+            eff = round((m_a / m_d) * 100, 1) if m_d > 0 else 0
+            lines.append(f"| {cfg} | {m_d} | {m_a} | {eff}% |")
+
+    lines.append("\n_Acceptance = drafted tokens accepted by verifier. Computed per-run from Prometheus counter deltas._\n")
     return "\n".join(lines) + "\n"
 
 
@@ -432,9 +448,9 @@ def _section_stress_test(results: list[dict]) -> str:
                 lines.append(f"- Stddev: {round(statistics.stdev(all_burst_tps), 1)} (lower = more consistent)")
 
     # Spec metrics if available
-    spec_runs = [r for r in ok if r.get("metrics", {}).get("spec_metrics", {}).get("spec_acceptance_rate")]
+    spec_runs = [r for r in ok if r.get("metrics", {}).get("spec_metrics", {}).get("acceptance_pct")]
     if spec_runs:
-        rates = [r["metrics"]["spec_metrics"]["spec_acceptance_rate"] * 100 for r in spec_runs]
+        rates = [r["metrics"]["spec_metrics"]["acceptance_pct"] for r in spec_runs]
         lines.append(f"\n### Speculative Acceptance Under Stress\n")
         lines.append(f"- Mean acceptance rate: **{round(statistics.mean(rates), 1)}%**")
         lines.append(f"- Range: {round(min(rates), 1)}% — {round(max(rates), 1)}%")

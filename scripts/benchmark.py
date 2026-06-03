@@ -258,12 +258,8 @@ def read_api_key() -> str:
     return ""
 
 
-def scrape_spec_metrics() -> dict[str, float]:
-    """Scrape speculative decoding metrics from vLLM's Prometheus endpoint.
-
-    Returns a dict with acceptance_rate, accepted_tokens, drafted_tokens, etc.
-    Returns empty dict if metrics unavailable or spec decoding is off.
-    """
+def _scrape_raw_spec_counters() -> dict[str, float]:
+    """Scrape raw cumulative counters from vLLM's Prometheus /metrics endpoint."""
     try:
         with httpx.Client(timeout=5) as client:
             r = client.get(METRICS_URL)
@@ -272,35 +268,53 @@ def scrape_spec_metrics() -> dict[str, float]:
     except (httpx.ConnectError, httpx.ReadError, httpx.ReadTimeout, ConnectionError):
         return {}
 
-    metrics: dict[str, float] = {}
+    counters: dict[str, float] = {}
     for line in r.text.splitlines():
         if line.startswith("#"):
             continue
-        # Parse Prometheus text format: metric_name{labels} value
         for name, key in [
-            ("vllm:spec_decode_draft_acceptance_rate", "spec_acceptance_rate"),
-            ("vllm:spec_decode_efficiency", "spec_efficiency"),
-            ("vllm:spec_decode_num_accepted_tokens_total", "spec_accepted_tokens"),
-            ("vllm:spec_decode_num_draft_tokens_total", "spec_drafted_tokens"),
-            ("vllm:spec_decode_num_emitted_tokens_total", "spec_emitted_tokens"),
-            # Also try underscore variants (metric naming varies by vLLM version)
-            ("vllm_spec_decode_draft_acceptance_rate", "spec_acceptance_rate"),
-            ("vllm_spec_decode_efficiency", "spec_efficiency"),
-            ("vllm_spec_decode_num_accepted_tokens_total", "spec_accepted_tokens"),
-            ("vllm_spec_decode_num_draft_tokens_total", "spec_drafted_tokens"),
-            ("vllm_spec_decode_num_emitted_tokens_total", "spec_emitted_tokens"),
+            ("vllm:spec_decode_num_accepted_tokens_total", "accepted"),
+            ("vllm:spec_decode_num_draft_tokens_total", "drafted"),
+            ("vllm:spec_decode_num_emitted_tokens_total", "emitted"),
+            # Underscore variants (metric naming varies by vLLM version)
+            ("vllm_spec_decode_num_accepted_tokens_total", "accepted"),
+            ("vllm_spec_decode_num_draft_tokens_total", "drafted"),
+            ("vllm_spec_decode_num_emitted_tokens_total", "emitted"),
         ]:
             if line.startswith(name):
                 try:
-                    # Handle both "metric value" and "metric{labels} value"
-                    val_str = line.split()[-1]
-                    val = float(val_str)
-                    if key not in metrics:  # first match wins
-                        metrics[key] = val
+                    val = float(line.split()[-1])
+                    if key not in counters:
+                        counters[key] = val
                 except (ValueError, IndexError):
                     pass
+    return counters
 
-    return metrics
+
+def compute_spec_metrics(
+    before: dict[str, float], after: dict[str, float],
+) -> dict[str, float]:
+    """Compute per-run speculative decoding metrics from before/after counter snapshots.
+
+    Returns dict with acceptance_pct (0-100), accepted, drafted, emitted deltas.
+    Returns empty dict if counters unavailable or spec decoding is off.
+    """
+    if not before or not after:
+        return {}
+
+    drafted_delta = after.get("drafted", 0) - before.get("drafted", 0)
+    accepted_delta = after.get("accepted", 0) - before.get("accepted", 0)
+    emitted_delta = after.get("emitted", 0) - before.get("emitted", 0)
+
+    if drafted_delta <= 0:
+        return {}  # no speculative tokens this run
+
+    return {
+        "acceptance_pct": round((accepted_delta / drafted_delta) * 100, 1),
+        "accepted_tokens": int(accepted_delta),
+        "drafted_tokens": int(drafted_delta),
+        "emitted_tokens": int(emitted_delta),
+    }
 
 
 def run_scenario(
@@ -309,6 +323,8 @@ def run_scenario(
     api_key: str = "",
 ) -> dict[str, Any]:
     """Execute one benchmark run via streaming chat completion. Returns metrics."""
+    spec_before = _scrape_raw_spec_counters()
+
     messages = [
         {"role": "system", "content": scenario.system},
         {"role": "user", "content": scenario.user},
@@ -398,8 +414,9 @@ def run_scenario(
         "chunks": chunks_received,
     }
 
-    # Scrape speculative decoding metrics from Prometheus endpoint
-    spec_metrics = scrape_spec_metrics()
+    # Compute per-run speculative decoding acceptance from counter deltas
+    spec_after = _scrape_raw_spec_counters()
+    spec_metrics = compute_spec_metrics(spec_before, spec_after)
     if spec_metrics:
         result["spec_metrics"] = spec_metrics
 
@@ -889,6 +906,7 @@ def _run_single_stream(
     messages: list[dict], max_tokens: int, dry: bool, api_key: str,
 ) -> dict[str, Any]:
     """Run a single streaming request. Thread-safe (no shared state)."""
+    spec_before = _scrape_raw_spec_counters()
     body: dict[str, Any] = {
         "model": "qwen3.6-27b",
         "messages": messages,
@@ -942,7 +960,7 @@ def _run_single_stream(
     ttft = (t_first - t_start) if t_first else total_time
     decode_time = (t_last - t_first) if t_first else 0.001
 
-    return {
+    result = {
         "ttft_s": round(ttft, 3),
         "decode_tps": round(completion_tokens / decode_time, 2) if decode_time > 0 else 0,
         "overall_tps": round(completion_tokens / total_time, 2) if total_time > 0 else 0,
@@ -951,6 +969,11 @@ def _run_single_stream(
         "total_time_s": round(total_time, 3),
         "chunks": chunks,
     }
+    spec_after = _scrape_raw_spec_counters()
+    spec_m = compute_spec_metrics(spec_before, spec_after)
+    if spec_m:
+        result["spec_metrics"] = spec_m
+    return result
 
 
 def _run_parallel_requests(
@@ -1031,11 +1054,13 @@ def run_phase_5(
 
                 run_start = time.monotonic()
                 try:
+                    spec_before_par = _scrape_raw_spec_counters()
                     metrics = _run_parallel_requests(
                         stress["prompts"], stress["max_tokens"],
                         dry_winner, api_key,
                     )
-                    spec_m = scrape_spec_metrics()
+                    spec_after_par = _scrape_raw_spec_counters()
+                    spec_m = compute_spec_metrics(spec_before_par, spec_after_par)
                     if spec_m:
                         metrics["spec_metrics"] = spec_m
                     status = "ok"
@@ -1102,9 +1127,6 @@ def run_phase_5(
                     metrics = _run_single_stream(
                         messages, stress["max_tokens"], dry_winner, api_key,
                     )
-                    spec_m = scrape_spec_metrics()
-                    if spec_m:
-                        metrics["spec_metrics"] = spec_m
                     status = "ok"
                     error = None
                     burst_results.append(metrics)
