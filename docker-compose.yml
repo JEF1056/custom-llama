@@ -44,8 +44,8 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        VLLM_FORK_REPO: ${VLLM_FORK_REPO:-}
-        VLLM_FORK_BRANCH: ${VLLM_FORK_BRANCH:-}
+        VLLM_FORK_REPO: ${VLLM_FORK_REPO:-https://github.com/JEF1056/vllm-turboquant.git}
+        VLLM_FORK_BRANCH: ${VLLM_FORK_BRANCH:-turboquant-k4v2-nc}
     image: vllm-server:latest
     container_name: vllm-server
 
