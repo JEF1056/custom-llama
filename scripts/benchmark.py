@@ -44,8 +44,7 @@ HEALTH_URL = f"{API_BASE}/health"
 CHAT_URL = f"{API_BASE}/v1/chat/completions"
 METRICS_URL = f"{API_BASE}/metrics"
 
-MAX_TOKENS = 4096
-THINKING_BUDGET = 2048  # tokens reserved for <think> reasoning
+MAX_TOKENS = 1024
 HEALTH_POLL_INTERVAL = 10  # seconds
 HEALTH_TIMEOUT = 420  # 7 minutes — covers 5-min model load + compilation
 
@@ -341,8 +340,7 @@ def run_scenario(
         "repetition_penalty": 1.0,
         "stream": True,
         "stream_options": {"include_usage": True},
-        "chat_template_kwargs": {"enable_thinking": True},
-        "thinking": {"type": "enabled", "budget_tokens": THINKING_BUDGET},
+        "chat_template_kwargs": {"enable_thinking": False},
     }
 
     if dry:
@@ -923,8 +921,7 @@ def _run_single_stream(
         "repetition_penalty": 1.0,
         "stream": True,
         "stream_options": {"include_usage": True},
-        "chat_template_kwargs": {"enable_thinking": True},
-        "thinking": {"type": "enabled", "budget_tokens": THINKING_BUDGET},
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     if dry:
         body.update(DRY_ON_PARAMS)
