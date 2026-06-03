@@ -1,0 +1,6 @@
+# Benchmark override — exposes vllm-server port for host-side benchmarking.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.benchmark.yml up -d vllm-server
+services:
+  vllm-server:
+    ports:
+      - "8080:8080"
