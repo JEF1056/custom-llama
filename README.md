@@ -87,7 +87,7 @@ networks:
 
 | Image | Dockerfile | Purpose |
 |---|---|---|
-| `vllm-server` | `Dockerfile` | vLLM v0.22.0 inference server (official image) |
+| `vllm-server` | `Dockerfile` | vLLM v0.22.0 inference server (official or fork) |
 | `model-prep` | `Dockerfile.modelprep` | Lightweight Python image for downloading AutoRound models |
 | `mcp-search-server` | `mcp-search-server/Dockerfile` | Web search MCP tool |
 
@@ -96,10 +96,24 @@ networks:
 Uses the official `vllm/vllm-openai:v0.22.0` image with a custom entrypoint. Key features:
 
 - **AutoRound INT4** — pre-quantized safetensors, auto-detected by vLLM from `quantize_config.json`. Fits 19 GB on RTX 3090, leaving ~3.5 GB raw for KV cache.
-- **TurboQuant KV cache** — `turboquant_4bit_nc` preset (upstream since vLLM 0.20). 4-bit keys + 4-bit values with norm correction, 3.8× KV compression, +2.71% PPL.
+- **TurboQuant KV cache** — `turboquant_k4v2_nc` preset (4-bit keys + 2-bit values + norm correction, 5.0× KV compression). Keys get more bits because they're ~37× more sensitive to quantization than values. Requires [vllm-turboquant fork](https://github.com/JEF1056/vllm-turboquant/tree/turboquant-k4v2-nc).
 - **MTP speculative decoding** — uses the model's native multi-token prediction heads via `--speculative-config`. No separate draft model, zero extra VRAM, ~70-85% acceptance rate.
 - **Reasoning parser** — structured `<think>…</think>` extraction via `--reasoning-parser qwen3`.
 - **Vision** — auto-detected from Qwen3.6 checkpoint, no flag needed.
+
+#### Building from a vLLM fork
+
+Set `VLLM_FORK_REPO` and `VLLM_FORK_BRANCH` to overlay Python source from a fork onto the official image. Compiled C/CUDA extensions are preserved — only Python and Triton kernels (JIT-compiled at runtime) are replaced. Build time: ~30 seconds.
+
+Use this for custom TurboQuant presets, attention backends, model definitions, or scheduling logic. For C++/CUDA kernel changes, use vLLM's upstream `docker/Dockerfile` instead (30-60 min full build).
+
+```bash
+# Build from a fork (overlays Python source, ~30s)
+VLLM_FORK_REPO=https://github.com/you/vllm.git VLLM_FORK_BRANCH=feat/k4v2 docker compose build vllm-server
+
+# Build from the official image (default when vars are unset)
+docker compose build vllm-server
+```
 
 ### Model prep image (`Dockerfile.modelprep`)
 
@@ -245,7 +259,7 @@ response = client.chat.completions.create(
 | `LLM_GPU_MEMORY_UTILIZATION` | `0.95` | GPU VRAM fraction for weights + KV |
 | `LLM_MAX_NUM_SEQS` | `1` | Concurrent request slots (1 for 128K context) |
 | `LLM_TP_SIZE` | `1` | Tensor parallelism (number of GPUs) |
-| `LLM_KV_CACHE_DTYPE` | `turboquant_4bit_nc` | KV cache quantization (3.8× compression) |
+| `LLM_KV_CACHE_DTYPE` | `turboquant_k4v2_nc` | KV cache quantization (5.0× compression) |
 | `LLM_REASONING_PARSER` | `qwen3` | Reasoning extraction parser |
 | `LLM_SPECULATIVE_CONFIG` | `{"method":"mtp","num_speculative_tokens":1}` | MTP speculative decoding config |
 | `LLM_ENFORCE_EAGER` | — | Set to `1` to save ~1.5 GB VRAM (slower decode) |
@@ -273,9 +287,10 @@ Qwen3.6-27B is a **hybrid model**: 64 layers total, but only **16 full-attention
 | BF16 (auto) | 1× | ~59K | 59K |
 | fp8 | 2× | ~118K | 118K |
 | turboquant_k8v4 | 2.6× | ~154K | 154K |
-| **turboquant_4bit_nc** | **3.8×** | **~225K** | **225K** |
+| turboquant_4bit_nc | 3.8× | ~225K | 225K |
+| **turboquant_k4v2_nc** | **5.0×** | **~295K** | **295K** |
 
-128K fits with ~97K tokens of headroom.
+128K fits with ~167K tokens of headroom.
 
 ---
 
