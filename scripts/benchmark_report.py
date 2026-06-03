@@ -104,6 +104,7 @@ def _section_methodology() -> str:
   - **TTFT**: Time to first token (seconds)
   - **Decode tok/s**: `completion_tokens / (t_last_token - t_first_token)`
   - **Overall tok/s**: `completion_tokens / (t_last_token - t_start)`
+  - **Spec acceptance rate**: from vLLM Prometheus `/metrics` endpoint (speculative configs only)
 - **Phases**: Speculative decoding (Phase 1) → KV cache dtype (Phase 2) → DRY sampling (Phase 3) → Cross-validation (Phase 4)
 - Each phase isolates one variable while holding others constant at the previous phase's winner.
 """
@@ -183,6 +184,58 @@ def _section_phase(
             row.append(f"{m} +/-{s}")
         lines.append("| " + " | ".join(str(x) for x in row) + " |")
 
+    return "\n".join(lines) + "\n"
+
+
+def _section_spec_acceptance(results: list[dict]) -> str:
+    """Speculative decoding acceptance rate table from Prometheus metrics."""
+    ok = [r for r in _ok_results(results) if r.get("phase") == 1]
+    if not ok:
+        return ""
+
+    # Only include configs that have spec_metrics
+    has_spec = [r for r in ok if r.get("metrics", {}).get("spec_metrics")]
+    if not has_spec:
+        return "### Speculative Acceptance Rate\n\nNo acceptance rate data available (metrics endpoint may not expose spec_decode counters for this vLLM version).\n"
+
+    scenarios = sorted(set(r["scenario"] for r in has_spec))
+    configs = sorted(set(r["server_config"].get("config_label", "?") for r in has_spec))
+
+    # config → scenario → [acceptance_rate]
+    data: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    for r in has_spec:
+        label = r["server_config"].get("config_label", "?")
+        ar = r["metrics"]["spec_metrics"].get("spec_acceptance_rate")
+        if ar is not None:
+            data[label][r["scenario"]].append(ar)
+
+    if not any(data.values()):
+        return ""
+
+    lines = ["### Speculative Acceptance Rate\n"]
+    header = "| Config | " + " | ".join(scenarios) + " | **Mean** |"
+    sep = "|--------|" + "|".join(["------"] * len(scenarios)) + "|--------|"
+    lines.append(header)
+    lines.append(sep)
+
+    for cfg in configs:
+        row = [cfg]
+        all_rates = []
+        for sc in scenarios:
+            vals = data[cfg].get(sc, [])
+            if vals:
+                m = round(statistics.mean(vals) * 100, 1)
+                row.append(f"{m}%")
+                all_rates.append(m)
+            else:
+                row.append("—")
+        if all_rates:
+            row.append(f"**{round(statistics.mean(all_rates), 1)}%**")
+        else:
+            row.append("—")
+        lines.append("| " + " | ".join(str(x) for x in row) + " |")
+
+    lines.append("\n_Acceptance rate = fraction of draft tokens accepted by the verifier. Higher is better._\n")
     return "\n".join(lines) + "\n"
 
 
@@ -353,10 +406,11 @@ def generate_report(results_path: Path, report_path: Path) -> None:
         _section_phase(
             results, phase=1,
             title="Phase 1: Speculative Decoding Impact",
-            config_field="speculative_config",
-            label_fn=_spec_label,
-            baseline_value="",
+            config_field="config_label",
+            label_fn=lambda x: x,
+            baseline_value="none",
         ),
+        _section_spec_acceptance(results),
         _section_phase(
             results, phase=2,
             title="Phase 2: KV Cache Dtype Impact",

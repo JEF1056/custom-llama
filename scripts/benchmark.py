@@ -41,6 +41,7 @@ COMPOSE_FILES = [
 API_BASE = "http://localhost:8080"
 HEALTH_URL = f"{API_BASE}/health"
 CHAT_URL = f"{API_BASE}/v1/chat/completions"
+METRICS_URL = f"{API_BASE}/metrics"
 
 MAX_TOKENS = 1024
 HEALTH_POLL_INTERVAL = 10  # seconds
@@ -58,21 +59,42 @@ DRY_ON_PARAMS = {
 }
 
 # Speculative decoding configs for Phase 1
+# Sweeps: num_speculative_tokens (1,2,3), ngram settings, and combinations.
 SPEC_CONFIGS: dict[str, str] = {
-    "spec_none": "",
-    "spec_mtp": json.dumps({"method": "mtp", "num_speculative_tokens": 2}),
-    "spec_ngram": json.dumps({
-        "method": "ngram",
-        "num_speculative_tokens": 2,
-        "prompt_lookup_max": 10,
-        "prompt_lookup_min": 8,
+    # Baseline — no speculation
+    "none": "",
+
+    # MTP only — sweep token count
+    "mtp_n1": json.dumps({"method": "mtp", "num_speculative_tokens": 1}),
+    "mtp_n2": json.dumps({"method": "mtp", "num_speculative_tokens": 2}),
+    "mtp_n3": json.dumps({"method": "mtp", "num_speculative_tokens": 3}),
+
+    # Ngram only — sweep lookup window size
+    "ngram_tight": json.dumps({
+        "method": "ngram", "num_speculative_tokens": 2,
+        "prompt_lookup_max": 6, "prompt_lookup_min": 3,
     }),
-    "spec_ngram_mtp": json.dumps({
-        "method": "mtp",
-        "num_speculative_tokens": 2,
-        "ngram_first": True,
-        "prompt_lookup_max": 10,
-        "prompt_lookup_min": 8,
+    "ngram_default": json.dumps({
+        "method": "ngram", "num_speculative_tokens": 2,
+        "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+    }),
+    "ngram_wide": json.dumps({
+        "method": "ngram", "num_speculative_tokens": 2,
+        "prompt_lookup_max": 15, "prompt_lookup_min": 5,
+    }),
+
+    # Ngram-first + MTP — sweep token count (ngram settings = default)
+    "ngram_mtp_n1": json.dumps({
+        "method": "mtp", "num_speculative_tokens": 1,
+        "ngram_first": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+    }),
+    "ngram_mtp_n2": json.dumps({
+        "method": "mtp", "num_speculative_tokens": 2,
+        "ngram_first": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+    }),
+    "ngram_mtp_n3": json.dumps({
+        "method": "mtp", "num_speculative_tokens": 3,
+        "ngram_first": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
     }),
 }
 
@@ -230,6 +252,51 @@ def read_api_key() -> str:
     return ""
 
 
+def scrape_spec_metrics() -> dict[str, float]:
+    """Scrape speculative decoding metrics from vLLM's Prometheus endpoint.
+
+    Returns a dict with acceptance_rate, accepted_tokens, drafted_tokens, etc.
+    Returns empty dict if metrics unavailable or spec decoding is off.
+    """
+    try:
+        with httpx.Client(timeout=5) as client:
+            r = client.get(METRICS_URL)
+            if r.status_code != 200:
+                return {}
+    except (httpx.ConnectError, httpx.ReadError, httpx.ReadTimeout, ConnectionError):
+        return {}
+
+    metrics: dict[str, float] = {}
+    for line in r.text.splitlines():
+        if line.startswith("#"):
+            continue
+        # Parse Prometheus text format: metric_name{labels} value
+        for name, key in [
+            ("vllm:spec_decode_draft_acceptance_rate", "spec_acceptance_rate"),
+            ("vllm:spec_decode_efficiency", "spec_efficiency"),
+            ("vllm:spec_decode_num_accepted_tokens_total", "spec_accepted_tokens"),
+            ("vllm:spec_decode_num_draft_tokens_total", "spec_drafted_tokens"),
+            ("vllm:spec_decode_num_emitted_tokens_total", "spec_emitted_tokens"),
+            # Also try underscore variants (metric naming varies by vLLM version)
+            ("vllm_spec_decode_draft_acceptance_rate", "spec_acceptance_rate"),
+            ("vllm_spec_decode_efficiency", "spec_efficiency"),
+            ("vllm_spec_decode_num_accepted_tokens_total", "spec_accepted_tokens"),
+            ("vllm_spec_decode_num_draft_tokens_total", "spec_drafted_tokens"),
+            ("vllm_spec_decode_num_emitted_tokens_total", "spec_emitted_tokens"),
+        ]:
+            if line.startswith(name):
+                try:
+                    # Handle both "metric value" and "metric{labels} value"
+                    val_str = line.split()[-1]
+                    val = float(val_str)
+                    if key not in metrics:  # first match wins
+                        metrics[key] = val
+                except (ValueError, IndexError):
+                    pass
+
+    return metrics
+
+
 def run_scenario(
     scenario: Scenario,
     dry: bool = False,
@@ -315,7 +382,7 @@ def run_scenario(
     ttft = (t_first_token - t_start) if t_first_token else total_time
     decode_time = (t_last_token - t_first_token) if t_first_token else 0.001
 
-    return {
+    result = {
         "ttft_s": round(ttft, 3),
         "decode_tps": round(completion_tokens / decode_time, 2) if decode_time > 0 else 0,
         "overall_tps": round(completion_tokens / total_time, 2) if total_time > 0 else 0,
@@ -324,6 +391,13 @@ def run_scenario(
         "total_time_s": round(total_time, 3),
         "chunks": chunks_received,
     }
+
+    # Scrape speculative decoding metrics from Prometheus endpoint
+    spec_metrics = scrape_spec_metrics()
+    if spec_metrics:
+        result["spec_metrics"] = spec_metrics
+
+    return result
 
 
 # ---------------------------------------------------------------------------
