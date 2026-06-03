@@ -27,6 +27,12 @@ SPECULATIVE_CONFIG=${LLM_SPECULATIVE_CONFIG:-}
 ENFORCE_EAGER=${LLM_ENFORCE_EAGER:-}
 SCHEDULING_POLICY=${LLM_SCHEDULING_POLICY:-}
 DISABLE_LOG_REQUESTS=${LLM_DISABLE_LOG_REQUESTS:-}
+NUM_SCHEDULER_STEPS=${LLM_NUM_SCHEDULER_STEPS:-}
+CPU_OFFLOAD_GB=${LLM_CPU_OFFLOAD_GB:-}
+SWAP_SPACE=${LLM_SWAP_SPACE:-}
+OPTIMIZATION_LEVEL=${LLM_OPTIMIZATION_LEVEL:-}
+MAX_NUM_PARTIAL_PREFILLS=${LLM_MAX_NUM_PARTIAL_PREFILLS:-}
+LONG_PREFILL_TOKEN_THRESHOLD=${LLM_LONG_PREFILL_TOKEN_THRESHOLD:-}
 
 if [ -z "$MODEL_PATH" ]; then
     echo "ERROR: LLM_MODEL_PATH is required"
@@ -49,6 +55,9 @@ echo "  Seqs:     $MAX_NUM_SEQS concurrent"
 [ -n "$SPECULATIVE_CONFIG" ] && echo "  Speculative: $SPECULATIVE_CONFIG"
 [ "$KV_CACHE_DTYPE" != "auto" ] && echo "  KV dtype: $KV_CACHE_DTYPE"
 [ -n "$ENFORCE_EAGER" ]     && echo "  CUDA graph: disabled (enforce eager)"
+[ -n "$NUM_SCHEDULER_STEPS" ] && echo "  Scheduler steps: $NUM_SCHEDULER_STEPS"
+[ -n "$CPU_OFFLOAD_GB" ] && [ "$CPU_OFFLOAD_GB" != "0" ] && echo "  CPU offload: ${CPU_OFFLOAD_GB} GB"
+[ -n "$OPTIMIZATION_LEVEL" ] && echo "  Optimization: -O$OPTIMIZATION_LEVEL"
 [ -n "$API_KEY" ]           && echo "  API key:  (set)"
 
 exec vllm serve "$MODEL_PATH" \
@@ -74,4 +83,10 @@ exec vllm serve "$MODEL_PATH" \
     ${ENFORCE_EAGER:+--enforce-eager} \
     ${SCHEDULING_POLICY:+--scheduling-policy "$SCHEDULING_POLICY"} \
     ${DISABLE_LOG_REQUESTS:+--disable-log-requests} \
+    ${NUM_SCHEDULER_STEPS:+--num-scheduler-steps "$NUM_SCHEDULER_STEPS"} \
+    ${CPU_OFFLOAD_GB:+--cpu-offload-gb "$CPU_OFFLOAD_GB"} \
+    ${SWAP_SPACE:+--swap-space "$SWAP_SPACE"} \
+    ${OPTIMIZATION_LEVEL:+-O "$OPTIMIZATION_LEVEL"} \
+    ${MAX_NUM_PARTIAL_PREFILLS:+--max-num-partial-prefills "$MAX_NUM_PARTIAL_PREFILLS"} \
+    ${LONG_PREFILL_TOKEN_THRESHOLD:+--long-prefill-token-threshold "$LONG_PREFILL_TOKEN_THRESHOLD"} \
     "$@"
