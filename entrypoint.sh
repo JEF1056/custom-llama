@@ -33,6 +33,7 @@ OPTIMIZATION_LEVEL=${LLM_OPTIMIZATION_LEVEL:-}
 MAX_NUM_PARTIAL_PREFILLS=${LLM_MAX_NUM_PARTIAL_PREFILLS:-}
 LONG_PREFILL_TOKEN_THRESHOLD=${LLM_LONG_PREFILL_TOKEN_THRESHOLD:-}
 OVERRIDE_GENERATION_CONFIG=${LLM_OVERRIDE_GENERATION_CONFIG:-}
+DRY_CONFIG=${LLM_DRY_CONFIG:-}
 
 if [ -z "$MODEL_PATH" ]; then
     echo "ERROR: LLM_MODEL_PATH is required"
@@ -59,8 +60,7 @@ echo "  Seqs:     $MAX_NUM_SEQS concurrent"
 [ -n "$CPU_OFFLOAD_GB" ] && [ "$CPU_OFFLOAD_GB" != "0" ] && echo "  CPU offload: ${CPU_OFFLOAD_GB} GB"
 [ -n "$OPTIMIZATION_LEVEL" ] && echo "  Optimization: -O$OPTIMIZATION_LEVEL"
 [ -n "$OVERRIDE_GENERATION_CONFIG" ] && echo "  Gen config: $OVERRIDE_GENERATION_CONFIG"
-[ -n "$VLLM_DRY_MULTIPLIER" ] && [ "$VLLM_DRY_MULTIPLIER" != "0" ] && [ "$VLLM_DRY_MULTIPLIER" != "0.0" ] && \
-    echo "  DRY:      mul=$VLLM_DRY_MULTIPLIER base=${VLLM_DRY_BASE:-1.75} len=${VLLM_DRY_ALLOWED_LENGTH:-2} last_n=${VLLM_DRY_PENALTY_LAST_N:--1}"
+[ -n "$DRY_CONFIG" ]        && echo "  DRY config: $DRY_CONFIG"
 [ -n "$API_KEY" ]           && echo "  API key:  (set)"
 
 # Prevent numba/OpenMP segfault: numba's default 'omp' backend (libgomp)
@@ -96,4 +96,5 @@ exec vllm serve "$MODEL_PATH" \
     ${MAX_NUM_PARTIAL_PREFILLS:+--max-num-partial-prefills "$MAX_NUM_PARTIAL_PREFILLS"} \
     ${LONG_PREFILL_TOKEN_THRESHOLD:+--long-prefill-token-threshold "$LONG_PREFILL_TOKEN_THRESHOLD"} \
     ${OVERRIDE_GENERATION_CONFIG:+--override-generation-config "$OVERRIDE_GENERATION_CONFIG"} \
+    ${DRY_CONFIG:+--dry-config "$DRY_CONFIG"} \
     "$@"
