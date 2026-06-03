@@ -22,14 +22,10 @@ MAX_NUM_BATCHED_TOKENS=${VLLM_MAX_NUM_BATCHED_TOKENS:-}
 ENABLE_CHUNKED_PREFILL=${VLLM_ENABLE_CHUNKED_PREFILL:-}
 ENABLE_PREFIX_CACHING=${VLLM_ENABLE_PREFIX_CACHING:-}
 REASONING_PARSER=${VLLM_REASONING_PARSER:-}
-ENABLE_REASONING=${VLLM_ENABLE_REASONING:-}
 SPECULATIVE_CONFIG=${VLLM_SPECULATIVE_CONFIG:-}
 ENFORCE_EAGER=${VLLM_ENFORCE_EAGER:-}
-SWAP_SPACE=${VLLM_SWAP_SPACE:-4}
 SCHEDULING_POLICY=${VLLM_SCHEDULING_POLICY:-}
-MAX_SEQ_LEN_TO_CAPTURE=${VLLM_MAX_SEQ_LEN_TO_CAPTURE:-}
 DISABLE_LOG_REQUESTS=${VLLM_DISABLE_LOG_REQUESTS:-}
-ENABLE_METRICS=${VLLM_ENABLE_METRICS:-}
 
 if [ -z "$MODEL_PATH" ]; then
     echo "ERROR: VLLM_MODEL_PATH is required"
@@ -61,7 +57,6 @@ exec vllm serve "$MODEL_PATH" \
     --tensor-parallel-size "$TP_SIZE" \
     --max-model-len "$MAX_MODEL_LEN" \
     --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
-    --swap-space "$SWAP_SPACE" \
     --trust-remote-code \
     ${TOKENIZER_PATH:+--tokenizer "$TOKENIZER_PATH"} \
     ${SERVED_MODEL_NAME:+--served-model-name "$SERVED_MODEL_NAME"} \
@@ -72,11 +67,9 @@ exec vllm serve "$MODEL_PATH" \
     ${KV_CACHE_DTYPE:+--kv-cache-dtype "$KV_CACHE_DTYPE"} \
     ${ENABLE_CHUNKED_PREFILL:+--enable-chunked-prefill} \
     ${ENABLE_PREFIX_CACHING:+--enable-prefix-caching} \
-    ${ENABLE_REASONING:+--enable-reasoning --reasoning-parser "$REASONING_PARSER"} \
+    ${REASONING_PARSER:+--reasoning-parser "$REASONING_PARSER"} \
     ${SPECULATIVE_CONFIG:+--speculative-config "$SPECULATIVE_CONFIG"} \
     ${ENFORCE_EAGER:+--enforce-eager} \
     ${SCHEDULING_POLICY:+--scheduling-policy "$SCHEDULING_POLICY"} \
-    ${MAX_SEQ_LEN_TO_CAPTURE:+--max-seq-len-to-capture "$MAX_SEQ_LEN_TO_CAPTURE"} \
     ${DISABLE_LOG_REQUESTS:+--disable-log-requests} \
-    ${ENABLE_METRICS:+--enable-metrics} \
     "$@"

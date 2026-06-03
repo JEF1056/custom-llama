@@ -1,8 +1,8 @@
 # custom-llama
 
-A self-hosted LLM inference server powered by [SGLang](https://github.com/JEF1056/sglang-turboquant) (TurboQuant fork with fused Triton KV cache). Serves AutoRound INT4 safetensors models. Exposed publicly via Cloudflare Tunnel with Cloudflare Access authentication.
+A self-hosted LLM inference server powered by [vLLM](https://github.com/vllm-project/vllm) v0.22.0. Serves AutoRound INT4 safetensors models with TurboQuant KV cache compression, MTP speculative decoding, and vision support. Exposed publicly via Cloudflare Tunnel with Cloudflare Access authentication.
 
-**Default model:** [Qwen3.6-27B AutoRound INT4](https://huggingface.co/Lorbus/Qwen3.6-27B-int4-AutoRound) — 19 GB, MTP heads in BF16, vision support, NEXTN speculative decoding (~90% acceptance on RTX 3090).
+**Default model:** [Qwen3.6-27B AutoRound INT4](https://huggingface.co/Lorbus/Qwen3.6-27B-int4-AutoRound) — 19 GB, native MTP heads, vision support, 128K context on a single RTX 3090.
 
 ---
 
@@ -11,22 +11,21 @@ A self-hosted LLM inference server powered by [SGLang](https://github.com/JEF105
 No Cloudflare or secrets needed — just the inference server on this machine.
 
 ```bash
-# 1. Generate .env from defaults (auto-generates SGLANG_API_KEY, MCP_API_KEY)
+# 1. Generate .env from defaults (auto-generates VLLM_API_KEY, MCP_API_KEY)
 python sync-env.py
 
 # 2. Build images
-docker compose build sglang-server model-prep mcp-search-server
+docker compose build vllm-server model-prep mcp-search-server
 
 # 3. Download the default AutoRound INT4 model (~19 GB)
 docker compose run --rm model-prep download qwen3.6-27b-autoround
 
 # 4. .env already defaults to this model — no changes needed
-#    SGLANG_MODEL_PATH=/models/qwen3.6-27b-autoround
-#    SGLANG_QUANTIZATION=auto-round
-#    SGLANG_SPECULATIVE_ALGO=NEXTN
+#    VLLM_MODEL_PATH=/models/qwen3.6-27b-autoround
+#    VLLM_SERVED_MODEL_NAME=qwen3.6-27b
 
 # 5. Start
-docker compose up -d sglang-server mcp-search-server
+docker compose up -d vllm-server mcp-search-server
 ```
 
 Port 8080 is exposed via `docker-compose.override.yml` (gitignored) for local dev. Test with:
@@ -47,7 +46,7 @@ Create this file at the project root to expose all services to your local machin
 # Exposes all services to localhost for local development.
 # gitignored — do not commit.
 services:
-  sglang-server:
+  vllm-server:
     restart: "no"
     ports:
       - "8080:8080"
@@ -76,11 +75,11 @@ networks:
 
 | Service | Local URL |
 |---|---|
-| `sglang-server` | `http://localhost:8080` |
+| `vllm-server` | `http://localhost:8080` |
 | `mcp-search-server` | `http://localhost:3100` |
 | `chat-ui` | `http://localhost:5173` |
 
-> **Note:** `sglang-server` intentionally has no port mapping in `docker-compose.yml` — it is only reachable via Cloudflare Tunnel in production. The override adds the localhost binding for local dev only.
+> **Note:** `vllm-server` intentionally has no port mapping in `docker-compose.yml` — it is only reachable via Cloudflare Tunnel in production. The override adds the localhost binding for local dev only.
 
 ---
 
@@ -88,27 +87,19 @@ networks:
 
 | Image | Dockerfile | Purpose |
 |---|---|---|
-| `sglang-server` | `Dockerfile` | SGLang CUDA server, built from `JEF1056/sglang-turboquant` |
+| `vllm-server` | `Dockerfile` | vLLM v0.22.0 inference server (official image) |
 | `model-prep` | `Dockerfile.modelprep` | Lightweight Python image for downloading AutoRound models |
 | `mcp-search-server` | `mcp-search-server/Dockerfile` | Web search MCP tool |
 
-### SGLang server (`Dockerfile`)
+### vLLM server (`Dockerfile`)
 
-Built from source from `JEF1056/sglang-turboquant` — a fork of [sgl-project/sglang](https://github.com/sgl-project/sglang) with **TurboQuant PR #23135** merged in:
+Uses the official `vllm/vllm-openai:v0.22.0` image with a custom entrypoint. Key features:
 
-- **AutoRound INT4** — `--quantization auto-round` loads pre-quantized safetensors with MTP heads preserved in BF16. Fits 19 GB on RTX 3090, leaving ~5 GB for KV cache and CUDA graphs.
-- **TurboQuant KV cache** — fused Triton kernels, 3.88× KV compression, CUDA graph compatible.
-- **NEXTN speculative decoding** — uses the model's own MTP heads, no separate draft model required.
-- **Reasoning parser** — structured `<think>…</think>` extraction for Qwen3 and DeepSeek models.
-
-> **Pre-requisite:** Merge `sgl-project/sglang` PR #23135 into `JEF1056/sglang-turboquant` on GitHub before building.
-
-#### sgl-kernel build modes
-
-| Mode | Command | Time | Notes |
-|---|---|---|---|
-| **Precompiled** (default) | `docker compose build sglang-server` | ~1 min | cu124 wheel; targets sm80/sm86/sm89/sm90 |
-| **From source** | `docker compose build --build-arg SGL_KERNEL_FROM_SOURCE=1 sglang-server` | ~10–20 min | SM86-optimised; strips SM100+/FA3 |
+- **AutoRound INT4** — pre-quantized safetensors, auto-detected by vLLM from `quantize_config.json`. Fits 19 GB on RTX 3090, leaving ~3.5 GB raw for KV cache.
+- **TurboQuant KV cache** — `turboquant_4bit_nc` preset (upstream since vLLM 0.20). 4-bit keys + 4-bit values with norm correction, 3.8× KV compression, +2.71% PPL.
+- **MTP speculative decoding** — uses the model's native multi-token prediction heads via `--speculative-config`. No separate draft model, zero extra VRAM, ~70-85% acceptance rate.
+- **Reasoning parser** — structured `<think>…</think>` extraction via `--reasoning-parser qwen3`.
+- **Vision** — auto-detected from Qwen3.6 checkpoint, no flag needed.
 
 ### Model prep image (`Dockerfile.modelprep`)
 
@@ -127,11 +118,11 @@ Lightweight Python 3.12 + `huggingface_hub` + `hf_transfer`. Downloads AutoRound
                              │ Cloudflare Access (auth required)
               ┌──────────────▼────────────────────┐
               │         Host Machine               │
-              │  cloudflared → sglang-server:8080 │
+              │  cloudflared → vllm-server:8080   │
               └───────────────┬────────────────────┘
                               │ llama-net (internal)
                     ┌─────────────────────────┐
-                    │  sglang-server :8080   │
+                    │  vllm-server :8080      │
                     │  mcp-search-server :3100│
                     └─────────────────────────┘
 ```
@@ -145,18 +136,14 @@ Lightweight Python 3.12 + `huggingface_hub` + `hf_transfer`. Downloads AutoRound
 
 ## Step-by-step setup guide
 
-### Step 1: Merge TurboQuant PR into fork
-
-On GitHub, merge [sgl-project/sglang PR #23135](https://github.com/sgl-project/sglang/pull/23135) into `JEF1056/sglang-turboquant`. This is a one-time manual step required before building the server image.
-
-### Step 2: Create Cloudflare Tunnel
+### Step 1: Create Cloudflare Tunnel
 
 1. Go to [Cloudflare Zero Trust](https://one.dash.cloudflare.com/) → **Networks → Tunnels**
 2. Click **Create a tunnel** → **Docker** → copy the token
 3. Paste into `.env` as `CF_TUNNEL_TOKEN`
-4. Add Public Hostname: `chat.jessfan.com` → `http://sglang-server:8080`
+4. Add Public Hostname: `chat.jessfan.com` → `http://vllm-server:8080`
 
-### Step 3: Configure `.env`
+### Step 2: Configure `.env`
 
 ```bash
 python sync-env.py
@@ -169,14 +156,13 @@ Edit `.env` and set at minimum:
 CF_TUNNEL_TOKEN=eyJhIjoi...
 
 # Model defaults are already correct after downloading:
-SGLANG_MODEL_PATH=/models/qwen3.6-27b-autoround
-SGLANG_QUANTIZATION=auto-round
-SGLANG_SERVED_MODEL_NAME=qwen3.6-27b
+VLLM_MODEL_PATH=/models/qwen3.6-27b-autoround
+VLLM_SERVED_MODEL_NAME=qwen3.6-27b
 ```
 
-`SGLANG_API_KEY` and `MCP_API_KEY` are auto-generated by `sync-env.py` if empty.
+`VLLM_API_KEY` and `MCP_API_KEY` are auto-generated by `sync-env.py` if empty.
 
-### Step 4: Download a model
+### Step 3: Download a model
 
 ```bash
 # Build the model-prep image (CPU-only, no GPU needed)
@@ -194,17 +180,14 @@ docker compose run --rm model-prep list
 
 > **Gated models:** set `HF_TOKEN=your_token` in `.env` before downloading.
 
-### Step 5: Build and start
+### Step 4: Build and start
 
 ```bash
-# Build SGLang server (uses precompiled sgl-kernel wheel by default — fast)
-docker compose build sglang-server
-
-# To compile sgl-kernel from source instead (SM86-optimised, ~10–20 min):
-docker compose build --build-arg SGL_KERNEL_FROM_SOURCE=1 sglang-server
+# Build vLLM server (uses official vllm-openai image — fast)
+docker compose build vllm-server
 
 # Start inference server + MCP search tool
-docker compose up -d sglang-server mcp-search-server
+docker compose up -d vllm-server mcp-search-server
 
 # With Cloudflare Tunnel
 docker compose up -d
@@ -212,11 +195,11 @@ docker compose up -d
 
 Check logs:
 ```bash
-docker compose logs -f sglang-server    # allow up to 5 min for large model load
-docker compose logs -f cloudflared      # should show "connected"
+docker compose logs -f vllm-server     # allow up to 5 min for large model load
+docker compose logs -f cloudflared     # should show "connected"
 ```
 
-### Step 6: Test
+### Step 5: Test
 
 ```bash
 curl http://localhost:8080/health
@@ -224,11 +207,11 @@ curl http://localhost:8080/v1/models
 
 curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $SGLANG_API_KEY" \
+  -H "Authorization: Bearer $VLLM_API_KEY" \
   -d '{"model": "qwen3.6-27b", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
-### Step 7: Connect a client
+### Step 6: Connect a client
 
 ```python
 import openai
@@ -254,19 +237,45 @@ response = client.chat.completions.create(
 
 | Variable | Default | Description |
 |---|---|---|
-| `SGLANG_MODEL_PATH` | `/models/qwen3.6-27b-autoround` | Local safetensors directory inside container |
-| `SGLANG_QUANTIZATION` | `auto-round` | Quantization format (`auto-round`, `gptq`) |
-| `SGLANG_TOKENIZER_PATH` | — | Leave empty — bundled in AutoRound repo |
-| `SGLANG_SERVED_MODEL_NAME` | `qwen3.6-27b` | Model alias for `/v1/models` |
-| `SGLANG_CONTEXT_LENGTH` | `262144` | Max context window in tokens |
-| `SGLANG_MEM_FRACTION_STATIC` | `0.90` | GPU VRAM fraction for weights + KV |
-| `SGLANG_MAX_RUNNING_REQUESTS` | `3` | Concurrent request slots |
-| `SGLANG_TP_SIZE` | `1` | Tensor parallelism (number of GPUs) |
-| `SGLANG_KV_CACHE_DTYPE` | — | KV cache quantization. Leave empty for default. |
-| `SGLANG_REASONING_PARSER` | `qwen3` | Reasoning extraction parser |
-| `SGLANG_SPECULATIVE_ALGO` | `NEXTN` | Speculative decoding (AutoRound models have MTP heads) |
-| `SGLANG_SPECULATIVE_EAGLE_TOPK` | `1` | Draft tree width (1 = linear, recommended for NEXTN) |
-| `SGLANG_API_KEY` | auto-generated | Bearer token for API auth |
+| `VLLM_MODEL_PATH` | `/models/qwen3.6-27b-autoround` | Local safetensors directory inside container |
+| `VLLM_QUANTIZATION` | — | Auto-detected from checkpoint; override with `gptq`, `awq`, etc. |
+| `VLLM_TOKENIZER_PATH` | — | Leave empty — bundled in model repo |
+| `VLLM_SERVED_MODEL_NAME` | `qwen3.6-27b` | Model alias for `/v1/models` |
+| `VLLM_MAX_MODEL_LEN` | `128000` | Max context window in tokens |
+| `VLLM_GPU_MEMORY_UTILIZATION` | `0.95` | GPU VRAM fraction for weights + KV |
+| `VLLM_MAX_NUM_SEQS` | `1` | Concurrent request slots (1 for 128K context) |
+| `VLLM_TP_SIZE` | `1` | Tensor parallelism (number of GPUs) |
+| `VLLM_KV_CACHE_DTYPE` | `turboquant_4bit_nc` | KV cache quantization (3.8× compression) |
+| `VLLM_REASONING_PARSER` | `qwen3` | Reasoning extraction parser |
+| `VLLM_SPECULATIVE_CONFIG` | `{"method":"mtp","num_speculative_tokens":1}` | MTP speculative decoding config |
+| `VLLM_ENFORCE_EAGER` | — | Set to `1` to save ~1.5 GB VRAM (slower decode) |
+| `VLLM_API_KEY` | auto-generated | Bearer token for API auth |
+
+### RTX 3090 VRAM budget
+
+Qwen3.6-27B is a **hybrid model**: 64 layers total, but only **16 full-attention layers** cache KV (the other 48 are linear-attention with fixed-size recurrent state). This dramatically reduces KV cache cost vs. a pure transformer.
+
+| Component | VRAM | Notes |
+|---|---|---|
+| INT4 weights + scales | ~15.5 GB | 27B × 0.5 B/param + 15% group overhead |
+| Embeddings + LM head (BF16) | ~2.4 GB | vocab 248K × hidden 5120 × 2 × 2B |
+| Vision tower (BF16) | ~0.4 GB | 27-layer ViT encoder |
+| MTP heads (BF16) | ~0.2 GB | Native multi-token prediction |
+| Linear attn state (fixed) | ~0.1 GB | 48 layers, does not grow with context |
+| CUDA context + activations | ~0.5 GB | |
+| **Total non-KV** | **~19.1 GB** | |
+| **KV cache budget** | **~3.7 GB raw** | 22.8 GB usable − 19.1 GB |
+
+**KV cache per token:** 2 × 16 layers × 4 KV heads × 256 dim × 2B = **64 KB**
+
+| KV dtype | Compression | Token capacity | Max context (×1 seq) |
+|---|---|---|---|
+| BF16 (auto) | 1× | ~59K | 59K |
+| fp8 | 2× | ~118K | 118K |
+| turboquant_k8v4 | 2.6× | ~154K | 154K |
+| **turboquant_4bit_nc** | **3.8×** | **~225K** | **225K** |
+
+128K fits with ~97K tokens of headroom.
 
 ---
 
@@ -274,20 +283,21 @@ response = client.chat.completions.create(
 
 | Service | Purpose |
 |---|---|
-| `sglang-server` | SGLang inference server (port 8080) |
-| `cloudflared` | Cloudflare Tunnel — exposes sglang-server publicly |
+| `vllm-server` | vLLM inference server (port 8080) |
+| `cloudflared` | Cloudflare Tunnel — exposes vllm-server publicly |
 | `model-prep` | Download AutoRound models into `./models/` — profile: `convert` |
 | `mcp-search-server` | Web search MCP tool (port 3100) |
+| `chat-ui` | Vite + React chat interface (port 5173) |
 
 ---
 
 ## Troubleshooting
 
-- **Model not loading:** Check `docker compose logs sglang-server`. Common causes: `SGLANG_MODEL_PATH` wrong, `SGLANG_QUANTIZATION` not set to `auto-round`, insufficient VRAM.
-- **OOM / loading fails:** Lower `SGLANG_MEM_FRACTION_STATIC` (try `0.85`) or reduce `SGLANG_CONTEXT_LENGTH`.
-- **NEXTN speculative not working:** AutoRound models preserve MTP heads in BF16 — ensure `SGLANG_SPECULATIVE_ALGO=NEXTN` is set. If acceptance rate is near 0%, fall back to `NGRAM`.
-- **DeltaNet / unsupported arch:** Qwen3.6's hybrid architecture may not load in all SGLang versions. Check the TurboQuant fork's issue tracker for arch compatibility.
-- **TurboQuant KV error at startup:** Set `SGLANG_KV_CACHE_DTYPE=auto` and verify PR #23135 is merged.
+- **Model not loading:** Check `docker compose logs vllm-server`. Common causes: `VLLM_MODEL_PATH` wrong, model directory empty, insufficient VRAM.
+- **OOM at startup:** Lower `VLLM_GPU_MEMORY_UTILIZATION` (try `0.92`) or reduce `VLLM_MAX_MODEL_LEN`. If OOM occurs during CUDA graph capture, set `VLLM_ENFORCE_EAGER=1`.
+- **OOM at 128K:** Set `VLLM_ENFORCE_EAGER=1` to reclaim ~1.5 GB, and ensure `VLLM_MAX_NUM_SEQS=1`. The hybrid arch (only 16/64 layers cache KV) means 128K should fit without eager mode, but activation spikes can still cause OOM.
+- **MTP not working:** Verify the model checkpoint includes MTP heads. Check `VLLM_SPECULATIVE_CONFIG` is valid JSON. If acceptance rate is near 0%, try `"num_speculative_tokens": 2`.
+- **TurboQuant error:** Ensure vLLM ≥ 0.20 (TurboQuant merged upstream April 2026). MLA models are not supported — TurboQuant raises `NotImplementedError` on MLA architectures.
 - **Cloudflare Tunnel not connecting:** Verify `CF_TUNNEL_TOKEN`. Check `docker compose logs cloudflared`.
 - **GPU not detected:** Verify NVIDIA Container Toolkit. Run `docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi`.
-- **sgl-kernel build fails:** Only applies when `SGL_KERNEL_FROM_SOURCE=1`. Ensure the CUDA devel image matches your driver. Default precompiled wheel avoids this entirely.
+- **Slow decode speed:** If `VLLM_ENFORCE_EAGER=1`, you lose 10-30% decode speed. Unset it and set `VLLM_MAX_SEQ_LEN_TO_CAPTURE=8192` to re-enable CUDA graphs with bounded capture memory.
