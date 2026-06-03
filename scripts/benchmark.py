@@ -164,19 +164,24 @@ def restart_server(
     env["LLM_KV_CACHE_DTYPE"] = kv_cache_dtype
     env["LLM_SPECULATIVE_CONFIG"] = speculative_config
     env["LLM_DRY_CONFIG"] = dry_config
-    env["LLM_DISABLE_LOG_REQUESTS"] = "1"
+    # Don't set LLM_DISABLE_LOG_REQUESTS — let .env default control it
 
     cmd = [
         "docker", "compose", *COMPOSE_FILES,
         "up", "-d", "--force-recreate", "vllm-server",
     ]
     _log(f"Restarting server: kv={kv_cache_dtype} spec={speculative_config or '(none)'}")
+    _log(f"  cmd: {' '.join(cmd)}")
     result = subprocess.run(
         cmd, env=env, cwd=PROJECT_ROOT,
         capture_output=True, text=True,
     )
+    # Always show docker compose output so restarts are visible
+    if result.stdout.strip():
+        _log(f"  stdout: {result.stdout.strip()}")
+    if result.stderr.strip():
+        _log(f"  stderr: {result.stderr.strip()}")
     if result.returncode != 0:
-        _log(f"ERROR: docker compose failed:\n{result.stderr}")
         raise RuntimeError(f"docker compose restart failed (rc={result.returncode})")
 
 
@@ -193,7 +198,8 @@ def wait_for_health(timeout: int = HEALTH_TIMEOUT) -> float:
                     waited = time.monotonic() - start
                     _log(f"Server healthy after {waited:.0f}s")
                     return waited
-            except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError):
+            except (httpx.ConnectError, httpx.ReadError, httpx.ReadTimeout,
+                    httpx.RemoteProtocolError, httpx.WriteError, ConnectionError):
                 pass
             time.sleep(HEALTH_POLL_INTERVAL)
     raise TimeoutError(f"Server not healthy after {timeout}s")
