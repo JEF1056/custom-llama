@@ -338,6 +338,7 @@ python scripts/benchmark.py --phase 1       # run only Phase 1
 python scripts/benchmark.py --runs 5        # 5 runs per scenario (default 3)
 python scripts/benchmark.py --resume        # resume an interrupted run
 python scripts/benchmark.py --report-only   # regenerate report from existing data
+python scripts/benchmark.py --stop-on-error # abort on first error instead of continuing
 ```
 
 ### Output

@@ -82,46 +82,28 @@ SPEC_CONFIGS: dict[str, str] = {
         "draft_sample_method": "probabilistic",
     }),
 
-    # Ngram (GPU) standalone — DISABLED: 0% acceptance with quantized KV cache
-    # (TurboQuant shifts distributions, see vllm#40831).
-    # Kept commented for reference; use ngram_first instead.
-    # "ngram_tight": json.dumps({
-    #     "method": "ngram_gpu", "num_speculative_tokens": 3,
-    #     "prompt_lookup_max": 10, "prompt_lookup_min": 8,
-    # }),
-    # "ngram_default": json.dumps({
-    #     "method": "ngram_gpu", "num_speculative_tokens": 5,
-    #     "prompt_lookup_max": 15, "prompt_lookup_min": 8,
-    # }),
-    # "ngram_wide": json.dumps({
-    #     "method": "ngram_gpu", "num_speculative_tokens": 7,
-    #     "prompt_lookup_max": 20, "prompt_lookup_min": 8,
-    # }),
-
-    # Ngram-first (GPU) + MTP — ngram pre-check before MTP proposer.
-    # When ngram finds a full match, MTP forward pass is skipped entirely.
+    # MTP + ngram fallback — MTP runs first, ngram supplements where MTP is
+    # uncertain and a historical suffix match exists. The ngram GPU kernel
+    # costs ~0.1ms so it's essentially free as a fallback pass.
     # prompt_lookup_min=8: required for Qwen3 tool-call safety (vllm#40875).
-    # Configs vary num_speculative_tokens and prompt_lookup_max:
-    #   - n1 + max=10: conservative, high acceptance, narrow ngram window
-    #   - n2 + max=10: sweet spot — best balance of throughput and acceptance
-    #   - n3 + max=10: aggressive — diminishing returns if acceptance drops <60%
-    #   - n2 + max=20: wider ngram window, more matches in repetitive content
-    # "nf_mtp_n1": json.dumps({
-    #     "method": "mtp", "num_speculative_tokens": 1,
-    #     "ngram_first": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
-    # }),
-    # "nf_mtp_n2": json.dumps({
-    #     "method": "mtp", "num_speculative_tokens": 2,
-    #     "ngram_first": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
-    # }),
-    # "nf_mtp_n3": json.dumps({
-    #     "method": "mtp", "num_speculative_tokens": 3,
-    #     "ngram_first": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
-    # }),
-    # "nf_mtp_n2_wide": json.dumps({
-    #     "method": "mtp", "num_speculative_tokens": 2,
-    #     "ngram_first": True, "prompt_lookup_max": 20, "prompt_lookup_min": 8,
-    # }),
+    # ngram_fallback_threshold: MTP confidence below this triggers ngram override.
+    "mtp_n2_nfb": json.dumps({
+        "method": "mtp", "num_speculative_tokens": 2,
+        "ngram_fallback": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+    }),
+    "mtp_n3_nfb": json.dumps({
+        "method": "mtp", "num_speculative_tokens": 3,
+        "ngram_fallback": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+    }),
+    "mtp_n2_nfb_wide": json.dumps({
+        "method": "mtp", "num_speculative_tokens": 2,
+        "ngram_fallback": True, "prompt_lookup_max": 20, "prompt_lookup_min": 8,
+    }),
+    "mtp_n2_nfb_thresh05": json.dumps({
+        "method": "mtp", "num_speculative_tokens": 2,
+        "ngram_fallback": True, "ngram_fallback_threshold": 0.05,
+        "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+    }),
 }
 
 # KV cache dtype configs for Phase 2
@@ -535,6 +517,7 @@ def _run_config_sweep(
     results_path: Path,
     completed: set[tuple],
     api_key: str,
+    stop_on_error: bool = False,
 ) -> list[dict[str, Any]]:
     """Generic sweep: restart per config, run all scenarios × runs."""
     total = len(configs) * len(SCENARIOS) * runs_per_scenario
@@ -571,6 +554,9 @@ def _run_config_sweep(
             except (TimeoutError, RuntimeError) as e:
                 _log(f"Server failed for {label}: {e} — skipping config")
                 last_kv, last_spec = None, None
+                if stop_on_error:
+                    tracker.finish()
+                    raise RuntimeError(f"server startup failed for {label}: {e}") from e
                 _flush_remaining_as_error(
                     phase, kv, spec, label, dry, runs_per_scenario,
                     completed, results_path, all_results, tracker,
@@ -605,12 +591,20 @@ def _run_config_sweep(
                 except (httpx.ConnectError, httpx.RemoteProtocolError,
                         ConnectionError) as e:
                     _log(f"\nSERVER CRASHED: {label} x {scenario.name} run {run_num}: {e}")
+                    if stop_on_error:
+                        tracker.finish()
+                        raise RuntimeError(
+                            f"server crashed: {label} x {scenario.name} run {run_num}: {e}"
+                        ) from e
                     server_crashed = True
                     metrics = {}
                     status = "error"
                     error = f"server_crashed: {e}"
                 except Exception as e:
                     _log(f"\nERROR: {label} x {scenario.name} run {run_num}: {e}")
+                    if stop_on_error:
+                        tracker.finish()
+                        raise
                     metrics = {}
                     status = "error"
                     error = str(e)
@@ -661,6 +655,7 @@ def _run_config_sweep(
 
 def run_phase_1(
     runs: int, results_path: Path, completed: set[tuple], api_key: str,
+    *, stop_on_error: bool = False,
 ) -> str:
     """Phase 1: Speculative decoding sweep. Returns winner spec config.
 
@@ -684,13 +679,14 @@ def run_phase_1(
         results_path=results_path,
         completed=completed,
         api_key=api_key,
+        stop_on_error=stop_on_error,
     )
     return _pick_winner(results, "speculative_config")
 
 
 def run_phase_2(
     runs: int, results_path: Path, completed: set[tuple], api_key: str,
-    spec_winner: str,
+    spec_winner: str, *, stop_on_error: bool = False,
 ) -> str:
     """Phase 2: KV cache dtype sweep. Returns winner KV dtype."""
     _log("\n=== Phase 2: KV Cache Dtype ===")
@@ -710,13 +706,14 @@ def run_phase_2(
         results_path=results_path,
         completed=completed,
         api_key=api_key,
+        stop_on_error=stop_on_error,
     )
     return _pick_winner(results, "kv_cache_dtype")
 
 
 def run_phase_3(
     runs: int, results_path: Path, completed: set[tuple], api_key: str,
-    spec_winner: str, kv_winner: str,
+    spec_winner: str, kv_winner: str, *, stop_on_error: bool = False,
 ) -> None:
     """Phase 3: DRY on vs off (per-request, no restart)."""
     _log("\n=== Phase 3: DRY Sampling ===")
@@ -750,6 +747,9 @@ def run_phase_3(
                         error = None
                     except Exception as e:
                         _log(f"\nERROR: {dry_label} x {scenario.name} run {run_num}: {e}")
+                        if stop_on_error:
+                            tracker.finish()
+                            raise
                         metrics = {}
                         status = "error"
                         error = str(e)
@@ -798,6 +798,8 @@ def run_phase_3(
                         status = "ok"
                         error = None
                     except Exception as e:
+                        if stop_on_error:
+                            raise
                         metrics = {}
                         status = "error"
                         error = str(e)
@@ -821,7 +823,7 @@ def run_phase_3(
 
 def run_phase_4(
     results_path: Path, completed: set[tuple], api_key: str,
-    spec_winner: str, kv_winner: str,
+    spec_winner: str, kv_winner: str, *, stop_on_error: bool = False,
 ) -> None:
     """Phase 4: Cross-validate top 3 full configs with 5 runs."""
     _log("\n=== Phase 4: Cross-validation ===")
@@ -878,6 +880,8 @@ def run_phase_4(
                     status = "ok"
                     error = None
                 except Exception as e:
+                    if stop_on_error:
+                        raise
                     metrics = {}
                     status = "error"
                     error = str(e)
@@ -1215,6 +1219,7 @@ def _run_parallel_requests(
 def run_phase_5(
     results_path: Path, completed: set[tuple], api_key: str,
     spec_winner: str, kv_winner: str, dry_winner: bool,
+    *, stop_on_error: bool = False,
 ) -> None:
     """Phase 5: Stress test the optimal config with sustained, burst, and parallel workloads."""
     _log("\n=== Phase 5: Stress Test ===")
@@ -1269,6 +1274,8 @@ def run_phase_5(
                          f"per_req_mean={metrics['per_request_tps_mean']:.1f} tok/s, "
                          f"wall={metrics['wall_time_s']:.1f}s")
                 except Exception as e:
+                    if stop_on_error:
+                        raise
                     _log(f"\nERROR: {stress['name']} run {run_num}: {e}")
                     metrics = {}
                     status = "error"
@@ -1330,6 +1337,8 @@ def run_phase_5(
                     error = None
                     burst_results.append(metrics)
                 except Exception as e:
+                    if stop_on_error:
+                        raise
                     _log(f"\nERROR: {stress['name']} run {run_num}: {e}")
                     metrics = {}
                     status = "error"
@@ -1422,8 +1431,8 @@ def _spec_label(spec: str) -> str:
     try:
         d = json.loads(spec)
         method = d.get("method", "?")
-        if d.get("ngram_first"):
-            return "ngram+mtp"
+        if d.get("ngram_fallback"):
+            return f"{method}+nfb"
         return method
     except json.JSONDecodeError:
         return spec[:15]
@@ -1446,6 +1455,8 @@ def main():
     parser.add_argument("--resume", action="store_true", help="Resume from existing JSONL")
     parser.add_argument("--report-only", action="store_true", help="Regenerate report from JSONL")
     parser.add_argument("--results-file", type=str, help="Path to existing JSONL (for resume/report)")
+    parser.add_argument("--stop-on-error", action="store_true",
+                        help="Abort immediately on any error instead of continuing")
     args = parser.parse_args()
 
     # Determine results file path
@@ -1491,7 +1502,8 @@ def main():
     kv_winner = DEFAULT_KV
 
     if args.phase is None or args.phase == 1:
-        spec_winner = run_phase_1(args.runs, results_path, completed, api_key)
+        spec_winner = run_phase_1(args.runs, results_path, completed, api_key,
+                                   stop_on_error=args.stop_on_error)
     elif args.phase and args.phase > 1:
         # Need to determine Phase 1 winner from existing results
         existing = [r for r in load_results(results_path) if r.get("phase") == 1]
@@ -1499,7 +1511,8 @@ def main():
             spec_winner = _pick_winner(existing, "speculative_config")
 
     if args.phase is None or args.phase == 2:
-        kv_winner = run_phase_2(args.runs, results_path, completed, api_key, spec_winner)
+        kv_winner = run_phase_2(args.runs, results_path, completed, api_key, spec_winner,
+                                stop_on_error=args.stop_on_error)
     elif args.phase and args.phase > 2:
         existing = [r for r in load_results(results_path) if r.get("phase") == 2]
         if existing:
@@ -1508,7 +1521,8 @@ def main():
     dry_winner = False  # default
 
     if args.phase is None or args.phase == 3:
-        run_phase_3(args.runs, results_path, completed, api_key, spec_winner, kv_winner)
+        run_phase_3(args.runs, results_path, completed, api_key, spec_winner, kv_winner,
+                    stop_on_error=args.stop_on_error)
 
     # Determine DRY winner from Phase 3 results
     p3 = [r for r in load_results(results_path) if r.get("phase") == 3 and r.get("status") == "ok"]
@@ -1525,10 +1539,12 @@ def main():
                  f"delta={((mean_on - mean_off) / mean_off) * 100:+.1f}%)")
 
     if args.phase is None or args.phase == 4:
-        run_phase_4(results_path, completed, api_key, spec_winner, kv_winner)
+        run_phase_4(results_path, completed, api_key, spec_winner, kv_winner,
+                    stop_on_error=args.stop_on_error)
 
     if args.phase is None or args.phase == 5:
-        run_phase_5(results_path, completed, api_key, spec_winner, kv_winner, dry_winner)
+        run_phase_5(results_path, completed, api_key, spec_winner, kv_winner, dry_winner,
+                    stop_on_error=args.stop_on_error)
 
     total_time = time.monotonic() - bench_start
     _log(f"\nBenchmark complete in {_fmt_duration(total_time)}")
