@@ -410,6 +410,61 @@ def _section_spec_acceptance(results: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _section_kv_token_efficiency(results: list[dict]) -> str:
+    """Token efficiency table for Phase 2: tok/s per bit of KV cache."""
+    ok = [r for r in _ok_results(results) if r.get("phase") == 2]
+    if not ok:
+        return ""
+
+    scenarios = sorted(set(r["scenario"] for r in ok))
+    configs = sorted(set(r["server_config"]["kv_cache_dtype"] for r in ok))
+
+    # config → scenario → [tps]
+    data: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    for r in ok:
+        kv = r["server_config"]["kv_cache_dtype"]
+        tps_key = "decode_tps" if r["scenario"] == "tool_calling" else "overall_tps"
+        data[kv][r["scenario"]].append(r["metrics"].get(tps_key, 0))
+
+    lines = ["### Token Efficiency (tok/s per KV bit)\n"]
+    lines.append("_Higher = more throughput per unit of cache memory. "
+                 "Computed as mean tok/s ÷ bit-sum (K bits + V bits)._\n")
+
+    header = "| KV Dtype | Bit-sum | " + " | ".join(scenarios) + " | **Mean Efficiency** |"
+    sep = "|----------|---------|" + "|".join(["------"] * len(scenarios)) + "|---------------------|"
+    lines.append(header)
+    lines.append(sep)
+
+    efficiency_overall: dict[str, float] = {}
+    for cfg in configs:
+        bits = _kv_bit_sum(cfg)
+        row = [cfg, str(bits)]
+        all_eff = []
+        for sc in scenarios:
+            vals = data[cfg].get(sc, [])
+            if vals:
+                m = statistics.mean(vals)
+                eff = round(m / bits, 2) if bits > 0 else 0
+                row.append(f"{eff}")
+                all_eff.append(eff)
+            else:
+                row.append("—")
+        mean_eff = round(statistics.mean(all_eff), 2) if all_eff else 0
+        efficiency_overall[cfg] = mean_eff
+        row.append(f"**{mean_eff}**")
+        lines.append("| " + " | ".join(str(x) for x in row) + " |")
+
+    # Highlight the most efficient config
+    if efficiency_overall:
+        best = max(efficiency_overall, key=efficiency_overall.get)  # type: ignore[arg-type]
+        lines.append(f"\n**Most token-efficient**: `{best}` "
+                     f"(bit-sum={_kv_bit_sum(best)}, "
+                     f"efficiency={efficiency_overall[best]} tok/s/bit)")
+
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
 def _section_dry(results: list[dict]) -> str:
     """Phase 3: DRY on vs off comparison."""
     ok = [r for r in _ok_results(results) if r.get("phase") == 3]
@@ -782,6 +837,7 @@ def generate_report(results_path: Path, report_path: Path) -> None:
             label_fn=lambda x: x,
             baseline_value="turboquant_k4v2_nc",
         ),
+        _section_kv_token_efficiency(results),
         _section_dry(results),
         _section_crossval(results),
         _section_stress_test(results),
