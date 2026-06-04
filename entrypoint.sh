@@ -63,6 +63,14 @@ echo "  Seqs:     $MAX_NUM_SEQS concurrent"
 [ -n "$DRY_CONFIG" ]        && echo "  DRY config: $DRY_CONFIG"
 [ -n "$API_KEY" ]           && echo "  API key:  (set)"
 
+# Clear stale torch.compile cache from previous runs.
+# Code changes (fork overlay, new image) invalidate cached AOT artifacts;
+# stale entries cause copy_misaligned_inputs crashes at startup.
+if [ -d "/root/.cache/vllm/torch_compile_cache" ]; then
+    echo "  Clearing stale torch.compile cache"
+    rm -rf /root/.cache/vllm/torch_compile_cache
+fi
+
 # Prevent numba/OpenMP segfault: numba's default 'omp' backend (libgomp)
 # conflicts with PyTorch's libomp in the same process.
 export NUMBA_THREADING_LAYER=workqueue
