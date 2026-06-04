@@ -91,26 +91,26 @@ SPEC_CONFIGS: dict[str, str] = {
         "method": "mtp", "num_speculative_tokens": 2,
         "ngram_fallback": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
     }),
-    "mtp_n3_nfb": json.dumps({
-        "method": "mtp", "num_speculative_tokens": 3,
-        "ngram_fallback": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
-    }),
-    "mtp_n2_nfb_wide": json.dumps({
-        "method": "mtp", "num_speculative_tokens": 2,
-        "ngram_fallback": True, "prompt_lookup_max": 20, "prompt_lookup_min": 8,
-    }),
-    "mtp_n2_nfb_thresh05": json.dumps({
-        "method": "mtp", "num_speculative_tokens": 2,
-        "ngram_fallback": True, "ngram_fallback_threshold": 0.05,
-        "prompt_lookup_max": 10, "prompt_lookup_min": 8,
-    }),
+    # "mtp_n3_nfb": json.dumps({
+    #     "method": "mtp", "num_speculative_tokens": 3,
+    #     "ngram_fallback": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+    # }),
+    # "mtp_n2_nfb_wide": json.dumps({
+    #     "method": "mtp", "num_speculative_tokens": 2,
+    #     "ngram_fallback": True, "prompt_lookup_max": 20, "prompt_lookup_min": 8,
+    # }),
+    # "mtp_n2_nfb_thresh05": json.dumps({
+    #     "method": "mtp", "num_speculative_tokens": 2,
+    #     "ngram_fallback": True, "ngram_fallback_threshold": 0.05,
+    #     "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+    # }),
 
-    # Standalone ngram — prompt-lookup speculation only, no MTP.
-    # Baseline for measuring ngram contribution independently.
-    "ngram_only": json.dumps({
-        "method": "ngram", "num_speculative_tokens": 3,
-        "prompt_lookup_max": 10, "prompt_lookup_min": 8,
-    }),
+    # # Standalone ngram — prompt-lookup speculation only, no MTP.
+    # # Baseline for measuring ngram contribution independently.
+    # "ngram_only": json.dumps({
+    #     "method": "ngram", "num_speculative_tokens": 3,
+    #     "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+    # }),
 }
 
 # KV cache dtype configs for Phase 2
