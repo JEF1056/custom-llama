@@ -89,23 +89,8 @@ SPEC_CONFIGS: dict[str, str] = {
         "prompt_lookup_max": 20, "prompt_lookup_min": 8,
     }),
 
-    # Ngram-first (GPU) + MTP — ngram pre-check on GPU, fallback to MTP
-    # ngram_first_gpu=true avoids CPU-GPU sync penalty of CPU ngram_first.
-    "ngram_mtp_n1": json.dumps({
-        "method": "mtp", "num_speculative_tokens": 1,
-        "ngram_first": True, "ngram_first_gpu": True,
-        "prompt_lookup_max": 10, "prompt_lookup_min": 8,
-    }),
-    "ngram_mtp_n2": json.dumps({
-        "method": "mtp", "num_speculative_tokens": 2,
-        "ngram_first": True, "ngram_first_gpu": True,
-        "prompt_lookup_max": 10, "prompt_lookup_min": 8,
-    }),
-    "ngram_mtp_n3": json.dumps({
-        "method": "mtp", "num_speculative_tokens": 3,
-        "ngram_first": True, "ngram_first_gpu": True,
-        "prompt_lookup_max": 10, "prompt_lookup_min": 8,
-    }),
+    # Ngram-first (GPU) + MTP configs are generated dynamically in Phase 1b
+    # from the top 2 performing base configs (mtp + ngram).
 }
 
 # KV cache dtype configs for Phase 2
@@ -644,29 +629,142 @@ def _run_config_sweep(
     return all_results
 
 
+def _build_ngram_first_configs(
+    results: list[dict[str, Any]], top_n: int = 2,
+) -> dict[str, str]:
+    """Build ngram_first configs from the top-N base spec configs by decode_tps.
+
+    Takes the best performing MTP and ngram configs, then creates ngram_first
+    variants that combine GPU ngram pre-check with the winning MTP token counts.
+    Only MTP-based configs can be used as the LLM proposer for ngram_first.
+    """
+    # Rank all successful base configs by mean decode_tps
+    by_label: dict[str, list[float]] = {}
+    for r in results:
+        if r.get("status") != "ok":
+            continue
+        label = r["server_config"].get("config_label", "")
+        tps = r["metrics"].get("decode_tps", r["metrics"].get("overall_tps", 0))
+        by_label.setdefault(label, []).append(tps)
+
+    if not by_label:
+        _log("WARNING: no results to build ngram_first configs from")
+        return {}
+
+    ranked = sorted(by_label.items(), key=lambda x: -statistics.mean(x[1]))
+    _log("Base config ranking (decode_tps):")
+    for label, tps_list in ranked:
+        _log(f"  {label:20s}  {statistics.mean(tps_list):.1f} tok/s")
+
+    # Pick top N configs, extract their spec JSON, build ngram_first variants
+    configs: dict[str, str] = {}
+    for label, _ in ranked:
+        if len(configs) >= top_n:
+            break
+        # Find the spec config string for this label
+        spec_str = SPEC_CONFIGS.get(label, "")
+        if not spec_str:
+            continue  # skip "none" baseline
+        try:
+            spec = json.loads(spec_str)
+        except json.JSONDecodeError:
+            continue
+
+        # Only MTP method can be used as the LLM proposer for ngram_first
+        method = spec.get("method", "")
+        if method == "mtp":
+            n = spec["num_speculative_tokens"]
+            nf_label = f"ngram_mtp_n{n}"
+            nf_config = {
+                "method": "mtp",
+                "num_speculative_tokens": n,
+                "ngram_first": True,
+                "ngram_first_gpu": True,
+                "prompt_lookup_max": 10,
+                "prompt_lookup_min": 8,
+            }
+            configs[nf_label] = json.dumps(nf_config)
+            _log(f"  → ngram_first config: {nf_label}")
+        elif method == "ngram_gpu":
+            # Ngram-only can't be used as LLM proposer, but its performance
+            # informs which MTP token count to pair with ngram_first.
+            # Use its num_speculative_tokens as the MTP token count.
+            n = spec["num_speculative_tokens"]
+            nf_label = f"ngram_mtp_from_ngram_n{n}"
+            nf_config = {
+                "method": "mtp",
+                "num_speculative_tokens": n,
+                "ngram_first": True,
+                "ngram_first_gpu": True,
+                "prompt_lookup_max": spec.get("prompt_lookup_max", 10),
+                "prompt_lookup_min": spec.get("prompt_lookup_min", 8),
+            }
+            configs[nf_label] = json.dumps(nf_config)
+            _log(f"  → ngram_first config: {nf_label} (from ngram_gpu n={n})")
+
+    return configs
+
+
 def run_phase_1(
     runs: int, results_path: Path, completed: set[tuple], api_key: str,
 ) -> str:
-    """Phase 1: Speculative decoding sweep. Returns winner spec config."""
-    _log("\n=== Phase 1: Speculative Decoding ===")
-    configs = [
+    """Phase 1: Speculative decoding sweep. Returns winner spec config.
+
+    Sub-phase 1a: Sweep base configs (MTP, ngram_gpu, baseline).
+    Sub-phase 1b: Dynamically build ngram_first configs from top 2 performers,
+                  then sweep those.
+    """
+    _log("\n=== Phase 1a: Base Speculative Decoding ===")
+    base_configs = [
         {"speculative_config": v, "config_label": k}
         for k, v in SPEC_CONFIGS.items()
     ]
-    results = _run_config_sweep(
+    base_results = _run_config_sweep(
         phase=1,
-        phase_name="Speculative",
-        configs=configs,
+        phase_name="Speculative (base)",
+        configs=base_configs,
         config_label_key="config_label",
         fixed_kv=DEFAULT_KV,
-        fixed_spec="",  # overridden per config
+        fixed_spec="",
         dry=False,
         runs_per_scenario=runs,
         results_path=results_path,
         completed=completed,
         api_key=api_key,
     )
-    return _pick_winner(results, "speculative_config")
+
+    # Include any cached Phase 1 results for ranking
+    all_p1 = [r for r in load_results(results_path) if r.get("phase") == 1]
+
+    # Phase 1b: Build ngram_first configs from top 2 base performers
+    _log("\n=== Phase 1b: Ngram-First (dynamic from top 2) ===")
+    ngram_first_configs = _build_ngram_first_configs(all_p1, top_n=2)
+
+    nf_results: list[dict[str, Any]] = []
+    if ngram_first_configs:
+        nf_sweep = [
+            {"speculative_config": v, "config_label": k}
+            for k, v in ngram_first_configs.items()
+        ]
+        nf_results = _run_config_sweep(
+            phase=1,
+            phase_name="Speculative (ngram_first)",
+            configs=nf_sweep,
+            config_label_key="config_label",
+            fixed_kv=DEFAULT_KV,
+            fixed_spec="",
+            dry=False,
+            runs_per_scenario=runs,
+            results_path=results_path,
+            completed=completed,
+            api_key=api_key,
+        )
+    else:
+        _log("No ngram_first configs to test (no base results available)")
+
+    # Pick overall winner from all Phase 1 results
+    all_results = base_results + nf_results
+    return _pick_winner(all_results, "speculative_config")
 
 
 def run_phase_2(
