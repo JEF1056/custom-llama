@@ -50,7 +50,7 @@ HEALTH_TIMEOUT = 420  # 7 minutes — covers 5-min model load + compilation
 
 # Default server-side config (held constant unless being tested)
 DEFAULT_KV = "turboquant_k4v2_nc"
-DEFAULT_SPEC = ""  # disabled
+DEFAULT_SPEC = json.dumps({"method": "mtp", "num_speculative_tokens": 3})
 
 DRY_ON_PARAMS = {
     "dry_multiplier": 0.4,
@@ -104,6 +104,13 @@ SPEC_CONFIGS: dict[str, str] = {
         "ngram_fallback": True, "ngram_fallback_threshold": 0.05,
         "prompt_lookup_max": 10, "prompt_lookup_min": 8,
     }),
+
+    # Standalone ngram — prompt-lookup speculation only, no MTP.
+    # Baseline for measuring ngram contribution independently.
+    "ngram_only": json.dumps({
+        "method": "ngram", "num_speculative_tokens": 3,
+        "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+    }),
 }
 
 # KV cache dtype configs for Phase 2
@@ -112,6 +119,10 @@ KV_CONFIGS: dict[str, str] = {
     "tq_k3v4": "turboquant_k3v4_nc",
     "tq_k3v2": "turboquant_k3v2_nc",
     "tq_3bit": "turboquant_3bit_nc",
+    "tq_2bit": "turboquant_2bit_nc",
+    "tq_k4v1": "turboquant_k4v1_nc",
+    "tq_k3v1": "turboquant_k3v1_nc",
+    "tq_k2v1": "turboquant_k2v1_nc",
 }
 
 
@@ -1383,8 +1394,25 @@ def run_phase_5(
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _kv_bit_sum(kv_dtype: str) -> int:
+    """Extract bit-sum from KV cache dtype name. Lower = more compressed."""
+    import re as _re
+    name = kv_dtype.lower()
+    m = _re.search(r'k(\d+)v(\d+)', name)
+    if m:
+        return int(m.group(1)) + int(m.group(2))
+    m = _re.search(r'(\d+)bit', name)
+    if m:
+        return int(m.group(1)) * 2
+    return 99
+
+
 def _pick_winner(results: list[dict], config_key: str) -> str:
-    """Return the config value with the highest mean overall_tps."""
+    """Return the config value with the highest mean overall_tps.
+
+    For kv_cache_dtype: when configs are within 3%, prefer lower bit-sum
+    (more compressed = less VRAM for equivalent performance).
+    """
     by_config: dict[str, list[float]] = {}
     for r in results:
         if r.get("status") != "ok":
@@ -1397,7 +1425,16 @@ def _pick_winner(results: list[dict], config_key: str) -> str:
         _log(f"WARNING: no successful results to pick winner for {config_key}")
         return DEFAULT_KV if config_key == "kv_cache_dtype" else DEFAULT_SPEC
 
-    winner = max(by_config, key=lambda k: statistics.mean(by_config[k]))
+    ranked = sorted(by_config.items(), key=lambda x: statistics.mean(x[1]), reverse=True)
+
+    if config_key == "kv_cache_dtype" and len(ranked) > 1:
+        top_mean = statistics.mean(ranked[0][1])
+        candidates = [(v, t) for v, t in ranked
+                      if statistics.mean(t) >= top_mean * 0.97]
+        winner = min(candidates, key=lambda x: _kv_bit_sum(x[0]))[0]
+    else:
+        winner = ranked[0][0]
+
     mean_tps = statistics.mean(by_config[winner])
     _log(f"Winner for {config_key}: {winner or '(none)'} ({mean_tps:.1f} tok/s mean)")
 

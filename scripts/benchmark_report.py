@@ -8,12 +8,41 @@ Called automatically by benchmark.py or standalone:
 from __future__ import annotations
 
 import json
+import re
 import statistics
 import sys
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+
+# ---------------------------------------------------------------------------
+# KV cache bit-sum: lower = more compressed = preferred as tiebreaker
+# ---------------------------------------------------------------------------
+
+def _kv_bit_sum(kv_dtype: str) -> int:
+    """Extract bit-sum from KV cache dtype name. Lower = more compressed."""
+    name = kv_dtype.lower()
+    m = re.search(r'k(\d+)v(\d+)', name)
+    if m:
+        return int(m.group(1)) + int(m.group(2))
+    m = re.search(r'(\d+)bit', name)
+    if m:
+        return int(m.group(1)) * 2  # 3bit ≈ k3v3 = 6
+    return 99  # unknown, rank last
+
+
+# ---------------------------------------------------------------------------
+# DRY config for recommendation output
+# ---------------------------------------------------------------------------
+
+DRY_ON_PARAMS = {
+    "multiplier": 0.4,
+    "base": 1.75,
+    "allowed_length": 128,
+    "penalty_last_n": 2048,
+}
 
 
 def load_results(path: Path) -> list[dict[str, Any]]:
@@ -52,11 +81,96 @@ def _spec_label(spec: str) -> str:
     try:
         d = json.loads(spec)
         method = d.get("method", "?")
-        if d.get("ngram_first"):
-            return "ngram+mtp"
-        return method
+        parts = [method]
+        n = d.get("num_speculative_tokens")
+        if n is not None:
+            parts.append(f"n{n}")
+        if d.get("ngram_fallback"):
+            parts.append("nfb")
+        if d.get("draft_sample_method") == "probabilistic":
+            parts.append("prob")
+        return "_".join(parts)
     except (json.JSONDecodeError, TypeError):
         return str(spec)[:15]
+
+
+# ---------------------------------------------------------------------------
+# Phase winner derivation (with tiebreakers)
+# ---------------------------------------------------------------------------
+
+def _pick_best_config(phase_results: list[dict], config_key: str) -> str:
+    """Pick config with highest mean tps from phase results."""
+    by_config: dict[str, list[float]] = {}
+    for r in phase_results:
+        val = r["server_config"][config_key]
+        tps_key = "decode_tps" if r["scenario"] == "tool_calling" else "overall_tps"
+        by_config.setdefault(val, []).append(r["metrics"].get(tps_key, 0))
+    if not by_config:
+        return ""
+    return max(by_config, key=lambda k: statistics.mean(by_config[k]))
+
+
+def _pick_best_kv(phase_results: list[dict]) -> str:
+    """Pick KV config: highest mean tps, prefer lower bit-sum within 3%."""
+    by_config: dict[str, list[float]] = {}
+    for r in phase_results:
+        val = r["server_config"]["kv_cache_dtype"]
+        tps_key = "decode_tps" if r["scenario"] == "tool_calling" else "overall_tps"
+        by_config.setdefault(val, []).append(r["metrics"].get(tps_key, 0))
+    if not by_config:
+        return ""
+    ranked = sorted(by_config.items(), key=lambda x: statistics.mean(x[1]), reverse=True)
+    top_mean = statistics.mean(ranked[0][1])
+    # All configs within 3% of top are candidates
+    candidates = [(val, tps) for val, tps in ranked
+                  if statistics.mean(tps) >= top_mean * 0.97]
+    # Among candidates, prefer lowest bit-sum
+    return min(candidates, key=lambda x: _kv_bit_sum(x[0]))[0]
+
+
+def _pick_dry_winner(phase_results: list[dict]) -> bool:
+    """DRY on wins if within 3% of DRY off throughput (quality benefit)."""
+    dry_off_tps: list[float] = []
+    dry_on_tps: list[float] = []
+    for r in phase_results:
+        tps_key = "decode_tps" if r["scenario"] == "tool_calling" else "overall_tps"
+        tps = r["metrics"].get(tps_key, 0)
+        if r["request_config"]["dry"]:
+            dry_on_tps.append(tps)
+        else:
+            dry_off_tps.append(tps)
+    if not dry_off_tps or not dry_on_tps:
+        return False
+    mean_off = statistics.mean(dry_off_tps)
+    mean_on = statistics.mean(dry_on_tps)
+    return mean_on >= mean_off * 0.97
+
+
+def _derive_winners(results: list[dict]) -> tuple[str, str, bool]:
+    """Derive (spec_winner, kv_winner, dry_winner) from individual phases.
+
+    Applies KV bit-sum tiebreaker and DRY 3% preference.
+    Falls back to all-phase data when a specific phase is missing.
+    """
+    ok = _ok_results(results)
+    if not ok:
+        return "", "", False
+
+    p1 = [r for r in ok if r.get("phase") == 1]
+    p2 = [r for r in ok if r.get("phase") == 2]
+    p3 = [r for r in ok if r.get("phase") == 3]
+
+    # Phase 1 → spec winner; fallback to all data
+    spec_winner = (_pick_best_config(p1, "speculative_config") if p1
+                   else _pick_best_config(ok, "speculative_config"))
+
+    # Phase 2 → KV winner with bit-sum tiebreaker; fallback to all data
+    kv_winner = _pick_best_kv(p2) if p2 else _pick_best_kv(ok)
+
+    # Phase 3 → DRY winner with 3% threshold
+    dry_winner = _pick_dry_winner(p3) if p3 else False
+
+    return spec_winner, kv_winner, dry_winner
 
 
 # ---------------------------------------------------------------------------
@@ -64,34 +178,62 @@ def _spec_label(spec: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _section_executive_summary(results: list[dict]) -> str:
-    """Top configs and recommendation."""
+    """Top configs and recommendation.
+
+    Uses Phase 4 (cross-validation) data when available for the ranking table.
+    Falls back to all-phase data otherwise.
+    Derives the RECOMMENDED pick from individual phase winners with tiebreakers.
+    """
     ok = _ok_results(results)
     if not ok:
         return "## Executive Summary\n\nNo successful benchmark results.\n"
 
+    # Derive the recommended config from phase winners (with tiebreakers)
+    spec_winner, kv_winner, dry_winner = _derive_winners(results)
+    rec_key = (
+        f"kv={kv_winner} | spec={_spec_label(spec_winner)} "
+        f"| dry={'on' if dry_winner else 'off'}"
+    )
+
+    # Prefer Phase 4 (cross-val) data for ranking — it's the controlled comparison.
+    p4 = [r for r in ok if r.get("phase") == 4]
+    ranking_source = p4 if len(p4) >= 3 else ok
+    source_label = "Phase 4 cross-validation" if ranking_source is p4 else "all phases"
+
     combo_tps: dict[str, list[float]] = {}
-    for r in ok:
+    for r in ranking_source:
         sc = r["server_config"]
         rc = r["request_config"]
-        key = f"kv={sc['kv_cache_dtype']} | spec={_spec_label(sc['speculative_config'])} | dry={'on' if rc['dry'] else 'off'}"
+        key = (
+            f"kv={sc['kv_cache_dtype']} | spec={_spec_label(sc['speculative_config'])} "
+            f"| dry={'on' if rc['dry'] else 'off'}"
+        )
         tps_key = "decode_tps" if r["scenario"] == "tool_calling" else "overall_tps"
         combo_tps.setdefault(key, []).append(r["metrics"][tps_key])
 
     ranked = sorted(combo_tps.items(), key=lambda x: statistics.mean(x[1]), reverse=True)
 
     lines = ["## Executive Summary\n"]
-    lines.append("_Note: tool_calling uses decode_tps (strips TTFT) for stable comparison._\n")
+    lines.append(f"_Ranking from {source_label}. "
+                 "tool_calling uses decode_tps (strips TTFT) for stable comparison._\n")
     lines.append("| Rank | Configuration | Mean tok/s | Std |")
     lines.append("|------|---------------|-----------|-----|")
     for i, (key, tps_list) in enumerate(ranked[:5], 1):
         m, s = _mean_std(tps_list)
-        marker = " **<-- RECOMMENDED**" if i == 1 else ""
+        marker = " **<-- RECOMMENDED**" if key == rec_key else ""
         lines.append(f"| {i} | {key} | {m} | +/-{s} |{marker}")
 
-    # Recommended .env.default
-    if ranked:
-        best_key = ranked[0][0]
-        lines.append(f"\n**Best overall configuration:** `{best_key}`\n")
+    lines.append(f"\n**Recommended configuration:** `{rec_key}`")
+    notes = []
+    if dry_winner:
+        notes.append("DRY on: throughput within 3% of DRY off — quality benefit outweighs cost")
+    if kv_winner:
+        notes.append(f"KV {kv_winner}: bit-sum={_kv_bit_sum(kv_winner)} "
+                     "(lower = more compressed, preferred when performance is equivalent)")
+    if notes:
+        for note in notes:
+            lines.append(f"- _{note}_")
+    lines.append("")
 
     return "\n".join(lines) + "\n"
 
@@ -332,7 +474,12 @@ def _section_crossval(results: list[dict]) -> str:
     for r in ok:
         sc = r["server_config"]
         rc = r["request_config"]
-        key = f"kv={sc['kv_cache_dtype'][:12]} spec={_spec_label(sc['speculative_config'])} dry={'on' if rc['dry'] else 'off'}"
+        spec_raw = sc["speculative_config"]
+        spec_detail = _spec_label(spec_raw)
+        if spec_raw:
+            # Include full JSON for unambiguous reproduction
+            spec_detail += f" (`{spec_raw}`)"
+        key = f"kv={sc['kv_cache_dtype']} | spec={spec_detail} | dry={'on' if rc['dry'] else 'off'}"
         tps_key = "decode_tps" if r["scenario"] == "tool_calling" else "overall_tps"
         combo_data[key][r["scenario"]].append(r["metrics"][tps_key])
 
@@ -518,31 +665,56 @@ def _section_best_per_scenario(results: list[dict]) -> str:
 
 
 def _section_recommended_env(results: list[dict]) -> str:
-    """Copy-pasteable .env.default recommendation."""
+    """Copy-pasteable .env.default recommendation.
+
+    Derives winners from individual phases with tiebreakers:
+    - KV: prefer lower bit-sum when configs are within 3%
+    - DRY: prefer on when throughput cost is within 3% (quality benefit)
+    """
     ok = _ok_results(results)
     if not ok:
         return ""
 
-    combo_tps: dict[tuple, list[float]] = {}
+    spec_winner, kv_winner, dry_winner = _derive_winners(results)
+
+    if not kv_winner and not spec_winner:
+        return ""
+
+    dry_line = (
+        f'LLM_DRY_CONFIG={json.dumps(DRY_ON_PARAMS)}'
+        if dry_winner
+        else "LLM_DRY_CONFIG="
+    )
+    spec_line = (
+        f"LLM_SPECULATIVE_CONFIG={spec_winner}"
+        if spec_winner
+        else "LLM_SPECULATIVE_CONFIG="
+    )
+
+    # Compute mean tps for the recommended combo from whatever phase data matches
+    combo_tps: list[float] = []
     for r in ok:
         sc = r["server_config"]
         rc = r["request_config"]
-        combo = (sc["kv_cache_dtype"], sc["speculative_config"], rc["dry"])
-        tps_key = "decode_tps" if r["scenario"] == "tool_calling" else "overall_tps"
-        combo_tps.setdefault(combo, []).append(r["metrics"][tps_key])
+        if (sc["kv_cache_dtype"] == kv_winner
+                and sc["speculative_config"] == spec_winner
+                and rc["dry"] == dry_winner):
+            tps_key = "decode_tps" if r["scenario"] == "tool_calling" else "overall_tps"
+            combo_tps.append(r["metrics"].get(tps_key, 0))
 
-    if not combo_tps:
-        return ""
-
-    best_combo = max(combo_tps, key=lambda k: statistics.mean(combo_tps[k]))
-    kv, spec, dry = best_combo
-
-    dry_line = (
-        'LLM_DRY_CONFIG={"multiplier": 0.4, "base": 1.75, "allowed_length": 128, "penalty_last_n": 2048}'
-        if dry
-        else "LLM_DRY_CONFIG="
+    tps_note = (
+        f"Mean throughput: **{round(statistics.mean(combo_tps), 1)} tok/s** "
+        "across matched runs."
+        if combo_tps
+        else ""
     )
-    spec_line = f"LLM_SPECULATIVE_CONFIG={spec}" if spec else "LLM_SPECULATIVE_CONFIG="
+
+    notes = []
+    if dry_winner:
+        notes.append("- **DRY on**: throughput within 3% of DRY off — "
+                      "output quality benefit outweighs marginal cost")
+    notes.append(f"- **KV {kv_winner}**: bit-sum = {_kv_bit_sum(kv_winner)} "
+                 "(lower = more VRAM-efficient; preferred when performance is equivalent)")
 
     return f"""## Recommended .env.default
 
@@ -550,7 +722,7 @@ Copy these values into your `.env.default`:
 
 ```bash
 # KV cache quantization — benchmark winner
-LLM_KV_CACHE_DTYPE={kv}
+LLM_KV_CACHE_DTYPE={kv_winner}
 
 # Speculative decoding — benchmark winner
 {spec_line}
@@ -559,8 +731,27 @@ LLM_KV_CACHE_DTYPE={kv}
 {dry_line}
 ```
 
-Mean throughput: **{round(statistics.mean(combo_tps[best_combo]), 1)} tok/s** across all scenarios.
+{tps_note}
+
+### Selection rationale
+
+{chr(10).join(notes)}
 """
+
+
+def _phase2_title(results: list[dict]) -> str:
+    """Dynamic Phase 2 title showing the spec config held constant."""
+    ok = [r for r in _ok_results(results) if r.get("phase") == 2]
+    if ok:
+        spec = ok[0]["server_config"].get("speculative_config", "")
+        label = _spec_label(spec)
+        return f"Phase 2: KV Cache Dtype Impact (spec={label})"
+    # No Phase 2 data yet — derive from Phase 1 winner
+    p1 = [r for r in _ok_results(results) if r.get("phase") == 1]
+    if p1:
+        winner = _pick_best_config(p1, "speculative_config")
+        return f"Phase 2: KV Cache Dtype Impact (spec={_spec_label(winner)})"
+    return "Phase 2: KV Cache Dtype Impact"
 
 
 # ---------------------------------------------------------------------------
@@ -586,7 +777,7 @@ def generate_report(results_path: Path, report_path: Path) -> None:
         _section_spec_acceptance(results),
         _section_phase(
             results, phase=2,
-            title="Phase 2: KV Cache Dtype Impact",
+            title=_phase2_title(results),
             config_field="kv_cache_dtype",
             label_fn=lambda x: x,
             baseline_value="turboquant_k4v2_nc",
