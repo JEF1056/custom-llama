@@ -339,6 +339,24 @@ def _section_phase(
                 row.append("—")
         lines.append("| " + " | ".join(str(x) for x in row) + " |")
 
+    # Surface failed configurations
+    errored = [r for r in results if r.get("phase") == phase and r.get("status") == "error"]
+    if errored:
+        failed_configs: dict[str, str] = {}
+        for r in errored:
+            cfg_label = label_fn(r["server_config"][config_field])
+            if cfg_label not in configs and cfg_label not in failed_configs:
+                error_msg = r.get("error", "unknown error")
+                failed_configs[cfg_label] = error_msg
+        if failed_configs:
+            lines.append("\n### Failed Configurations\n")
+            lines.append("| Config | Error |")
+            lines.append("|--------|-------|")
+            for cfg, err in sorted(failed_configs.items()):
+                # Truncate long error messages
+                short_err = err[:120] + ("…" if len(err) > 120 else "")
+                lines.append(f"| {cfg} | {short_err} |")
+
     return "\n".join(lines) + "\n"
 
 
