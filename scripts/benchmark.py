@@ -71,38 +71,36 @@ SPEC_CONFIGS: dict[str, str] = {
     "mtp_n3": json.dumps({"method": "mtp", "num_speculative_tokens": 3}),
     "mtp_n4": json.dumps({"method": "mtp", "num_speculative_tokens": 4}),
 
-    # Ngram only — sweep lookup window size
+    # Ngram (GPU) — uses ngram_gpu for async scheduling + FULL cudagraph support
     # prompt_lookup_min >= 8 required for Qwen3 to avoid tool-call corruption
     # (see https://github.com/vllm-project/vllm/issues/40875)
+    # NOTE: method="ngram" (CPU) disables async scheduling and forces PIECEWISE
+    # cudagraphs, causing ~25-30% regression vs baseline. Use ngram_gpu instead.
     "ngram_tight": json.dumps({
-        "method": "ngram", "num_speculative_tokens": 3,
+        "method": "ngram_gpu", "num_speculative_tokens": 3,
         "prompt_lookup_max": 10, "prompt_lookup_min": 8,
     }),
     "ngram_default": json.dumps({
-        "method": "ngram", "num_speculative_tokens": 5,
+        "method": "ngram_gpu", "num_speculative_tokens": 5,
         "prompt_lookup_max": 15, "prompt_lookup_min": 8,
     }),
-    "ngram_wide": json.dumps({
-        "method": "ngram", "num_speculative_tokens": 10,
-        "prompt_lookup_max": 30, "prompt_lookup_min": 8,
-    }),
 
-    # Ngram-first + MTP — sweep token count (ngram settings = default)
+    # Ngram-first (GPU) + MTP — ngram pre-check on GPU, fallback to MTP
+    # ngram_first_gpu=true avoids CPU-GPU sync penalty of CPU ngram_first.
     "ngram_mtp_n1": json.dumps({
         "method": "mtp", "num_speculative_tokens": 1,
-        "ngram_first": True, "prompt_lookup_max": 15, "prompt_lookup_min": 8,
+        "ngram_first": True, "ngram_first_gpu": True,
+        "prompt_lookup_max": 10, "prompt_lookup_min": 8,
     }),
     "ngram_mtp_n2": json.dumps({
         "method": "mtp", "num_speculative_tokens": 2,
-        "ngram_first": True, "prompt_lookup_max": 15, "prompt_lookup_min": 8,
+        "ngram_first": True, "ngram_first_gpu": True,
+        "prompt_lookup_max": 10, "prompt_lookup_min": 8,
     }),
     "ngram_mtp_n3": json.dumps({
         "method": "mtp", "num_speculative_tokens": 3,
-        "ngram_first": True, "prompt_lookup_max": 15, "prompt_lookup_min": 8,
-    }),
-    "ngram_mtp_n4": json.dumps({
-        "method": "mtp", "num_speculative_tokens": 4,
-        "ngram_first": True, "prompt_lookup_max": 15, "prompt_lookup_min": 8,
+        "ngram_first": True, "ngram_first_gpu": True,
+        "prompt_lookup_max": 10, "prompt_lookup_min": 8,
     }),
 }
 
