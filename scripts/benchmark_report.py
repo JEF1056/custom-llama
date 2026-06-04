@@ -461,6 +461,45 @@ def _section_kv_token_efficiency(results: list[dict]) -> str:
                      f"(bit-sum={_kv_bit_sum(best)}, "
                      f"efficiency={efficiency_overall[best]} tok/s/bit)")
 
+    # MTP acceptance rate per KV config
+    has_spec = [r for r in ok if r.get("metrics", {}).get("spec_metrics")]
+    if has_spec:
+        acc_data: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+        for r in has_spec:
+            kv = r["server_config"]["kv_cache_dtype"]
+            ar = r["metrics"]["spec_metrics"].get("acceptance_pct")
+            if ar is not None:
+                acc_data[kv][r["scenario"]].append(ar)
+
+        if any(acc_data.values()):
+            lines.append("")
+            lines.append("### MTP Acceptance Rate by KV Dtype\n")
+            lines.append("_Shows how KV cache quantization affects speculative decoding acceptance. "
+                         "Lower acceptance → more wasted draft compute._\n")
+
+            header = "| KV Dtype | Bit-sum | " + " | ".join(scenarios) + " | **Mean** |"
+            sep = "|----------|---------|" + "|".join(["------"] * len(scenarios)) + "|--------|"
+            lines.append(header)
+            lines.append(sep)
+
+            for cfg in configs:
+                bits = _kv_bit_sum(cfg)
+                row = [cfg, str(bits)]
+                all_rates: list[float] = []
+                for sc in scenarios:
+                    vals = acc_data[cfg].get(sc, [])
+                    if vals:
+                        m = round(statistics.mean(vals), 1)
+                        row.append(f"{m}%")
+                        all_rates.append(m)
+                    else:
+                        row.append("—")
+                if all_rates:
+                    row.append(f"**{round(statistics.mean(all_rates), 1)}%**")
+                else:
+                    row.append("—")
+                lines.append("| " + " | ".join(str(x) for x in row) + " |")
+
     lines.append("")
     return "\n".join(lines) + "\n"
 
