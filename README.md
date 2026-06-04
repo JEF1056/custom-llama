@@ -325,7 +325,7 @@ This runs all 4 phases (~2.75 hours total) and generates a Markdown report.
 | Phase                    | What it sweeps                        | Restarts | Est. time |
 | ------------------------ | ------------------------------------- | -------- | --------- |
 | 1 — Speculative decoding | none / MTP / ngram / ngram+MTP        | 4        | ~55 min   |
-| 2 — KV cache dtype       | rotorquant vs turboquant (k4v2, 3bit) | 3-4      | ~55 min   |
+| 2 — KV cache dtype       | turboquant (k4v2, k3v2, 3bit)         | 3        | ~55 min   |
 | 3 — DRY sampling         | on vs off (per-request toggle)        | 0-1      | ~15 min   |
 | 4 — Cross-validation     | top 3 configs, 5 runs each            | ≤3       | ~40 min   |
 

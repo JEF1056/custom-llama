@@ -589,7 +589,7 @@ def generate_report(results_path: Path, report_path: Path) -> None:
             title="Phase 2: KV Cache Dtype Impact",
             config_field="kv_cache_dtype",
             label_fn=lambda x: x,
-            baseline_value="rotorquant_k4v2_nc",
+            baseline_value="turboquant_k4v2_nc",
         ),
         _section_dry(results),
         _section_crossval(results),

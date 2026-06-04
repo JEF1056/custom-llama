@@ -83,7 +83,7 @@ SPEC_CONFIGS: dict[str, str] = {
     }),
 
     # Ngram (GPU) standalone — DISABLED: 0% acceptance with quantized KV cache
-    # (TurboQuant/RotorQuant shifts distributions, see vllm#40831).
+    # (TurboQuant shifts distributions, see vllm#40831).
     # Kept commented for reference; use ngram_first instead.
     # "ngram_tight": json.dumps({
     #     "method": "ngram_gpu", "num_speculative_tokens": 3,
@@ -126,9 +126,8 @@ SPEC_CONFIGS: dict[str, str] = {
 
 # KV cache dtype configs for Phase 2
 KV_CONFIGS: dict[str, str] = {
-    "rq_k4v2": "rotorquant_k4v2_nc",
-    "rq_3bit": "rotorquant_3bit_nc",
     "tq_k4v2": "turboquant_k4v2_nc",
+    "tq_k3v2": "turboquant_k3v2_nc",
     "tq_3bit": "turboquant_3bit_nc",
 }
 
