@@ -671,15 +671,15 @@ def run_phase_1(
 ) -> str:
     """Phase 1: Speculative decoding sweep. Returns winner spec config.
 
-    Sweeps all SPEC_CONFIGS (MTP, probabilistic, ngram_first variants, baseline)
-    and picks the winner by decode throughput.
+    Sweeps all SPEC_CONFIGS (MTP, probabilistic, ngram fallback variants, baseline)
+    and picks the winner by decode throughput from the full JSONL.
     """
     _log("\n=== Phase 1: Speculative Decoding ===")
     configs = [
         {"speculative_config": v, "config_label": k}
         for k, v in SPEC_CONFIGS.items()
     ]
-    results = _run_config_sweep(
+    _run_config_sweep(
         phase=1,
         phase_name="Speculative",
         configs=configs,
@@ -693,26 +693,33 @@ def run_phase_1(
         api_key=api_key,
         stop_on_error=stop_on_error,
     )
-    return _pick_winner(results, "speculative_config")
+    # Pick winner from ALL Phase 1 results in the JSONL (includes resumed runs)
+    all_p1 = [r for r in load_results(results_path) if r.get("phase") == 1]
+    return _pick_winner(all_p1, "speculative_config")
 
 
 def run_phase_2(
     runs: int, results_path: Path, completed: set[tuple], api_key: str,
     spec_winner: str, *, stop_on_error: bool = False,
 ) -> str:
-    """Phase 2: KV cache dtype sweep. Returns winner KV dtype."""
+    """Phase 2: KV cache dtype sweep. Returns winner KV dtype.
+
+    Always uses plain MTP n=3 (no ngram) to isolate KV cache impact.
+    """
     _log("\n=== Phase 2: KV Cache Dtype ===")
+    # Use plain MTP n=3 — ngram adds noise to KV cache comparison
+    phase2_spec = json.dumps({"method": "mtp", "num_speculative_tokens": 3})
     configs = [
         {"kv_cache_dtype": v, "config_label": k}
         for k, v in KV_CONFIGS.items()
     ]
-    results = _run_config_sweep(
+    _run_config_sweep(
         phase=2,
         phase_name="KV Cache",
         configs=configs,
         config_label_key="config_label",
         fixed_kv="",  # overridden per config
-        fixed_spec=spec_winner,
+        fixed_spec=phase2_spec,
         dry=False,
         runs_per_scenario=runs,
         results_path=results_path,
@@ -720,7 +727,9 @@ def run_phase_2(
         api_key=api_key,
         stop_on_error=stop_on_error,
     )
-    return _pick_winner(results, "kv_cache_dtype")
+    # Pick winner from ALL Phase 2 results in the JSONL (includes resumed runs)
+    all_p2 = [r for r in load_results(results_path) if r.get("phase") == 2]
+    return _pick_winner(all_p2, "kv_cache_dtype")
 
 
 def run_phase_3(
