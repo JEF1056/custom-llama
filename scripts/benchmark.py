@@ -84,6 +84,10 @@ SPEC_CONFIGS: dict[str, str] = {
         "method": "ngram_gpu", "num_speculative_tokens": 5,
         "prompt_lookup_max": 15, "prompt_lookup_min": 8,
     }),
+    "ngram_wide": json.dumps({
+        "method": "ngram_gpu", "num_speculative_tokens": 7,
+        "prompt_lookup_max": 20, "prompt_lookup_min": 8,
+    }),
 
     # Ngram-first (GPU) + MTP — ngram pre-check on GPU, fallback to MTP
     # ngram_first_gpu=true avoids CPU-GPU sync penalty of CPU ngram_first.
