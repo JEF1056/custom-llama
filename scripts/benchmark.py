@@ -49,7 +49,7 @@ HEALTH_POLL_INTERVAL = 10  # seconds
 HEALTH_TIMEOUT = 420  # 7 minutes — covers 5-min model load + compilation
 
 # Default server-side config (held constant unless being tested)
-DEFAULT_KV = "rotorquant_k4v2_nc"
+DEFAULT_KV = "turboquant_k4v2_nc"
 DEFAULT_SPEC = ""  # disabled
 
 DRY_ON_PARAMS = {
@@ -106,22 +106,22 @@ SPEC_CONFIGS: dict[str, str] = {
     #   - n2 + max=10: sweet spot — best balance of throughput and acceptance
     #   - n3 + max=10: aggressive — diminishing returns if acceptance drops <60%
     #   - n2 + max=20: wider ngram window, more matches in repetitive content
-    "nf_mtp_n1": json.dumps({
-        "method": "mtp", "num_speculative_tokens": 1,
-        "ngram_first": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
-    }),
-    "nf_mtp_n2": json.dumps({
-        "method": "mtp", "num_speculative_tokens": 2,
-        "ngram_first": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
-    }),
-    "nf_mtp_n3": json.dumps({
-        "method": "mtp", "num_speculative_tokens": 3,
-        "ngram_first": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
-    }),
-    "nf_mtp_n2_wide": json.dumps({
-        "method": "mtp", "num_speculative_tokens": 2,
-        "ngram_first": True, "prompt_lookup_max": 20, "prompt_lookup_min": 8,
-    }),
+    # "nf_mtp_n1": json.dumps({
+    #     "method": "mtp", "num_speculative_tokens": 1,
+    #     "ngram_first": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+    # }),
+    # "nf_mtp_n2": json.dumps({
+    #     "method": "mtp", "num_speculative_tokens": 2,
+    #     "ngram_first": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+    # }),
+    # "nf_mtp_n3": json.dumps({
+    #     "method": "mtp", "num_speculative_tokens": 3,
+    #     "ngram_first": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+    # }),
+    # "nf_mtp_n2_wide": json.dumps({
+    #     "method": "mtp", "num_speculative_tokens": 2,
+    #     "ngram_first": True, "prompt_lookup_max": 20, "prompt_lookup_min": 8,
+    # }),
 }
 
 # KV cache dtype configs for Phase 2
