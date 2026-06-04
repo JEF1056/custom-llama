@@ -69,7 +69,7 @@ SPEC_CONFIGS: dict[str, str] = {
     "mtp_n1": json.dumps({"method": "mtp", "num_speculative_tokens": 1}),
     "mtp_n2": json.dumps({"method": "mtp", "num_speculative_tokens": 2}),
     "mtp_n3": json.dumps({"method": "mtp", "num_speculative_tokens": 3}),
-    "mtp_n4": json.dumps({"method": "mtp", "num_speculative_tokens": 4}),
+    # "mtp_n4": json.dumps({"method": "mtp", "num_speculative_tokens": 4}),
 
     # MTP — probabilistic draft sampling (stores full draft logit distribution
     # for rejection ratio test; higher acceptance rate but costs extra VRAM)
@@ -82,15 +82,26 @@ SPEC_CONFIGS: dict[str, str] = {
         "draft_sample_method": "probabilistic",
     }),
 
+    # # Standalone ngram — prompt-lookup speculation only, no MTP.
+    # # Baseline for measuring ngram contribution independently.
+    "ngram_only": json.dumps({
+        "method": "ngram", "num_speculative_tokens": 3,
+        "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+    }),
+    "ngram_only_gpu": json.dumps({
+        "method": "ngram_gpu", "num_speculative_tokens": 3,
+        "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+    }),
+        
     # MTP + ngram fallback — MTP runs first, ngram supplements where MTP is
     # uncertain and a historical suffix match exists. The ngram GPU kernel
     # costs ~0.1ms so it's essentially free as a fallback pass.
     # prompt_lookup_min=8: required for Qwen3 tool-call safety (vllm#40875).
     # ngram_fallback_threshold: MTP confidence below this triggers ngram override.
-    "mtp_n2_nfb": json.dumps({
-        "method": "mtp", "num_speculative_tokens": 2,
-        "ngram_fallback": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
-    }),
+    # "mtp_n2_nfb": json.dumps({
+    #     "method": "mtp", "num_speculative_tokens": 2,
+    #     "ngram_fallback": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
+    # }),
     # "mtp_n3_nfb": json.dumps({
     #     "method": "mtp", "num_speculative_tokens": 3,
     #     "ngram_fallback": True, "prompt_lookup_max": 10, "prompt_lookup_min": 8,
@@ -104,19 +115,13 @@ SPEC_CONFIGS: dict[str, str] = {
     #     "ngram_fallback": True, "ngram_fallback_threshold": 0.05,
     #     "prompt_lookup_max": 10, "prompt_lookup_min": 8,
     # }),
-
-    # # Standalone ngram — prompt-lookup speculation only, no MTP.
-    # # Baseline for measuring ngram contribution independently.
-    # "ngram_only": json.dumps({
-    #     "method": "ngram", "num_speculative_tokens": 3,
-    #     "prompt_lookup_max": 10, "prompt_lookup_min": 8,
-    # }),
 }
 
 # KV cache dtype configs for Phase 2
 KV_CONFIGS: dict[str, str] = {
+    # "tq_k4v2": "turboquant_k4bit_nc",
     "tq_k4v2": "turboquant_k4v2_nc",
-    "tq_k3v4": "turboquant_k3v4_nc",
+    # "tq_k3v4": "turboquant_k3v4_nc",
     "tq_k3v2": "turboquant_k3v2_nc",
     "tq_3bit": "turboquant_3bit_nc",
     "tq_2bit": "turboquant_2bit_nc",
