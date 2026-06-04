@@ -634,9 +634,17 @@ def _build_ngram_first_configs(
 ) -> dict[str, str]:
     """Build ngram_first configs from the top-N base spec configs by decode_tps.
 
-    Takes the best performing MTP and ngram configs, then creates ngram_first
-    variants that combine GPU ngram pre-check with the winning MTP token counts.
-    Only MTP-based configs can be used as the LLM proposer for ngram_first.
+    Ranks all Phase 1a results, then selects the best MTP configs to combine
+    with GPU ngram pre-check (ngram_first=True, always runs on GPU).
+
+    Only MTP configs are eligible — ngram_gpu configs can't serve as the LLM
+    proposer, and their num_speculative_tokens represents ngram draft length,
+    not MTP head count (which is model-dependent). Ngram_gpu results still
+    inform the ranking (a strong ngram_gpu showing means ngram_first has good
+    raw ngram hit potential), but the ngram_first variant always uses MTP as
+    the fallback proposer.
+
+    Returns: dict mapping label -> JSON spec config string.
     """
     # Rank all successful base configs by mean decode_tps
     by_label: dict[str, list[float]] = {}
@@ -644,63 +652,87 @@ def _build_ngram_first_configs(
         if r.get("status") != "ok":
             continue
         label = r["server_config"].get("config_label", "")
+        # Skip any existing ngram_first results (from prior runs / resume)
+        if "ngram_mtp" in label:
+            continue
         tps = r["metrics"].get("decode_tps", r["metrics"].get("overall_tps", 0))
         by_label.setdefault(label, []).append(tps)
 
     if not by_label:
-        _log("WARNING: no results to build ngram_first configs from")
+        _log("WARNING: no base results to build ngram_first configs from")
         return {}
 
     ranked = sorted(by_label.items(), key=lambda x: -statistics.mean(x[1]))
-    _log("Base config ranking (decode_tps):")
-    for label, tps_list in ranked:
-        _log(f"  {label:20s}  {statistics.mean(tps_list):.1f} tok/s")
 
-    # Pick top N configs, extract their spec JSON, build ngram_first variants
+    _log("─── Base config ranking (by mean decode_tps) ───")
+    for i, (label, tps_list) in enumerate(ranked, 1):
+        mean = statistics.mean(tps_list)
+        std = statistics.stdev(tps_list) if len(tps_list) > 1 else 0
+        spec_str = SPEC_CONFIGS.get(label, "")
+        method = ""
+        if spec_str:
+            try:
+                method = json.loads(spec_str).get("method", "baseline")
+            except json.JSONDecodeError:
+                pass
+        marker = " ◀" if i <= top_n else ""
+        _log(f"  #{i:2d}  {label:20s}  {mean:6.1f} ± {std:4.1f} tok/s  "
+             f"({method or 'baseline'}, {len(tps_list)} runs){marker}")
+
+    # Collect the top N MTP configs for ngram_first variants
+    # Walk the ranking and pick MTP configs until we have top_n
     configs: dict[str, str] = {}
-    for label, _ in ranked:
+    seen_n: set[int] = set()  # avoid duplicate num_speculative_tokens
+
+    for label, tps_list in ranked:
         if len(configs) >= top_n:
             break
-        # Find the spec config string for this label
+
         spec_str = SPEC_CONFIGS.get(label, "")
         if not spec_str:
-            continue  # skip "none" baseline
+            _log(f"  Skipping '{label}' — baseline (no spec config)")
+            continue
         try:
             spec = json.loads(spec_str)
         except json.JSONDecodeError:
             continue
 
-        # Only MTP method can be used as the LLM proposer for ngram_first
         method = spec.get("method", "")
+
         if method == "mtp":
             n = spec["num_speculative_tokens"]
+            if n in seen_n:
+                _log(f"  Skipping '{label}' — mtp n={n} already covered")
+                continue
+            seen_n.add(n)
+
             nf_label = f"ngram_mtp_n{n}"
             nf_config = {
                 "method": "mtp",
                 "num_speculative_tokens": n,
                 "ngram_first": True,
-                "ngram_first_gpu": True,
                 "prompt_lookup_max": 10,
                 "prompt_lookup_min": 8,
             }
             configs[nf_label] = json.dumps(nf_config)
-            _log(f"  → ngram_first config: {nf_label}")
+            mean = statistics.mean(tps_list)
+            _log(f"  ✓ Selected '{label}' ({mean:.1f} tok/s) → {nf_label}")
+            _log(f"    Config: {nf_config}")
+
         elif method == "ngram_gpu":
-            # Ngram-only can't be used as LLM proposer, but its performance
-            # informs which MTP token count to pair with ngram_first.
-            # Use its num_speculative_tokens as the MTP token count.
-            n = spec["num_speculative_tokens"]
-            nf_label = f"ngram_mtp_from_ngram_n{n}"
-            nf_config = {
-                "method": "mtp",
-                "num_speculative_tokens": n,
-                "ngram_first": True,
-                "ngram_first_gpu": True,
-                "prompt_lookup_max": spec.get("prompt_lookup_max", 10),
-                "prompt_lookup_min": spec.get("prompt_lookup_min", 8),
-            }
-            configs[nf_label] = json.dumps(nf_config)
-            _log(f"  → ngram_first config: {nf_label} (from ngram_gpu n={n})")
+            # Ngram_gpu can't be the LLM proposer — skip but note its ranking
+            mean = statistics.mean(tps_list)
+            _log(f"  Skipping '{label}' ({mean:.1f} tok/s) — ngram_gpu "
+                 f"can't serve as MTP proposer, but strong ngram performance "
+                 f"suggests good ngram_first hit rate")
+
+    if not configs:
+        _log("WARNING: no MTP configs found in top results — "
+             "cannot build ngram_first variants")
+
+    _log(f"─── Generated {len(configs)} ngram_first config(s) ───")
+    for nf_label, nf_json in configs.items():
+        _log(f"  {nf_label}: {nf_json}")
 
     return configs
 
