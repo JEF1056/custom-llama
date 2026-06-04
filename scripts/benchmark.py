@@ -1517,8 +1517,13 @@ def main():
         dry_off_tps = [r["metrics"]["overall_tps"] for r in p3 if not r["request_config"]["dry"]]
         dry_on_tps = [r["metrics"]["overall_tps"] for r in p3 if r["request_config"]["dry"]]
         if dry_off_tps and dry_on_tps:
-            dry_winner = statistics.mean(dry_on_tps) >= statistics.mean(dry_off_tps)
-            _log(f"DRY winner: {'on' if dry_winner else 'off'}")
+            mean_off = statistics.mean(dry_off_tps)
+            mean_on = statistics.mean(dry_on_tps)
+            # Prefer DRY on when throughput cost is within 3% (quality benefit)
+            dry_winner = mean_on >= mean_off * 0.97
+            _log(f"DRY winner: {'on' if dry_winner else 'off'} "
+                 f"(off={mean_off:.1f}, on={mean_on:.1f} tok/s, "
+                 f"delta={((mean_on - mean_off) / mean_off) * 100:+.1f}%)")
 
     if args.phase is None or args.phase == 4:
         run_phase_4(results_path, completed, api_key, spec_winner, kv_winner)

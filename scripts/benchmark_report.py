@@ -307,11 +307,15 @@ def _section_dry(results: list[dict]) -> str:
         overall_pct = _pct_change(mean_off, mean_on)
         lines.append(f"| **Mean** | **{mean_off}** | **{mean_on}** | **{overall_pct}** |")
 
-    lines.append("\n**Verdict**: " + (
-        "DRY has negligible throughput impact."
-        if off_total and on_total and abs(statistics.mean(on_total) - statistics.mean(off_total)) / max(statistics.mean(off_total), 0.01) < 0.03
-        else "DRY has measurable throughput cost — consider whether output quality improvement justifies it."
-    ))
+    if off_total and on_total:
+        cost_pct = (statistics.mean(on_total) - statistics.mean(off_total)) / max(statistics.mean(off_total), 0.01)
+        if abs(cost_pct) < 0.03:
+            verdict = "DRY has negligible throughput impact (<3%). **Recommend DRY on** for output quality."
+        else:
+            verdict = "DRY has measurable throughput cost — consider whether output quality improvement justifies it."
+    else:
+        verdict = "Insufficient data to compare DRY on vs off."
+    lines.append(f"\n**Verdict**: {verdict}")
 
     return "\n".join(lines) + "\n"
 
