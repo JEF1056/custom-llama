@@ -109,6 +109,7 @@ SPEC_CONFIGS: dict[str, str] = {
 # KV cache dtype configs for Phase 2
 KV_CONFIGS: dict[str, str] = {
     "tq_k4v2": "turboquant_k4v2_nc",
+    "tq_k3v4": "turboquant_k3v4_nc",
     "tq_k3v2": "turboquant_k3v2_nc",
     "tq_3bit": "turboquant_3bit_nc",
 }
