@@ -78,8 +78,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   curl \
   libopenblas0t64 \
   libssl3t64 \
-  libcublas-12-9 \
   libgomp1
+
+# cuBLAS runtime libs from the devel image (avoids apt package naming issues)
+COPY --link --from=builder /usr/local/cuda/lib64/libcublas*.so* /usr/local/cuda/lib64/
+COPY --link --from=builder /usr/local/cuda/lib64/libcublasLt*.so* /usr/local/cuda/lib64/
 
 # Binaries and shared libs from builder (already stripped)
 COPY --link --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
