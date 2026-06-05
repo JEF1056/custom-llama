@@ -1,64 +1,19 @@
 #!/bin/bash
 set -e
 
-echo "=== MCP Search Server ==="
-echo "Starting up..."
-
-# Set HOME to appuser's home directory so Playwright finds browsers in the right place
-export HOME=/home/appuser
-
-# Wait for Playwright browsers to be ready
-echo "Checking Playwright browser installation..."
-# Check both root and appuser cache directories
-if [ ! -d "/root/.cache/ms-playwright" ] && [ ! -d "/home/appuser/.cache/ms-playwright" ]; then
-    echo "Installing Playwright browsers as root..."
-    # Run as root to install browsers (need root for --with-deps)
-    su -c "HOME=/root playwright install --with-deps chromium" root
-    # Copy to appuser's cache directory
-    mkdir -p /home/appuser/.cache/ms-playwright
-    cp -r /root/.cache/ms-playwright/* /home/appuser/.cache/ms-playwright/ 2>/dev/null || true
-    chown -R appuser:appuser /home/appuser/.cache/ms-playwright
-    echo "Browsers installed and copied to appuser cache"
-else
-    # Browsers already exist, ensure they're accessible to appuser
-    if [ -d "/root/.cache/ms-playwright" ] && [ ! -d "/home/appuser/.cache/ms-playwright" ]; then
-        echo "Copying browsers from root cache to appuser cache..."
-        mkdir -p /home/appuser/.cache/ms-playwright
-        cp -r /root/.cache/ms-playwright/* /home/appuser/.cache/ms-playwright/ 2>/dev/null || true
-        chown -R appuser:appuser /home/appuser/.cache/ms-playwright
-    fi
-fi
-
 # Verify Playwright browsers exist
-echo "Verifying Playwright installation..."
-if [ -d "/home/appuser/.cache/ms-playwright" ]; then
-    echo "Playwright browsers found:"
-    ls -la /home/appuser/.cache/ms-playwright/
-    echo "Playwright browsers are ready!"
-else
-    echo "ERROR: Playwright browsers not found! Search will not work."
+if [ ! -d "${PLAYWRIGHT_BROWSERS_PATH:-/opt/playwright}" ]; then
+    echo "ERROR: Playwright browsers not found at $PLAYWRIGHT_BROWSERS_PATH"
     exit 1
 fi
 
-# Create mcp-files directories (owned by appuser — /app is already appuser-owned)
-echo "Setting up /app/mcp-files directories..."
+# Create mcp-files directories and clean stale files (>24h)
 mkdir -p /app/mcp-files/screenshots
-
-# Clean up stale files older than 24 hours
-echo "Cleaning up stale files in /app/mcp-files..."
 find /app/mcp-files -type f -mtime +1 -delete 2>/dev/null || true
 
-# Print configuration
-echo ""
-echo "Configuration:"
-echo "  Host: ${MCP_SERVER_HOST:-0.0.0.0}"
-echo "  Port: ${MCP_SERVER_PORT:-3100}"
-echo "  Search Engine: ${SEARCH_ENGINE:-duckduckgo}"
-echo "  Max Results: ${MAX_RESULTS:-10}"
-echo "  Cache Enabled: ${CACHE_ENABLED:-true}"
-echo "  Cache TTL: ${CACHE_TTL:-3600}s"
-echo ""
+echo "=== MCP Search Server ==="
+echo "  Host: ${MCP_SERVER_HOST:-0.0.0.0}:${MCP_SERVER_PORT:-3100}"
+echo "  Search: ${SEARCH_ENGINE:-duckduckgo} (max ${MAX_RESULTS:-10})"
+echo "  Cache: ${CACHE_ENABLED:-true} (TTL ${CACHE_TTL:-3600}s)"
 
-# Start the MCP server
-echo "Starting MCP server..."
 exec python -m src.server
