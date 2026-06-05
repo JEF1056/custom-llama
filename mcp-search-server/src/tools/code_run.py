@@ -241,6 +241,8 @@ def code_run_handler(server: FastMCP) -> None:
         re, datetime, collections, itertools, functools, io, os.path, pathlib.
         Blocked: os, sys, subprocess, shutil, socket, http, urllib, requests,
         threading, multiprocessing, signal, mmap.
+        Use print() to return values; last expression result is also captured.
+        Returns: {status, stdout, stderr, result}
         """
         global _CODE_EXEC_TIMEOUT
         if timeout:

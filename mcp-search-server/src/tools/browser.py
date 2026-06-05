@@ -102,7 +102,8 @@ def browser_handler(server: FastMCP) -> None:
 
         Load a page before further actions (click, fill, screenshot). Provide
         session_id to persist the page; without it, the page closes immediately.
-        wait_until options: load, domcontentloaded, networkidle, commit.
+        wait_until options: load | domcontentloaded (default) | networkidle | commit.
+        Returns: {status, url, title, session_id, interactables_summary}
         """
         try:
             # Start browser if not running
@@ -239,10 +240,12 @@ def browser_handler(server: FastMCP) -> None:
         wait_until: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Click an element. Requires session_id; use url= to navigate first.
+        """Click an element by CSS selector. Requires session_id; use url= to navigate first.
 
         TIP: Call browser_get_interactables first to find the right selector.
-        wait_until: navigation trigger after click.
+        selector examples: "button#submit", "a[href='/login']", "input[name='q']"
+        wait_until: navigation trigger after click (load | domcontentloaded | networkidle).
+        Returns: {status, message, session_id, interactables_summary}
         """
         try:
             # Start browser if not running
@@ -301,9 +304,11 @@ def browser_handler(server: FastMCP) -> None:
         url: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Fill an input field. Requires session_id; use url= to navigate first.
+        """Fill an input field by CSS selector. Requires session_id; use url= to navigate first.
 
         TIP: Call browser_get_interactables first to find the right selector.
+        selector examples: "input[name='email']", "#search-box", "textarea.comment"
+        Returns: {status, message, session_id, interactables_summary}
         """
         try:
             # Start browser if not running
@@ -357,7 +362,11 @@ def browser_handler(server: FastMCP) -> None:
         url: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Execute JavaScript on the current page. Requires session_id; use url= to navigate first."""
+        """Execute JavaScript on the current page. Requires session_id; use url= to navigate first.
+
+        script: JS expression or statement (e.g. "document.title" or "window.scrollTo(0,999)").
+        Returns: {status, result, session_id}
+        """
         try:
             # Start browser if not running
             if not browser_manager.is_running:
@@ -405,7 +414,10 @@ def browser_handler(server: FastMCP) -> None:
         url: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Get text content of an element. Requires session_id; use url= to navigate first."""
+        """Get text content of an element by CSS selector. Requires session_id; use url= to navigate first.
+
+        Returns: {status, text, session_id}
+        """
         try:
             # Start browser if not running
             if not browser_manager.is_running:
@@ -452,10 +464,11 @@ def browser_handler(server: FastMCP) -> None:
         url: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """List all interactable elements (links, buttons, inputs) with selectors.
+        """List all interactable elements (links, buttons, inputs) with CSS selectors + labels.
 
         Use BEFORE clicking/filling to find the right selector.
         Requires session_id; use url= to navigate first.
+        Returns: {status, total, visible_count, hidden_count, elements, summary, session_id}
         """
         try:
             # Start browser if not running
@@ -546,7 +559,8 @@ def browser_handler(server: FastMCP) -> None:
     ) -> str:
         """Get full page text content. Requires session_id; use url= to navigate first.
 
-        For one-off extraction, use fetch() instead.
+        For one-off extraction, use fetch() instead (no session needed).
+        Returns: {status, content, content_length, session_id}
         """
         try:
             # Start browser if not running

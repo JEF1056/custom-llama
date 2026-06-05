@@ -85,11 +85,13 @@ def create_file_handler(server: FastMCP) -> None:
         encoding: str = "utf-8",
         format: str | None = None,
     ):
-        """Create a file. Returns MCP EmbeddedResource + resource URI.
+        """Create a file. Returns MCP EmbeddedResource (readable inline) + resource URI.
 
         format: pdf | svg | html | json | csv | xml — auto-sets extension and content_type.
-        PDF: write BT/ET commands; tool wraps structure automatically.
-        encoding: 'utf-8' (default) or 'base64' for binary content.
+          PDF: write raw text; tool wraps in valid PDF structure automatically.
+        encoding: 'utf-8' (default) | 'base64' for binary content.
+        filename: bare name, no path separators or ".." (extension auto-appended if format set).
+        Download via: FILE_BASE_URL/files/{filename}
         """
         try:
             # --- Resolve format ------------------------------------------------

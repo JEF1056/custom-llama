@@ -31,10 +31,12 @@ def http_request_handler(server: FastMCP) -> None:
     ) -> str:
         """Make an HTTP request (GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS).
 
+        body: raw string body for POST/PUT/PATCH (set Content-Type header manually if needed).
         auth: {"type": "basic"|"bearer"|"apikey", "value": "..."}
-          basic → value is "username:password"
-          bearer → value is the token
+          basic → value is "username:password" (base64-encoded automatically)
+          bearer → adds "Authorization: Bearer <value>"
           apikey → adds "Authorization: ApiKey <value>"
+        Returns: {status_code, headers, body, elapsed_time}
         """
         method = method.upper()
         if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:

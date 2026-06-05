@@ -20,9 +20,12 @@ def deep_search_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def deep_search(query: str, max_results: int | None = None) -> str:
-        """Search the web and extract full content from the top 3 results in one call.
+        """Search the web and extract full page content from the top 3 results in one call.
 
+        Slower than search() but returns full text — use when snippets aren't enough.
+        max_results: controls search pool; content extracted from top 3 only.
         For interactive browsing, use browser_create_session() + browser tools.
+        Returns: {results: [{title, url, snippet, content, content_length}]}
         """
         engine = get_search_engine()
         search_results = await engine.search(query, max_results)

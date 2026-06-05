@@ -22,10 +22,13 @@ def fetch_handler(server: FastMCP) -> None:
         code_block_max_chars: int | None = None,
         sections: list[str] | None = None,
     ) -> str:
-        """Fetch and extract text from a URL (renders JS). For multi-step interactions use browser tools.
+        """Fetch and extract text from a URL (renders JS via headless browser).
 
+        For multi-step interactions (click, fill, scroll) use browser tools instead.
         truncate: "always" (default) | "never" | "main_only" | "code_only"
-        sections: list of heading texts to extract only those sections (read page in chunks).
+        sections: list of heading texts → extract only those sections (useful for long pages).
+        code_block_max_chars: override per-code-block char limit.
+        Returns: {url, title, content, code_blocks, truncated}
         """
         try:
             # Start browser if not running

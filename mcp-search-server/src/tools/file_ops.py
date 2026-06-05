@@ -17,7 +17,11 @@ def file_operations_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def file_read(filename: str) -> str:
-        """Read a file from the output directory. Binary files returned as base64."""
+        """Read a file from the server output directory. Binary files returned as base64.
+
+        filename: bare name only, no path separators or ".." (e.g. "report.xlsx").
+        Returns: {status, filename, content, size, encoding ("utf-8"|"base64")}
+        """
         # Validate filename
         if "/" in filename or ".." in filename:
             return json.dumps({
@@ -68,7 +72,11 @@ def file_operations_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def file_list(directory: str = "") -> str:
-        """List files in the output directory or a subdirectory."""
+        """List files in the server output directory or a subdirectory.
+
+        directory: bare subdirectory name (no separators); omit for root.
+        Returns: {status, directory, entries [{name, type, size, modified}], total}
+        """
         # Validate directory
         if "/" in directory or ".." in directory:
             return json.dumps({
@@ -117,7 +125,11 @@ def file_operations_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def file_delete(filename: str) -> str:
-        """Delete a file from the output directory."""
+        """Delete a file from the output directory.
+
+        filename: bare name only, no path separators or ".."
+        Returns: {status, message}
+        """
         # Validate filename
         if "/" in filename or ".." in filename:
             return json.dumps({
@@ -152,7 +164,12 @@ def file_operations_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def file_upload(filename: str, content: str, encoding: str = "utf-8") -> str:
-        """Upload a file to the output directory. encoding: 'utf-8' (default) or 'base64' for binary."""
+        """Upload a file to the output directory.
+
+        filename: bare name only, no path separators or ".."
+        encoding: 'utf-8' (default) | 'base64' for binary content.
+        Returns: {status, filename, size, download_url}
+        """
         # Validate filename
         if "/" in filename or ".." in filename:
             return json.dumps({

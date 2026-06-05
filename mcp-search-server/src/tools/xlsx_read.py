@@ -33,9 +33,11 @@ def xlsx_read_handler(server: FastMCP) -> None:
         sheet: str | None = None,
         max_rows: int = 1000,
     ):
-        """Read an .xlsx workbook. Returns sheets with name, dimensions, headers, rows.
+        """Read an .xlsx workbook.
 
-        sheet: read one sheet by name; omit for all. max_rows: cap per sheet (default 1000).
+        sheet: sheet name to read; omit for all sheets.
+        max_rows: row cap per sheet (default 1000).
+        Returns: {status, filename, sheets: [{name, dimensions, headers: [...], rows: [[...]]}]}
         """
         try:
             # --- Validate filename ---------------------------------------------

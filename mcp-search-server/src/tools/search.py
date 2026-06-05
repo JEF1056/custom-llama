@@ -18,9 +18,11 @@ def search_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def search(query: str, max_results: int | None = None) -> str:
-        """Search the web. Returns titles, URLs, and snippets.
+        """Search the web. Returns titles, URLs, and snippets (no full page content).
 
-        Follow up with fetch() for content or browser_screenshot() for a visual.
+        max_results: defaults to config value (typically 10).
+        Follow up with fetch(url) to get full content, or browser_screenshot(url) for a visual.
+        Returns: [{title, url, snippet, engine, timestamp}]
         """
         engine = get_search_engine()
         results = await engine.search(query, max_results)

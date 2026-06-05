@@ -434,12 +434,15 @@ def pptx_create_handler(server: FastMCP) -> None:
         """Create a .pptx presentation. Returns MCP EmbeddedResource + summary.
 
         theme: "default" | "dark" | "minimal"
+        Slide layouts: "title" | "title_content" (default) | "two_column" | "section_header" | "blank"
 
-        Slide layouts: "title" | "title_content" | "two_column" | "section_header" | "blank"
-
-        Slide fields: layout, title, subtitle, content (str or list→bullets),
-        left_content, right_content (two_column), image, image_position (left/right/center),
-        table ({"headers": [...], "rows": [[...]]}), notes
+        Each slide dict fields:
+          layout, title, subtitle (title/section_header layouts),
+          content (str or list[str]→bullet points),
+          left_content, right_content (two_column layout),
+          image (filename in output dir), image_position ("left"|"right"|"center"),
+          table ({"headers": [...], "rows": [[...]]}),
+          notes (speaker notes str)
         """
         try:
             # --- Validate filename ---------------------------------------------

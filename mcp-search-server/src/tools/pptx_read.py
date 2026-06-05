@@ -100,9 +100,10 @@ def pptx_read_handler(server: FastMCP) -> None:
         filename: str,
         slide_index: int | None = None,
     ):
-        """Read a .pptx and return structured slide data (layout, title, shapes, notes).
+        """Read a .pptx and return structured slide data.
 
         slide_index: read one slide (0-based); omit for all slides.
+        Returns: {status, filename, slide_count, slides: [{index, layout, title, shapes, notes}]}
         """
         try:
             # --- Validate filename ---------------------------------------------
