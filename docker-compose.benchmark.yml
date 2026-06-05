@@ -1,0 +1,7 @@
+# Benchmark override — exposes llama-server port for host-side benchmarking.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.benchmark.yml up -d llama-server
+services:
+  llama-server:
+    restart: "no"
+    ports:
+      - "8080:8080"

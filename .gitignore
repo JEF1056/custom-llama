@@ -23,3 +23,13 @@ Thumbs.db
 plans
 .roo
 .roomodes
+opencode.json
+
+# Benchmark results (large JSONL files)
+benchmark/results/
+
+# Chat UI
+ui/node_modules/
+ui/dist/
+ui/.env
+ui/.env.local
