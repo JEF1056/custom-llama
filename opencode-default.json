@@ -3,9 +3,9 @@
   "plugin": [
     "@opencode_weave/weave"
   ],
-  "model": "llama/qwen3.6-27b",
+  "model": "jessfan/qwen3.6-27b",
   "provider": {
-    "llama": {
+    "jessfan": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "llama.cpp Server",
       "options": {
