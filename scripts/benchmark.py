@@ -1461,6 +1461,256 @@ def _pick_winner(results: list[dict], config_key: str) -> str:
     return winner
 
 
+def run_live(
+    runs: int, api_key: str, dry: bool = False, include_stress: bool = False,
+) -> None:
+    """Benchmark the currently running server — no restarts, terminal-only report."""
+    _log("=== Live Benchmark (against running server) ===")
+
+    # Quick health check (short timeout — server should already be up)
+    try:
+        wait_for_health(timeout=30)
+    except TimeoutError:
+        _log("ERROR: No healthy server at " + HEALTH_URL)
+        _log("Start the server first, then re-run with --live")
+        sys.exit(1)
+
+    # Scrape server info from /metrics or just note what we can
+    _log(f"Target: {API_BASE}")
+    _log(f"Runs per scenario: {runs}")
+    _log(f"DRY: {'on' if dry else 'off'}")
+
+    # Warmup (discard)
+    _log("Warmup run...")
+    try:
+        run_scenario(SCENARIOS[0], dry=False, api_key=api_key)
+    except Exception as e:
+        _log(f"Warmup failed: {e}")
+
+    # --- Standard scenarios ---
+    results: list[dict[str, Any]] = []
+    total = len(SCENARIOS) * runs
+    tracker = ProgressTracker(total, "Live")
+
+    for scenario in SCENARIOS:
+        for run_num in range(1, runs + 1):
+            run_start = time.monotonic()
+            try:
+                metrics = run_scenario(scenario, dry=dry, api_key=api_key)
+                status = "ok"
+                error = None
+            except Exception as e:
+                _log(f"\nERROR: {scenario.name} run {run_num}: {e}")
+                metrics = {}
+                status = "error"
+                error = str(e)
+
+            results.append({
+                "scenario": scenario.name,
+                "run": run_num,
+                "metrics": metrics,
+                "status": status,
+                "error": error,
+            })
+
+            run_duration = time.monotonic() - run_start
+            tps = metrics.get("overall_tps") if metrics else None
+            tracker.update(
+                f"{scenario.name} run {run_num}/{runs}",
+                last_tps=tps, duration=run_duration,
+            )
+
+    tracker.finish()
+
+    # --- Optional stress scenarios ---
+    stress_results: list[dict[str, Any]] = []
+    if include_stress:
+        stress_total = sum(
+            (s.get("burst", 1) if s.get("burst") else 1) * 3
+            if not s.get("parallel") else 3
+            for s in STRESS_SCENARIOS
+        )
+        stress_tracker = ProgressTracker(stress_total, "Live-Stress")
+
+        for stress in STRESS_SCENARIOS:
+            is_parallel = stress.get("parallel", 0) > 0
+            is_burst = stress.get("burst", 0) > 0
+
+            for run_num in range(1, 4):
+                if is_parallel:
+                    try:
+                        metrics = _run_parallel_requests(
+                            stress["prompts"], stress["max_tokens"], dry, api_key,
+                        )
+                        status = "ok"
+                        error = None
+                    except Exception as e:
+                        metrics = {}
+                        status = "error"
+                        error = str(e)
+                    stress_results.append({
+                        "scenario": stress["name"],
+                        "run": run_num,
+                        "metrics": metrics,
+                        "status": status,
+                        "error": error,
+                        "parallel_n": stress["parallel"],
+                    })
+                    stress_tracker.update(f"{stress['name']} run {run_num}",
+                                          last_tps=metrics.get("aggregate_tps"))
+                    continue
+
+                iterations = stress.get("burst", 1) if is_burst else 1
+                for burst_i in range(iterations):
+                    user_msg = stress["user"]
+                    if is_burst and stress.get("burst_topics"):
+                        user_msg = user_msg.format(topic=stress["burst_topics"][burst_i])
+                    messages = [
+                        {"role": "system", "content": stress["system"]},
+                        {"role": "user", "content": user_msg},
+                    ]
+                    try:
+                        metrics = _run_single_stream(
+                            messages, stress["max_tokens"], dry, api_key,
+                        )
+                        status = "ok"
+                        error = None
+                    except Exception as e:
+                        metrics = {}
+                        status = "error"
+                        error = str(e)
+                    stress_results.append({
+                        "scenario": stress["name"],
+                        "run": run_num,
+                        "burst_index": burst_i if is_burst else None,
+                        "metrics": metrics,
+                        "status": status,
+                        "error": error,
+                        "stress_max_tokens": stress["max_tokens"],
+                    })
+                    stress_tracker.update(
+                        f"{stress['name']} run {run_num}" +
+                        (f" burst {burst_i+1}/{iterations}" if is_burst else ""),
+                        last_tps=metrics.get("overall_tps"),
+                    )
+
+        stress_tracker.finish()
+
+    # --- Print terminal report ---
+    _print_terminal_report(results, stress_results)
+
+
+def _print_terminal_report(
+    results: list[dict[str, Any]],
+    stress_results: list[dict[str, Any]] | None = None,
+) -> None:
+    """Print strict numbers to stdout. No markdown, no file."""
+    ok = [r for r in results if r["status"] == "ok"]
+    errors = [r for r in results if r["status"] != "ok"]
+
+    if not ok:
+        print("\nNo successful runs.")
+        return
+
+    scenarios = sorted(set(r["scenario"] for r in ok))
+
+    # Collect per-scenario stats
+    rows: list[tuple[str, float, float, float, float, float, float, int, str]] = []
+    for sc in scenarios:
+        sc_ok = [r for r in ok if r["scenario"] == sc]
+        decode_vals = [r["metrics"]["decode_tps"] for r in sc_ok]
+        overall_vals = [r["metrics"]["overall_tps"] for r in sc_ok]
+        ttft_vals = [r["metrics"]["ttft_s"] for r in sc_ok]
+        tok_vals = [r["metrics"]["completion_tokens"] for r in sc_ok]
+
+        d_mean, d_std = (statistics.mean(decode_vals), statistics.stdev(decode_vals) if len(decode_vals) > 1 else 0.0)
+        o_mean, o_std = (statistics.mean(overall_vals), statistics.stdev(overall_vals) if len(overall_vals) > 1 else 0.0)
+        t_mean = statistics.mean(ttft_vals)
+        avg_tok = round(statistics.mean(tok_vals))
+
+        # Spec acceptance
+        spec_vals = [
+            r["metrics"]["spec_metrics"]["acceptance_pct"]
+            for r in sc_ok
+            if r["metrics"].get("spec_metrics", {}).get("acceptance_pct") is not None
+        ]
+        spec_str = f"{statistics.mean(spec_vals):.1f}%" if spec_vals else "—"
+
+        rows.append((sc, d_mean, d_std, o_mean, o_std, t_mean, avg_tok, len(sc_ok), spec_str))
+
+    # Header
+    print()
+    print("=" * 96)
+    print("  LIVE BENCHMARK RESULTS")
+    print("=" * 96)
+    print(f"  {'Scenario':<24} {'Decode tok/s':>14} {'Overall tok/s':>15} {'TTFT(s)':>9} {'Tokens':>7} {'Runs':>5} {'Spec%':>7}")
+    print("-" * 96)
+
+    all_decode = []
+    all_overall = []
+    all_ttft = []
+    for (sc, d_m, d_s, o_m, o_s, t_m, tok, n, sp) in rows:
+        print(f"  {sc:<24} {d_m:>7.1f}±{d_s:<5.1f} {o_m:>8.1f}±{o_s:<5.1f} {t_m:>8.3f} {tok:>7} {n:>5} {sp:>7}")
+        all_decode.append(d_m)
+        all_overall.append(o_m)
+        all_ttft.append(t_m)
+
+    # Totals row
+    print("-" * 96)
+    d_total = statistics.mean(all_decode)
+    o_total = statistics.mean(all_overall)
+    t_total = statistics.mean(all_ttft)
+    total_runs = sum(r[7] for r in rows)
+    print(f"  {'MEAN':<24} {d_total:>7.1f}       {o_total:>8.1f}       {t_total:>8.3f}         {total_runs:>5}")
+    print("=" * 96)
+
+    if errors:
+        print(f"\n  ERRORS: {len(errors)}")
+        for e in errors[:5]:
+            print(f"    {e['scenario']} run {e['run']}: {e.get('error', '?')[:80]}")
+
+    # --- Stress results ---
+    if stress_results:
+        s_ok = [r for r in stress_results if r["status"] == "ok"]
+        if s_ok:
+            seq = [r for r in s_ok if not r.get("parallel_n")]
+            par = [r for r in s_ok if r.get("parallel_n")]
+
+            if seq:
+                # Group sequential by scenario
+                seq_scenarios = sorted(set(r["scenario"] for r in seq))
+                print()
+                print("  STRESS — SEQUENTIAL")
+                print("-" * 96)
+                print(f"  {'Test':<28} {'tok/s (mean)':>13} {'min':>8} {'max':>8} {'TTFT(s)':>9} {'Runs':>5}")
+                print("-" * 96)
+                for sc in seq_scenarios:
+                    sc_runs = [r for r in seq if r["scenario"] == sc]
+                    tps = [r["metrics"]["overall_tps"] for r in sc_runs if r["metrics"].get("overall_tps")]
+                    ttft = [r["metrics"]["ttft_s"] for r in sc_runs if r["metrics"].get("ttft_s")]
+                    if tps:
+                        print(f"  {sc:<28} {statistics.mean(tps):>10.1f}   {min(tps):>8.1f} {max(tps):>8.1f} {statistics.mean(ttft):>8.3f} {len(sc_runs):>5}")
+
+            if par:
+                par_scenarios = sorted(set(r["scenario"] for r in par))
+                print()
+                print("  STRESS — PARALLEL")
+                print("-" * 96)
+                print(f"  {'Test':<28} {'Slots':>5} {'Agg tok/s':>10} {'Per-req':>9} {'Wall(s)':>9} {'Runs':>5}")
+                print("-" * 96)
+                for sc in par_scenarios:
+                    sc_runs = [r for r in par if r["scenario"] == sc]
+                    n = sc_runs[0].get("parallel_n", "?")
+                    agg = [r["metrics"]["aggregate_tps"] for r in sc_runs if r["metrics"].get("aggregate_tps")]
+                    per = [r["metrics"]["per_request_tps_mean"] for r in sc_runs if r["metrics"].get("per_request_tps_mean")]
+                    wall = [r["metrics"]["wall_time_s"] for r in sc_runs if r["metrics"].get("wall_time_s")]
+                    if agg:
+                        print(f"  {sc:<28} {n:>5} {statistics.mean(agg):>10.1f} {statistics.mean(per):>9.1f} {statistics.mean(wall):>9.1f} {len(sc_runs):>5}")
+                print("=" * 96)
+
+    print()
+
+
 def _validate_dry_per_request(api_key: str) -> bool:
     """Check if DRY params work via extra_body without server-level --dry-config."""
     scenario = SCENARIOS[0]
@@ -1509,7 +1759,19 @@ def main():
     parser.add_argument("--results-file", type=str, help="Path to existing JSONL (for resume/report)")
     parser.add_argument("--stop-on-error", action="store_true",
                         help="Abort immediately on any error instead of continuing")
+    parser.add_argument("--live", action="store_true",
+                        help="Benchmark against the currently running server (no restart, terminal report)")
+    parser.add_argument("--dry", action="store_true",
+                        help="Send DRY sampling params with requests (use with --live)")
+    parser.add_argument("--stress", action="store_true",
+                        help="Include stress scenarios (use with --live)")
     args = parser.parse_args()
+
+    # Live mode: benchmark against running server, print to terminal, exit
+    if args.live:
+        api_key = read_api_key()
+        run_live(args.runs, api_key, dry=args.dry, include_stress=args.stress)
+        return
 
     # Determine results file path
     if args.results_file:

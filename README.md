@@ -331,7 +331,40 @@ This runs all 4 phases (~2.75 hours total) and generates a Markdown report.
 
 Each phase isolates one variable. The winner carries forward as the baseline for the next phase.
 
-### Options
+### Live mode (test against running server)
+
+Benchmarks the currently running server without restarting or changing configuration. Results are printed directly to the terminal as strict numbers — no files written.
+
+```bash
+# Basic — 3 runs per scenario
+python scripts/benchmark.py --live
+
+# 5 runs, with DRY sampling params
+python scripts/benchmark.py --live --runs 5 --dry
+
+# Include stress tests (sustained generation, burst, parallel slots)
+python scripts/benchmark.py --live --stress
+```
+
+Sample output:
+
+```
+================================================================================================
+  LIVE BENCHMARK RESULTS
+================================================================================================
+  Scenario                  Decode tok/s  Overall tok/s   TTFT(s)  Tokens  Runs   Spec%
+------------------------------------------------------------------------------------------------
+  general_text                65.2±3.1       58.4±2.8      0.320    1024     3   62.3%
+  coding                      71.8±2.5       64.1±1.9      0.285    1024     3   68.1%
+  agentic                     59.4±4.2       53.7±3.6      0.341     982     3   55.7%
+  instruction_following       63.1±2.8       56.9±2.3      0.312    1024     3   60.4%
+  tool_calling                58.7±3.5       42.1±4.1      0.892     847     3   57.2%
+------------------------------------------------------------------------------------------------
+  MEAN                        63.6           55.0          0.430              15
+================================================================================================
+```
+
+### Phased mode options
 
 ```bash
 python scripts/benchmark.py --phase 1       # run only Phase 1
@@ -341,7 +374,7 @@ python scripts/benchmark.py --report-only   # regenerate report from existing da
 python scripts/benchmark.py --stop-on-error # abort on first error instead of continuing
 ```
 
-### Output
+### Output (phased mode)
 
 - `benchmark/results/{timestamp}_runs.jsonl` — raw data, one JSON object per run (flushed immediately)
 - `benchmark/results/{timestamp}_report.md` — Markdown report with tables, % comparisons, and a recommended `.env.default` config block
