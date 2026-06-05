@@ -5,6 +5,27 @@ networks:
 
 services:
   # ---------------------------------------------------------------------------
+  # Builder cache seed — build this once to populate the layer cache used by
+  # both llama-server and llama-convert.  Subsequent builds of either service
+  # will find the expensive cmake/CUDA compilation layers already cached.
+  #
+  #   docker compose build llama-builder-cache
+  #
+  # After that, build either service as normal:
+  #   docker compose build llama-server
+  #   docker compose build llama-convert
+  # ---------------------------------------------------------------------------
+  llama-builder-cache:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+      args:
+        CUDA_ARCHS: ${CUDA_ARCHS:-86}
+    image: llama-builder-cache:latest
+    profiles: ["builder-cache"]
+
+  # ---------------------------------------------------------------------------
   # Model preparation (download / quantize / convert) — run before the server.
   # All model prep is handled here; the runtime image only serves /models.
   #
@@ -35,6 +56,8 @@ services:
       target: convert
       args:
         CUDA_ARCHS: ${CUDA_ARCHS:-86}
+      cache_from:
+        - llama-builder-cache:latest
     image: llama-convert:latest
     container_name: llama-convert
     profiles: ["convert"]
@@ -71,6 +94,8 @@ services:
       target: runtime
       args:
         CUDA_ARCHS: ${CUDA_ARCHS:-86}
+      cache_from:
+        - llama-builder-cache:latest
     image: llama-server:latest
     container_name: llama-server
 

@@ -64,12 +64,13 @@ RUN strip --strip-unneeded /llama.cpp/build/bin/llama-server /llama.cpp/build/bi
 
 
 # =============================================================================
-# Stage 2: Runtime (server only — assumes models are already in /models volume)
+# Stage 2: Base (shared runtime foundation for both runtime and convert)
 #
-# Model preparation is handled entirely by the convert image (stage 3).
-# This image contains only llama-server and its runtime dependencies.
+# Contains: CUDA runtime image, all shared libs from builder, staged llama libs,
+# and common environment variables.  Neither runtime nor convert depend on each
+# other — both inherit from this stage only.
 # =============================================================================
-FROM nvidia/cuda:12.9.0-runtime-ubuntu24.04 AS runtime
+FROM nvidia/cuda:12.9.0-runtime-ubuntu24.04 AS base
 
 # Runtime shared libs copied from builder — avoids apt repo issues in the
 # minimal CUDA runtime image.  The devel stage already has everything.
@@ -79,17 +80,28 @@ COPY --link --from=builder /usr/lib/*/libgomp*.so* /usr/lib/
 COPY --link --from=builder /usr/local/cuda/lib64/libcublas*.so* /usr/local/cuda/lib64/
 COPY --link --from=builder /usr/local/cuda/lib64/libcublasLt*.so* /usr/local/cuda/lib64/
 
-# curl is the only tool we need from apt (for healthcheck)
-RUN apt-get update && apt-get install -y --no-install-recommends curl && \
-  rm -rf /var/lib/apt/lists/*
-
-# Binaries and shared libs from builder (already stripped)
-COPY --link --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
+# Shared llama libs (used by both llama-server and llama-quantize)
 COPY --link --from=builder /staging/lib/ /opt/llama/lib/
 
 ENV MODEL_DIR=/models \
   LD_LIBRARY_PATH=/opt/llama/lib:/usr/lib:/usr/local/cuda/lib64:/usr/local/nvidia/lib64 \
   PATH=/usr/local/bin:$PATH
+
+
+# =============================================================================
+# Stage 3: Runtime (server only — assumes models are already in /models volume)
+#
+# Model preparation is handled entirely by the convert image (stage 4).
+# This image contains only llama-server and its runtime dependencies.
+# =============================================================================
+FROM base AS runtime
+
+# curl is the only tool we need from apt (for healthcheck)
+RUN apt-get update && apt-get install -y --no-install-recommends curl && \
+  rm -rf /var/lib/apt/lists/*
+
+# llama-server binary from builder (already stripped)
+COPY --link --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
 
 COPY entrypoint.sh /entrypoint.sh
 COPY scripts/webui-config.json /etc/llama-server/webui-config.json
@@ -109,7 +121,10 @@ ENTRYPOINT ["/entrypoint.sh"]
 
 
 # =============================================================================
-# Stage 3: Convert (model preparation — download, quantize, convert safetensors)
+# Stage 4: Convert (model preparation — download, quantize, convert safetensors)
+#
+# Inherits from base (NOT runtime) — independent of the server image so changes
+# to entrypoint, configs, or healthcheck do not invalidate this stage.
 #
 # Run before starting the server to prepare models in the shared /models volume.
 #
@@ -126,7 +141,7 @@ ENTRYPOINT ["/entrypoint.sh"]
 # CPU-only torch keeps the image ~3 GB lighter than CUDA torch.
 # Conversion is memory-bound, not compute-bound — CPU is fine.
 # =============================================================================
-FROM runtime AS convert
+FROM base AS convert
 
 # llama-quantize is linked against libcuda.so.1, which is normally injected by
 # the NVIDIA container runtime from the host driver.  llama-convert runs without

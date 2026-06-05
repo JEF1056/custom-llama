@@ -47,6 +47,7 @@ ENV HOME=/home/appuser
 
 # Copy entrypoint and source (changes frequently — placed last)
 COPY --chown=appuser:appuser entrypoint.sh .
+RUN chmod +x entrypoint.sh
 COPY --link --from=builder /build/src/ ./src/
 
 EXPOSE ${MCP_SERVER_PORT:-3100}
