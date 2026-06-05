@@ -33,6 +33,8 @@ services:
       context: .
       dockerfile: Dockerfile
       target: convert
+      args:
+        CUDA_ARCHS: ${CUDA_ARCHS:-86}
     image: llama-convert:latest
     container_name: llama-convert
     profiles: ["convert"]
@@ -67,6 +69,8 @@ services:
       context: .
       dockerfile: Dockerfile
       target: runtime
+      args:
+        CUDA_ARCHS: ${CUDA_ARCHS:-86}
     image: llama-server:latest
     container_name: llama-server
 

@@ -1,17 +1,24 @@
 # =============================================================================
 # Stage 1: Builder (CUDA)
 # =============================================================================
-FROM nvidia/cuda:12.8.0-devel-ubuntu22.04 AS builder
+FROM nvidia/cuda:12.9.0-devel-ubuntu24.04 AS builder
 
-RUN apt-get update && \
+# Target GPU architecture(s). Default 86 = RTX 3090/3080.
+# Override at build time: docker compose build --build-arg CUDA_ARCHS="86;89"
+# Use "native" to auto-detect (requires GPU visible at build time).
+ARG CUDA_ARCHS=86
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+  apt-get update && \
   apt-get install -y --no-install-recommends \
   git \
   cmake \
+  ninja-build \
   build-essential \
   libopenblas-dev \
   libssl-dev \
-  pkg-config && \
-  rm -rf /var/lib/apt/lists/*
+  pkg-config
 
 RUN git clone --depth 1 --branch llama-exp --recursive \
   https://github.com/JEF1056/llama-cpp-turboquant.git /llama.cpp
@@ -22,9 +29,10 @@ WORKDIR /llama.cpp
 # stub injected at runtime by the NVIDIA container runtime — it is intentionally
 # absent at build time. Without this flag, the linker fails on every tool binary.
 RUN cmake \
-  -B build \
+  -B build -G Ninja \
   -DBUILD_SHARED_LIBS=ON \
   -DGGML_CUDA=ON \
+  -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHS} \
   -DGGML_BLAS=ON \
   -DGGML_BLAS_VENDOR=OpenBLAS \
   -DGGML_HBM=OFF \
@@ -32,7 +40,7 @@ RUN cmake \
   -DLLAMA_BUILD_EXAMPLES=OFF \
   -DLLAMA_BUILD_TOOLS=ON \
   -DLLAMA_BUILD_TESTS_CXX=OFF \
-  -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_EXE_LINKER_FLAGS="-Wl,--allow-shlib-undefined" \
   -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--allow-shlib-undefined" \
   . && \
@@ -45,13 +53,14 @@ RUN echo "=== Built binaries ===" && find /llama.cpp/build/bin -type f | sort
 RUN set -e; \
   BIN=/llama.cpp/build/bin; \
   [ ! -f "$BIN/llama-quantize" ] && [ -f "$BIN/quantize" ] && cp "$BIN/quantize" "$BIN/llama-quantize" || true; \
-  [ ! -f "$BIN/llama-server" ]   && [ -f "$BIN/server" ]   && cp "$BIN/server"   "$BIN/llama-server"   || true; \
-  echo "=== Final bin contents ===" && ls -la "$BIN/"
+  [ ! -f "$BIN/llama-server" ]   && [ -f "$BIN/server" ]   && cp "$BIN/server"   "$BIN/llama-server"   || true
 
-# Stage .so files into a flat dir — avoids glob issues with COPY --from
-RUN mkdir -p /staging/lib && \
+# Strip debug symbols and stage shared libs into a flat dir (~60-80% size reduction)
+RUN strip --strip-unneeded /llama.cpp/build/bin/llama-server /llama.cpp/build/bin/llama-quantize 2>/dev/null || true && \
+  mkdir -p /staging/lib && \
   find /llama.cpp/build \( -name "libllama*.so*" -o -name "libggml*.so*" -o -name "libmtmd*.so*" \) | \
-  xargs -I{} cp {} /staging/lib/
+  xargs -I{} cp {} /staging/lib/ && \
+  strip --strip-unneeded /staging/lib/*.so* 2>/dev/null || true
 
 
 # =============================================================================
@@ -60,39 +69,31 @@ RUN mkdir -p /staging/lib && \
 # Model preparation is handled entirely by the convert image (stage 3).
 # This image contains only llama-server and its runtime dependencies.
 # =============================================================================
-FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04 AS runtime
+FROM nvidia/cuda:12.9.0-runtime-ubuntu24.04 AS runtime
 
-RUN apt-get update && \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+  apt-get update && \
   apt-get install -y --no-install-recommends \
-  bash \
   curl \
-  libopenblas0-pthread \
-  libssl3 \
-  libcublas-12-4 \
-  libgomp1 && \
-  rm -rf /var/lib/apt/lists/*
+  libopenblas0t64 \
+  libssl3t64 \
+  libcublas-12-9 \
+  libgomp1
 
-ENV MODEL_DIR=/models
-RUN mkdir -p /models
+# Binaries and shared libs from builder (already stripped)
+COPY --link --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
+COPY --link --from=builder /staging/lib/ /opt/llama/lib/
 
-# llama-server only — quantize and model-management tools live in the convert image
-COPY --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
-
-# Copy .so files from staging dir
-RUN mkdir -p /opt/llama/lib
-COPY --from=builder /staging/lib/ /opt/llama/lib/
-
-# Copy OpenBLAS without hardcoding the arch path
-RUN --mount=from=builder,target=/builder \
-  find /builder/usr/lib -name "libopenblas*.so*" -exec cp {} /usr/lib/ \;
-
-ENV LD_LIBRARY_PATH=/opt/llama/lib:/usr/local/cuda/lib64:/usr/local/nvidia/lib64:/usr/lib:$LD_LIBRARY_PATH
-ENV PATH=/usr/local/bin:$PATH
+ENV MODEL_DIR=/models \
+  LD_LIBRARY_PATH=/opt/llama/lib:/usr/local/cuda/lib64:/usr/local/nvidia/lib64 \
+  PATH=/usr/local/bin:$PATH
 
 COPY entrypoint.sh /entrypoint.sh
 COPY scripts/webui-config.json /etc/llama-server/webui-config.json
 COPY scripts/models.ini /etc/llama-server/models.ini
-RUN chmod +x /entrypoint.sh && sed -i 's/\r$//' /entrypoint.sh && \
+RUN mkdir -p /models && \
+  chmod +x /entrypoint.sh && sed -i 's/\r$//' /entrypoint.sh && \
   if [ ! -x "/usr/local/bin/llama-server" ]; then \
   echo "ERROR: /usr/local/bin/llama-server is missing or not executable" && exit 1; \
   fi
@@ -130,34 +131,33 @@ FROM runtime AS convert
 # GPU access, so the injection never happens and the binary fails to start.
 # Copying the build-time stub satisfies the dynamic linker; quantization itself
 # is purely CPU-bound so nothing ever calls into the real driver.
-COPY --from=builder /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so
+COPY --link --from=builder /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so
 RUN ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH}
 
 # Model management tools not present in the runtime image
-COPY --from=builder /llama.cpp/build/bin/llama-quantize /usr/local/bin/llama-quantize
+COPY --link --from=builder /llama.cpp/build/bin/llama-quantize /usr/local/bin/llama-quantize
 
 # Python stack for model download and HF→GGUF conversion
-RUN apt-get update && \
-  apt-get install -y --no-install-recommends python3 python3-pip \
-  aria2 && \
-  rm -rf /var/lib/apt/lists/*
+# uv: Rust-based pip replacement — 10-100x faster dependency resolution & install.
+COPY --link --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+  apt-get update && \
+  apt-get install -y --no-install-recommends python3 \
+  aria2
 
 # Pull the HF→GGUF conversion script and its support package from the builder.
-COPY --from=builder /llama.cpp/convert_hf_to_gguf.py /scripts/convert_hf_to_gguf.py
-COPY --from=builder /llama.cpp/conversion/ /scripts/conversion/
-COPY --from=builder /llama.cpp/gguf-py/ /scripts/gguf-py/
+COPY --link --from=builder /llama.cpp/convert_hf_to_gguf.py /scripts/convert_hf_to_gguf.py
+COPY --link --from=builder /llama.cpp/conversion/ /scripts/conversion/
+COPY --link --from=builder /llama.cpp/gguf-py/ /scripts/gguf-py/
 
-RUN python3 -m pip install --no-cache-dir \
+RUN --mount=type=cache,target=/root/.cache/uv \
+  uv pip install --system \
   torch --index-url https://download.pytorch.org/whl/cpu && \
-  python3 -m pip install --no-cache-dir \
-  huggingface_hub \
-  hf_transfer \
-  transformers \
-  safetensors \
-  sentencepiece \
-  accelerate \
-  /scripts/gguf-py/
+  uv pip install --system \
+  huggingface_hub hf_transfer transformers safetensors \
+  sentencepiece accelerate /scripts/gguf-py/
 
 # Copied after pip install so that edits to this script don't bust the pip cache.
 COPY scripts/manage_models.py /scripts/manage_models.py
