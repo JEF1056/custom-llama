@@ -20,17 +20,9 @@ def deep_search_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def deep_search(query: str, max_results: int | None = None) -> str:
-        """Search the web and extract content from top 3 results.
+        """Search the web and extract full content from the top 3 results in one call.
 
-        Use for comprehensive information in a single call. For interactive
-        browsing, use browser_create_session() + browser tools.
-
-        Args:
-            query: Search query
-            max_results: Max results (default from config)
-
-        Returns:
-            JSON string with search results and extracted content from top 3
+        For interactive browsing, use browser_create_session() + browser tools.
         """
         engine = get_search_engine()
         search_results = await engine.search(query, max_results)

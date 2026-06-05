@@ -190,67 +190,13 @@ def xlsx_create_handler(server: FastMCP) -> None:
         charts: list[dict] | None = None,
         formatting: list[dict] | None = None,
     ):
-        """Create an Excel (.xlsx) workbook with sheets, formatting, and charts.
+        """Create an .xlsx workbook. Returns MCP EmbeddedResource. Prefix values with = for formulas.
 
-        Creates a valid .xlsx file with multiple sheets, optional formatting
-        rules, and optional charts. Formulas are supported by prefixing cell
-        values with ``=``.
-
-        **Preferred workflow: create small, then edit**
-
-        Rather than building a complete workbook in one call, create a minimal
-        version first (e.g. headers + a few rows), then use ``xlsx_edit`` to
-        add data, fix values, apply formatting, or add charts. This iterative
-        approach is more reliable and easier to debug.
-
-        **Sheet definition**
-
-        Each sheet in the ``sheets`` list is a dict with:
-
-        - ``name`` (str): Sheet name (default: "Sheet1"). Max 31 chars, no
-          ``: \\ / ? * [ ]`` characters.
-        - ``headers`` (list[str]): Column headers written to row 1.
-        - ``rows`` (list[list]): Data rows. Each row is a list of values
-          matching the header count. Use ``None`` for empty cells.
-          Prefix a string with ``=`` to store it as a formula.
-
-        **Formatting rules** (optional)
-
-        Each rule in ``formatting`` is a dict with:
-
-        - ``sheet`` (str): Target sheet name (default: first sheet).
-        - ``range`` (str): Excel range, e.g. ``"A1:D1"``.
-        - ``bold`` (bool): Bold font.
-        - ``italic`` (bool): Italic font.
-        - ``fill`` (str): Hex fill color, e.g. ``"4472C4"``.
-        - ``font_color`` (str): Hex font color.
-        - ``align`` (str): ``"left"``, ``"center"``, or ``"right"``.
-        - ``number_format`` (str): Excel number format, e.g. ``"#,##0.00"``.
-
-        **Charts** (optional)
-
-        Each chart in ``charts`` is a dict with:
-
-        - ``sheet`` (str): Target sheet name.
-        - ``type`` (str): ``"bar"``, ``"line"``, ``"pie"``, or ``"scatter"``.
-        - ``title`` (str): Chart title.
-        - ``data_range`` (str): Excel data range, e.g. ``"A1:D10"``.
-        - ``position`` (str): Cell to place chart, e.g. ``"F1"``.
-        - ``x_axis_title`` (str, optional): X-axis label.
-        - ``y_axis_title`` (str, optional): Y-axis label.
-
-        The created file is returned as an MCP EmbeddedResource (base64 blob)
-        so the LLM can read it directly, plus a TextContent summary.
-
-        Args:
-            filename: Output filename, must end with .xlsx (e.g., "report.xlsx")
-            sheets: List of sheet definitions with headers and rows
-            charts: Optional list of chart definitions
-            formatting: Optional list of formatting rules
-
-        Returns:
-            MCP EmbeddedResource with base64-encoded .xlsx file, plus a
-            TextContent summary with file details.
+        sheets: [{"name", "headers": [...], "rows": [[...]]}]
+        formatting: [{"sheet", "range", "bold", "italic", "fill" (hex), "font_color" (hex),
+          "align" (left/center/right), "number_format"}]
+        charts: [{"sheet", "type" (bar/line/pie/scatter), "title", "data_range",
+          "position", "x_axis_title", "y_axis_title"}]
         """
         try:
             # --- Validate filename ---------------------------------------------

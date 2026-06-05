@@ -113,36 +113,10 @@ def pptx_slide_image_handler(server: FastMCP) -> None:
         filename: str,
         slide_index: int,
     ):
-        """Render a specific slide from a PowerPoint (.pptx) as an image.
+        """Render a slide as PNG (via LibreOffice). Returns MCP ImageContent.
 
-        Converts the requested slide to a PNG image using LibreOffice
-        (if available) and returns it as an MCP image so the LLM can
-        visually inspect the slide layout, formatting, and content.
-
-        **Preferred workflow: create small, then edit**
-
-        After creating or editing a presentation, use this tool to verify
-        how slides actually render. This is especially useful after
-        ``pptx_edit`` operations to confirm changes look correct.
-
-        **Parameters**
-
-        - ``filename`` (str): Name of the .pptx file (e.g., "presentation.pptx").
-          Must not contain path separators or ``..``.
-        - ``slide_index`` (int): 0-based index of the slide to render.
-
-        **Returns**
-
-        - On success: MCP ImageContent with the slide as a PNG image
-        - On failure (LibreOffice not available): TextContent with structured
-          slide data from ``pptx_read`` as a fallback
-
-        Args:
-            filename: Name of the .pptx file
-            slide_index: 0-based index of the slide to render
-
-        Returns:
-            MCP ImageContent with the slide PNG, or TextContent with fallback data.
+        Falls back to pptx_read structured data if LibreOffice is unavailable.
+        Use after pptx_create/pptx_edit to visually verify layout.
         """
         try:
             # --- Validate filename ---------------------------------------------

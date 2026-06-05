@@ -73,12 +73,9 @@ def browser_handler(server: FastMCP) -> None:
     async def browser_create_session() -> str:
         """Create a browser session for multi-step interactions.
 
-        Call first when performing multiple actions (navigate, click, fill, etc.)
-        on the same page. Pass the returned session_id to all subsequent browser tools.
+        Call first when performing multiple actions on the same page.
+        Pass the returned session_id to all subsequent browser tools.
         For one-off actions, use browser_screenshot(url=...) directly.
-
-        Returns:
-            JSON string with session_id.
         """
         try:
             if not browser_manager.is_running:
@@ -105,14 +102,7 @@ def browser_handler(server: FastMCP) -> None:
 
         Load a page before further actions (click, fill, screenshot). Provide
         session_id to persist the page; without it, the page closes immediately.
-
-        Args:
-            url: URL to navigate to
-            wait_until: Navigation completion trigger (load, domcontentloaded, networkidle, commit)
-            session_id: Session ID to keep page alive
-
-        Returns:
-            JSON string with page title, URL, and status
+        wait_until options: load, domcontentloaded, networkidle, commit.
         """
         try:
             # Start browser if not running
@@ -168,22 +158,9 @@ def browser_handler(server: FastMCP) -> None:
         full_page: bool = False,
         session_id: str | None = None,
     ):
-        """Screenshot a URL or the current page in a session.
+        """Screenshot a URL or session page. Returns MCP ImageContent (base64 PNG) + resource URI.
 
-        Modes: 1) One-off: provide url=...  2) Session: provide session_id=...
-
-        The screenshot is returned as an MCP ImageContent (base64 PNG) so the
-        LLM can view it directly. The image is also saved to disk and a resource
-        URI is provided for later access via the resources protocol.
-
-        Args:
-            url: URL to navigate to and screenshot
-            full_page: Capture full page
-            session_id: Session ID for session mode
-
-        Returns:
-            MCP ImageContent with the screenshot (base64 PNG), plus a TextContent
-            message with the resource URI for later access.
+        One-off: provide url=. Session: provide session_id=.
         """
         try:
             # Start browser if not running
@@ -262,20 +239,10 @@ def browser_handler(server: FastMCP) -> None:
         wait_until: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Click an element on the current page.
+        """Click an element. Requires session_id; use url= to navigate first.
 
-        Requires session_id. Page must be loaded first. Use url= to navigate before clicking.
-        TIP: Call browser_get_interactables first to find the right selector instead of guessing.
-
-        Args:
-            selector: CSS selector for the element
-            url: Optional URL to navigate to first
-            timeout: Timeout in seconds (default: settings.BROWSER_TIMEOUT)
-            wait_until: Navigation completion trigger after click
-            session_id: Session ID (required)
-
-        Returns:
-            JSON string with success/failure status
+        TIP: Call browser_get_interactables first to find the right selector.
+        wait_until: navigation trigger after click.
         """
         try:
             # Start browser if not running
@@ -334,19 +301,9 @@ def browser_handler(server: FastMCP) -> None:
         url: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Fill an input field on the current page.
+        """Fill an input field. Requires session_id; use url= to navigate first.
 
-        Requires session_id. Page must be loaded first. Use url= to navigate before filling.
-        TIP: Call browser_get_interactables first to find the right selector instead of guessing.
-
-        Args:
-            selector: CSS selector for the input
-            value: Value to fill
-            url: Optional URL to navigate to first
-            session_id: Session ID (required)
-
-        Returns:
-            JSON string with success/failure status
+        TIP: Call browser_get_interactables first to find the right selector.
         """
         try:
             # Start browser if not running
@@ -400,18 +357,7 @@ def browser_handler(server: FastMCP) -> None:
         url: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Execute JavaScript on the current page.
-
-        Requires session_id. Page must be loaded first. Use url= to navigate first.
-
-        Args:
-            script: JavaScript code
-            url: Optional URL to navigate to first
-            session_id: Session ID (required)
-
-        Returns:
-            JSON string with execution result
-        """
+        """Execute JavaScript on the current page. Requires session_id; use url= to navigate first."""
         try:
             # Start browser if not running
             if not browser_manager.is_running:
@@ -459,18 +405,7 @@ def browser_handler(server: FastMCP) -> None:
         url: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Get text content of an element on the current page.
-
-        Requires session_id. Page must be loaded first. Use url= to navigate first.
-
-        Args:
-            selector: CSS selector for the element
-            url: Optional URL to navigate to first
-            session_id: Session ID (required)
-
-        Returns:
-            JSON string with text content
-        """
+        """Get text content of an element. Requires session_id; use url= to navigate first."""
         try:
             # Start browser if not running
             if not browser_manager.is_running:
@@ -517,20 +452,10 @@ def browser_handler(server: FastMCP) -> None:
         url: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Get a structured list of all interactable elements on the page.
+        """List all interactable elements (links, buttons, inputs) with selectors.
 
-        Returns clickable (links, buttons) and fillable (inputs, textareas)
-        elements with their selectors, labels, text, and visibility state.
-        Use this BEFORE clicking/filling to find the right selector.
-
-        Requires session_id. Page must be loaded first. Use url= to navigate first.
-
-        Args:
-            url: Optional URL to navigate to first
-            session_id: Session ID (required)
-
-        Returns:
-            JSON string with list of interactable elements
+        Use BEFORE clicking/filling to find the right selector.
+        Requires session_id; use url= to navigate first.
         """
         try:
             # Start browser if not running
@@ -619,17 +544,9 @@ def browser_handler(server: FastMCP) -> None:
         url: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Get full page content of the current page.
+        """Get full page text content. Requires session_id; use url= to navigate first.
 
-        Requires session_id. Page must be loaded first. Use url= to navigate first.
         For one-off extraction, use fetch() instead.
-
-        Args:
-            url: Optional URL to navigate to first
-            session_id: Session ID (required)
-
-        Returns:
-            JSON string with page text content
         """
         try:
             # Start browser if not running
@@ -681,22 +598,10 @@ def browser_handler(server: FastMCP) -> None:
         path: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Capture periodic screenshots for a specified duration.
+        """Capture periodic screenshots. Requires session_id; use url= to navigate first.
 
-        Requires session_id. Use url= to navigate first.
-
-        Each screenshot is saved to disk and returned as a file:// resource URI
-        that can be read via the MCP resources protocol.
-
-        Args:
-            url: Optional URL to navigate to first
-            interval: Seconds between screenshots (default: 5)
-            duration: Total seconds to monitor (default: 30)
-            path: Output directory (default: screenshot_dir)
-            session_id: Session ID (required)
-
-        Returns:
-            JSON string with list of screenshot resource URIs
+        Returns file:// resource URIs for each screenshot.
+        interval: seconds between shots (default 5). duration: total seconds (default 30).
         """
         try:
             # Start browser if not running
@@ -761,16 +666,7 @@ def browser_handler(server: FastMCP) -> None:
     async def browser_close(
         session_id: str | None = None,
     ) -> str:
-        """Close a browser session.
-
-        Use when done with a session from browser_create_session().
-
-        Args:
-            session_id: Session ID to close (None = default context)
-
-        Returns:
-            JSON string with success/failure status
-        """
+        """Close a browser session. session_id=None closes the default context."""
         try:
             success = await browser_manager.close_session(session_id)
             if success:
@@ -790,11 +686,7 @@ def browser_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def browser_list_sessions() -> str:
-        """List active browser sessions.
-
-        Returns:
-            JSON string with list of session IDs
-        """
+        """List active browser sessions."""
         try:
             sessions = browser_manager.active_sessions
             result = {

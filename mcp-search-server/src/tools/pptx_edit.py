@@ -358,76 +358,18 @@ def pptx_edit_handler(server: FastMCP) -> None:
         operations: list[dict],
         theme: str = "default",
     ):
-        """Edit an existing PowerPoint (.pptx) presentation with targeted operations.
+        """Edit a .pptx file with targeted operations (applied in order). Returns EmbeddedResource.
 
-        Loads an existing presentation, applies one or more edit operations,
-        and saves the result. This is the preferred way to incrementally
-        build or modify presentations — create a small deck first with
-        ``pptx_create``, then refine it with ``pptx_edit``.
-
-        **Preferred workflow: create small, then edit**
-
-        Rather than building a complete presentation in one ``pptx_create`` call,
-        create a minimal version first (e.g. title slide + one content slide),
-        then use ``pptx_edit`` to add slides, fix text, insert tables, or
-        adjust content. This iterative approach is more reliable and easier
-        to debug.
-
-        **Operations**
-
-        Each operation in ``operations`` is a dict with a ``type`` key and
-        operation-specific parameters. Operations are applied in order.
-
-        - ``"add_slide"`` — Add a new slide at the end or at a specific position
-          - ``layout`` (str): Layout name (``"title"``, ``"title_content"``, ``"section_header"``, ``"two_column"``, ``"blank"``)
-          - ``title`` (str, optional): Slide title
-          - ``subtitle`` (str, optional): Subtitle (for ``title`` / ``section_header`` layouts)
-          - ``content`` (str | list[str], optional): Body text; a list renders as bullets
-          - ``left_content`` (str | list[str], optional): Left column (``two_column`` layout)
-          - ``right_content`` (str | list[str], optional): Right column (``two_column`` layout)
-          - ``table`` (dict, optional): Table with ``headers`` and ``rows``
-          - ``image`` (str, optional): Filename of an image in the output directory
-          - ``image_position`` (str): ``"left"``, ``"right"``, or ``"center"`` (default)
-          - ``notes`` (str, optional): Speaker notes
-          - ``at_index`` (int, optional): Insert at this 0-based position (default: append)
-
-        - ``"update_slide_title"`` — Change a slide's title text
-          - ``slide_index`` (int): 0-based slide index
-          - ``title`` (str): New title text
-
-        - ``"update_slide_content"`` — Replace body text on a slide
-          - ``slide_index`` (int): 0-based slide index
-          - ``content`` (str | list[str]): New body content; a list renders as bullets
-          - ``bullet`` (bool, optional): Force bullet rendering
-
-        - ``"update_slide_table"`` — Replace or add a table on a slide
-          - ``slide_index`` (int): 0-based slide index
-          - ``table`` (dict): Table with ``headers`` and ``rows``
-
-        - ``"update_slide_notes"`` — Set speaker notes on a slide
-          - ``slide_index`` (int): 0-based slide index
-          - ``notes`` (str): Notes text
-
-        - ``"delete_slide"`` — Remove a slide (must leave at least one slide)
-          - ``slide_index`` (int): 0-based slide index to delete
-
-        - ``"reorder_slide"`` — Move a slide to a new position
-          - ``slide_index`` (int): Current 0-based index
-          - ``to_index`` (int): New 0-based position
-
-        - ``"add_slide_image"`` — Add an image to an existing slide
-          - ``slide_index`` (int): 0-based slide index
-          - ``image`` (str): Filename of an image in the output directory
-          - ``position`` (str): ``"left"``, ``"right"``, or ``"center"`` (default)
-
-        Args:
-            filename: Existing .pptx file to edit
-            operations: List of edit operations to apply in order
-            theme: Theme name for new slides (default: "default")
-
-        Returns:
-            MCP EmbeddedResource with base64-encoded .pptx file, plus a
-            TextContent summary of changes made.
+        Operations (each is a dict with "type"):
+        - "add_slide": layout, title, subtitle, content, left_content, right_content,
+          table, image, image_position, notes, at_index
+        - "update_slide_title": slide_index, title
+        - "update_slide_content": slide_index, content (str|list→bullets), bullet
+        - "update_slide_table": slide_index, table ({"headers", "rows"})
+        - "update_slide_notes": slide_index, notes
+        - "delete_slide": slide_index
+        - "reorder_slide": slide_index, to_index
+        - "add_slide_image": slide_index, image, position (left/right/center)
         """
         try:
             # --- Validate filename ---------------------------------------------

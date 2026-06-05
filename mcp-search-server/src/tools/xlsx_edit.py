@@ -57,77 +57,19 @@ def xlsx_edit_handler(server: FastMCP) -> None:
         filename: str,
         operations: list[dict],
     ):
-        """Edit an existing Excel (.xlsx) workbook with targeted operations.
+        """Edit an .xlsx file with targeted operations (applied in order). Returns EmbeddedResource.
 
-        Loads an existing workbook, applies one or more edit operations,
-        and saves the result. This is the preferred way to incrementally
-        build or modify spreadsheets — create a small workbook first with
-        ``xlsx_create``, then refine it with ``xlsx_edit``.
-
-        **Preferred workflow: create small, then edit**
-
-        Rather than building a complete workbook in one ``xlsx_create`` call,
-        create a minimal version first (e.g. headers + a few rows), then use
-        ``xlsx_edit`` to add data, fix values, apply formatting, or add
-        charts. This iterative approach is more reliable and easier to debug.
-
-        **Operations**
-
-        Each operation in ``operations`` is a dict with a ``type`` key and
-        operation-specific parameters. Operations are applied in order.
-
-        - ``"update_cell"`` — Set a single cell value
-          - ``sheet`` (str): Sheet name (default: first sheet)
-          - ``cell`` (str): Cell reference, e.g. ``"A1"``, ``"B3"``
-          - ``value``: New value (string, number, or formula starting with ``=``)
-
-        - ``"append_rows"`` — Append data rows to a sheet
-          - ``sheet`` (str): Sheet name (default: first sheet)
-          - ``rows`` (list[list]): Rows to append; each row must match the sheet's column count
-
-        - ``"insert_rows"`` — Insert rows at a specific position
-          - ``sheet`` (str): Sheet name (default: first sheet)
-          - ``at_row`` (int): Row number to insert before (1-indexed)
-          - ``rows`` (list[list]): Rows to insert
-
-        - ``"delete_rows"`` — Delete rows from a sheet
-          - ``sheet`` (str): Sheet name (default: first sheet)
-          - ``from_row`` (int): First row to delete (1-indexed)
-          - ``count`` (int): Number of rows to delete
-
-        - ``"add_sheet"`` — Add a new sheet
-          - ``name`` (str): Sheet name
-          - ``headers`` (list[str]): Column headers for row 1
-          - ``rows`` (list[list], optional): Initial data rows
-
-        - ``"rename_sheet"`` — Rename a sheet
-          - ``old_name`` (str): Current sheet name
-          - ``new_name`` (str): New sheet name
-
-        - ``"delete_sheet"`` — Remove a sheet (must leave at least one sheet)
-          - ``name`` (str): Sheet name to delete
-
-        - ``"format_range"`` — Apply formatting to a cell range
-          - ``sheet`` (str): Sheet name (default: first sheet)
-          - ``range`` (str): Excel range, e.g. ``"A1:D1"``
-          - ``bold`` (bool, optional)
-          - ``italic`` (bool, optional)
-          - ``fill`` (str, optional): Hex fill color, e.g. ``"4472C4"``
-          - ``font_color`` (str, optional): Hex font color
-          - ``align`` (str, optional): ``"left"``, ``"center"``, or ``"right"``
-          - ``number_format`` (str, optional): Excel number format
-
-        - ``"clear_range"`` — Clear cell values in a range (keeps formatting)
-          - ``sheet`` (str): Sheet name (default: first sheet)
-          - ``range`` (str): Excel range
-
-        Args:
-            filename: Existing .xlsx file to edit
-            operations: List of edit operations to apply in order
-
-        Returns:
-            MCP EmbeddedResource with base64-encoded .xlsx file, plus a
-            TextContent summary of changes made.
+        Operations (each is a dict with "type"):
+        - "update_cell": sheet, cell (e.g. "A1"), value (prefix = for formula)
+        - "append_rows": sheet, rows [[...]]
+        - "insert_rows": sheet, at_row (1-indexed), rows [[...]]
+        - "delete_rows": sheet, from_row (1-indexed), count
+        - "add_sheet": name, headers [...], rows (optional)
+        - "rename_sheet": old_name, new_name
+        - "delete_sheet": name
+        - "format_range": sheet, range, bold, italic, fill (hex), font_color (hex),
+          align (left/center/right), number_format
+        - "clear_range": sheet, range (clears values, keeps formatting)
         """
         try:
             # --- Validate filename ---------------------------------------------

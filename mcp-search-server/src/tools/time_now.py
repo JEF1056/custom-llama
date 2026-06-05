@@ -65,24 +65,11 @@ def time_now_handler(server: FastMCP) -> None:
         convert_from_timezone: str | None = None,
         convert_from_time: str | None = None,
     ) -> str:
-        """Get current time/date or convert between timezones.
+        """Get current time or convert between timezones.
 
-        Two modes:
-        1. Default: returns current time in the specified timezone
-        2. Conversion: convert a time from one timezone to another
-
-        Args:
-            timezone_name: Target timezone (default: UTC). Supports IANA names
-                           like 'America/New_York', 'Europe/London', 'Asia/Tokyo',
-                           or aliases like 'EST', 'PST', 'CET', 'IST', 'JST'.
-            format: Optional strftime format string (e.g., '%Y-%m-%d %H:%M:%S').
-                    If not specified, returns ISO format.
-            convert_from_timezone: Source timezone for conversion.
-            convert_from_time: Time string to convert (e.g., '2026-01-15 14:30:00').
-                               Must be provided with convert_from_timezone.
-
-        Returns:
-            JSON string with time information.
+        timezone_name: IANA name (America/New_York) or alias (EST, PST, JST). Default: UTC.
+        format: strftime string; omit for ISO format.
+        Conversion mode: set convert_from_timezone + convert_from_time together.
         """
         try:
             target_tz = _resolve_timezone(timezone_name)

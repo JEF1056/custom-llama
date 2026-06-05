@@ -29,25 +29,12 @@ def http_request_handler(server: FastMCP) -> None:
         timeout: int | None = None,
         follow_redirects: bool = True,
     ) -> str:
-        """Make an HTTP request to any URL.
+        """Make an HTTP request (GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS).
 
-        Supports GET, POST, PUT, PATCH, DELETE, HEAD, and OPTIONS methods.
-
-        Args:
-            method: HTTP method (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS)
-            url: The URL to request
-            headers: Optional dictionary of HTTP headers
-            body: Optional request body (for POST, PUT, PATCH)
-            auth: Optional auth dict with 'type' and 'value' keys.
-                  type: 'basic', 'bearer', 'apikey'.
-                  For basic: value is 'username:password'.
-                  For bearer: value is the token string.
-                  For apikey: value is the API key; adds 'Authorization: ApiKey <value>'.
-            timeout: Optional timeout in seconds (default: 30)
-            follow_redirects: Whether to follow redirects (default: True)
-
-        Returns:
-            JSON string with status_code, headers, body, and elapsed_time.
+        auth: {"type": "basic"|"bearer"|"apikey", "value": "..."}
+          basic → value is "username:password"
+          bearer → value is the token
+          apikey → adds "Authorization: ApiKey <value>"
         """
         method = method.upper()
         if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:

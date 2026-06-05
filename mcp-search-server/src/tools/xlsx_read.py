@@ -33,38 +33,9 @@ def xlsx_read_handler(server: FastMCP) -> None:
         sheet: str | None = None,
         max_rows: int = 1000,
     ):
-        """Read an existing Excel (.xlsx) workbook and return structured data.
+        """Read an .xlsx workbook. Returns sheets with name, dimensions, headers, rows.
 
-        Loads the workbook from the server's file output directory and returns
-        cell values, formulas, and sheet dimensions as JSON.
-
-        **Parameters**
-
-        - ``filename`` (str): Name of the .xlsx file to read (e.g., "report.xlsx").
-          Must not contain path separators or ``..``.
-        - ``sheet`` (str | None): Specific sheet name to read. If ``None``, all
-          sheets are returned.
-        - ``max_rows`` (int): Maximum rows per sheet to return (default: 1000).
-
-        **Return format**
-
-        Returns a JSON string with:
-
-        - ``status``: ``"success"`` or ``"error"``
-        - ``filename``: the requested filename
-        - ``sheets``: list of sheet objects, each with:
-          - ``name``: sheet name
-          - ``dimensions``: Excel range string (e.g., ``"A1:D10"``)
-          - ``headers``: list of values from row 1 (empty if no data)
-          - ``rows``: list of data rows (each row is a list of cell values)
-
-        Args:
-            filename: Name of the .xlsx file to read
-            sheet: Optional specific sheet name to read
-            max_rows: Maximum rows per sheet to return
-
-        Returns:
-            JSON string with structured sheet data.
+        sheet: read one sheet by name; omit for all. max_rows: cap per sheet (default 1000).
         """
         try:
             # --- Validate filename ---------------------------------------------

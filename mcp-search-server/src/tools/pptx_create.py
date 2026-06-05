@@ -431,62 +431,15 @@ def pptx_create_handler(server: FastMCP) -> None:
         slides: list[dict],
         theme: str = "default",
     ):
-        """Create a PowerPoint (.pptx) presentation with text, images, and tables.
+        """Create a .pptx presentation. Returns MCP EmbeddedResource + summary.
 
-        Creates a valid .pptx file with multiple slides supporting common layouts.
-        The file is saved to the output directory and returned as an embedded resource.
+        theme: "default" | "dark" | "minimal"
 
-        **Preferred workflow: create small, then edit**
+        Slide layouts: "title" | "title_content" | "two_column" | "section_header" | "blank"
 
-        Rather than building a complete presentation in one call, create a minimal
-        version first (e.g. title slide + one content slide), then use ``pptx_edit``
-        to add slides, fix text, insert tables, or adjust content. Use
-        ``pptx_slide_image`` to visually verify how slides render. This iterative
-        approach is more reliable and easier to debug.
-
-        **Slide layouts**
-
-        - ``"title"`` — Title slide with ``title`` and optional ``subtitle``
-        - ``"title_content"`` — Title + body content (text, bullets, table, or image)
-        - ``"two_column"`` — Title + ``left_content`` and ``right_content`` side by side
-        - ``"section_header"`` — Section divider with ``title`` and ``subtitle``
-        - ``"blank"`` — Empty canvas; add ``title``, ``content``, ``table``, or ``image``
-
-        **Slide definition fields**
-
-        - ``layout`` (str): One of the layouts above (default: ``"title_content"``)
-        - ``title`` (str | None): Slide title
-        - ``subtitle`` (str | None): Subtitle (for ``title`` / ``section_header`` layouts)
-        - ``content`` (str | list[str] | None): Body text. A list renders as bullet points.
-        - ``left_content`` (str | list[str] | None): Left column content (``two_column`` layout)
-        - ``right_content`` (str | list[str] | None): Right column content (``two_column`` layout)
-        - ``image`` (str | None): Filename of an image in the output directory
-        - ``image_position`` (str): ``"left"``, ``"right"``, or ``"center"`` (default: ``"center"``)
-        - ``table`` (dict | None): Table data with ``headers`` and ``rows``
-        - ``notes`` (str | None): Speaker notes
-
-        **Table definition**
-
-        - ``headers`` (list[str]): Column headers
-        - ``rows`` (list[list]): Data rows, each a list of values
-
-        **Themes**
-
-        - ``"default"`` — Standard PowerPoint theme
-        - ``"dark"`` — Dark background with light text
-        - ``"minimal"`` — Clean white with muted gray text
-
-        The created file is returned as an MCP EmbeddedResource (base64 blob)
-        so the LLM can read it directly, plus a TextContent summary.
-
-        Args:
-            filename: Output filename, must end with .pptx (e.g., "presentation.pptx")
-            slides: List of slide definitions
-            theme: Theme name (default: "default")
-
-        Returns:
-            MCP EmbeddedResource with base64-encoded .pptx file, plus a
-            TextContent summary with slide details.
+        Slide fields: layout, title, subtitle, content (str or list→bullets),
+        left_content, right_content (two_column), image, image_position (left/right/center),
+        table ({"headers": [...], "rows": [[...]]}), notes
         """
         try:
             # --- Validate filename ---------------------------------------------

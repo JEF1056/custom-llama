@@ -85,44 +85,11 @@ def create_file_handler(server: FastMCP) -> None:
         encoding: str = "utf-8",
         format: str | None = None,
     ):
-        """Create a file with the given content.
+        """Create a file. Returns MCP EmbeddedResource + resource URI.
 
-        Supports text content (UTF-8), binary content (base64-encoded),
-        and several LLM-writable formats via the ``format`` parameter.
-
-        **Writable formats**
-
-        When ``format`` is set, the tool auto-sets the file extension and
-        content type. The LLM writes the file content directly as text:
-
-        - ``pdf``  — Write PDF text commands (BT/ET). The tool wraps them
-                     in a minimal valid PDF structure automatically.
-        - ``svg``  — Write SVG markup. Saved with ``.svg`` extension.
-        - ``html`` — Write HTML markup. Saved with ``.html`` extension.
-        - ``json`` — Write JSON text. Saved with ``.json`` extension.
-        - ``csv``  — Write CSV text. Saved with ``.csv`` extension.
-        - ``xml``  — Write XML markup. Saved with ``.xml`` extension.
-
-        For binary formats not listed above (images, archives, etc.),
-        provide base64-encoded content with ``encoding='base64'``.
-
-        The created file is returned as an MCP EmbeddedResource so the LLM
-        can read it directly, and a resource URI is provided for later access
-        via the resources protocol.
-
-        Args:
-            filename: Name of the file to create (e.g., "report.txt", "chart.svg")
-            content: File content as a string. For binary files, provide
-                     base64-encoded data. For PDF, write PDF text commands
-                     (BT/ET) and the tool wraps the structure.
-            content_type: MIME type of the file (auto-set when format is given)
-            encoding: Encoding of the content - 'utf-8' for text, 'base64' for binary
-            format: Optional format hint (pdf, svg, html, json, csv, xml).
-                    Auto-sets file extension and content type.
-
-        Returns:
-            MCP EmbeddedResource with the file content, plus a TextContent
-            message with the resource URI for later access.
+        format: pdf | svg | html | json | csv | xml — auto-sets extension and content_type.
+        PDF: write BT/ET commands; tool wraps structure automatically.
+        encoding: 'utf-8' (default) or 'base64' for binary content.
         """
         try:
             # --- Resolve format ------------------------------------------------

@@ -100,45 +100,9 @@ def pptx_read_handler(server: FastMCP) -> None:
         filename: str,
         slide_index: int | None = None,
     ):
-        """Read an existing PowerPoint (.pptx) presentation and return structured data.
+        """Read a .pptx and return structured slide data (layout, title, shapes, notes).
 
-        Loads the presentation from the server's file output directory and returns
-        slide structure, content, tables, and image references as JSON.
-
-        **Preferred workflow: create small, then edit**
-
-        Rather than building a complete presentation in one ``pptx_create`` call,
-        create a minimal version first (e.g. title slide + one content slide),
-        then use ``pptx_edit`` to add slides, fix text, or insert tables.
-        This iterative approach is more reliable and easier to debug.
-
-        **Parameters**
-
-        - ``filename`` (str): Name of the .pptx file to read (e.g., "presentation.pptx").
-          Must not contain path separators or ``..``.
-        - ``slide_index`` (int | None): Specific slide index to read (0-based).
-          If ``None``, all slides are returned.
-
-        **Return format**
-
-        Returns a JSON string with:
-
-        - ``status``: ``"success"`` or ``"error"``
-        - ``filename``: the requested filename
-        - ``slide_count``: total number of slides
-        - ``slides``: list of slide objects, each with:
-          - ``index``: 0-based slide index
-          - ``layout``: layout name (e.g. "title_content", "blank")
-          - ``title``: slide title text (if present)
-          - ``shapes``: list of shape descriptions with type and content
-          - ``notes``: speaker notes text (if present)
-
-        Args:
-            filename: Name of the .pptx file to read
-            slide_index: Optional specific slide index (0-based) to read
-
-        Returns:
-            JSON string with structured presentation data.
+        slide_index: read one slide (0-based); omit for all slides.
         """
         try:
             # --- Validate filename ---------------------------------------------

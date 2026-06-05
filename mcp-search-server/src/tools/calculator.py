@@ -142,30 +142,10 @@ def calculator_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def calculator(expression: str) -> str:
-        """Evaluate mathematical expressions using SymPy.
+        """Evaluate math expressions using SymPy (arithmetic, trig, algebra, calculus, matrices).
 
-        Supports basic arithmetic, trigonometric functions, symbolic math,
-        matrix operations, equation solving, calculus, and complex numbers.
-
-        Examples:
-            - "2 + 3 * 4" → 14
-            - "sqrt(2)" → sqrt(2)
-            - "sin(pi/4)" → sqrt(2)/2
-            - "solve(x**2 - 4, x)" → [-2, 2]
-            - "diff(sin(x), x)" → cos(x)
-            - "integrate(x**2, x)" → x**3/3
-            - "Matrix([[1,2],[3,4]]).det()" → -2
-            - "eigenvals(Matrix([[1,1],[0,1]]))" → {1: 2}
-            - "factor(x**4 - 1)" → (x - 1)*(x + 1)*(x**2 + 1)
-            - "limit(sin(x)/x, x, 0)" → 1
-            - "series(exp(x), x, 0, 5)" → Taylor expansion
-            - "1 + I" → (1 + I)
-
-        Args:
-            expression: Mathematical expression or SymPy command
-
-        Returns:
-            JSON string with the result and whether it's exact or numeric.
+        Examples: "sqrt(2)", "solve(x**2-4, x)", "diff(sin(x),x)", "integrate(x**2,x)",
+        "Matrix([[1,2],[3,4]]).det()", "factor(x**4-1)", "limit(sin(x)/x,x,0)", "1+I"
         """
         try:
             result = _safe_eval(expression)

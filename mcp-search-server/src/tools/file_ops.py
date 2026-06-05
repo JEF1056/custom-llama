@@ -17,17 +17,7 @@ def file_operations_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def file_read(filename: str) -> str:
-        """Read the contents of a file.
-
-        Reads files from the MCP server's output directory.
-        Supports both text and binary files (binary returned as base64).
-
-        Args:
-            filename: Name of the file to read (no path separators allowed)
-
-        Returns:
-            JSON string with file contents, size, and encoding info.
-        """
+        """Read a file from the output directory. Binary files returned as base64."""
         # Validate filename
         if "/" in filename or ".." in filename:
             return json.dumps({
@@ -78,17 +68,7 @@ def file_operations_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def file_list(directory: str = "") -> str:
-        """List files and directories.
-
-        Lists contents of the MCP server's output directory or a subdirectory.
-
-        Args:
-            directory: Optional subdirectory name (no path separators allowed).
-                       Defaults to root output directory.
-
-        Returns:
-            JSON string with list of files/directories including sizes and types.
-        """
+        """List files in the output directory or a subdirectory."""
         # Validate directory
         if "/" in directory or ".." in directory:
             return json.dumps({
@@ -137,14 +117,7 @@ def file_operations_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def file_delete(filename: str) -> str:
-        """Delete a file from the output directory.
-
-        Args:
-            filename: Name of the file to delete (no path separators allowed)
-
-        Returns:
-            JSON string with success/failure status.
-        """
+        """Delete a file from the output directory."""
         # Validate filename
         if "/" in filename or ".." in filename:
             return json.dumps({
@@ -179,20 +152,7 @@ def file_operations_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def file_upload(filename: str, content: str, encoding: str = "utf-8") -> str:
-        """Upload a file to the MCP server's output directory.
-
-        Writes content to the MCP server's output directory.
-        Supports both text (UTF-8) and binary (base64) content.
-
-        Args:
-            filename: Name of the file to create (no path separators allowed)
-            content: File content as a string. For binary files, provide
-                     base64-encoded data with encoding='base64'.
-            encoding: Encoding of the content - 'utf-8' for text, 'base64' for binary
-
-        Returns:
-            JSON string with success/failure status and download URL.
-        """
+        """Upload a file to the output directory. encoding: 'utf-8' (default) or 'base64' for binary."""
         # Validate filename
         if "/" in filename or ".." in filename:
             return json.dumps({

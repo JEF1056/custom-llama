@@ -235,22 +235,12 @@ def code_run_handler(server: FastMCP) -> None:
         code: str,
         timeout: int | None = None,
     ) -> str:
-        """Execute Python code in a sandboxed environment.
+        """Execute Python code in a sandboxed subprocess. timeout defaults to 30s.
 
-        Runs the code in an isolated subprocess with restricted imports.
-        Allowed libraries: numpy, pandas, matplotlib, scipy, sympy, math,
-        statistics, json, csv, re, datetime, collections, itertools, functools,
-        io, os.path, pathlib, and other standard library modules.
-
+        Allowed: numpy, pandas, matplotlib, scipy, sympy, math, statistics, json, csv,
+        re, datetime, collections, itertools, functools, io, os.path, pathlib.
         Blocked: os, sys, subprocess, shutil, socket, http, urllib, requests,
-        threading, multiprocessing, signal, mmap, and other dangerous modules.
-
-        Args:
-            code: Python code to execute
-            timeout: Optional timeout in seconds (default: 30)
-
-        Returns:
-            JSON string with execution results including stdout, stderr, and result.
+        threading, multiprocessing, signal, mmap.
         """
         global _CODE_EXEC_TIMEOUT
         if timeout:
