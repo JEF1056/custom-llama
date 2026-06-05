@@ -13,7 +13,7 @@ No Cloudflare or secrets needed — just the inference server on this machine.
 ```bash
 python sync-env.py
 docker compose build llama-server llama-convert mcp-search-server
-docker compose run --rm llama-convert convert-st qwen3.6-27b --quant IQ4_NL --mtp
+docker compose run --rm llama-convert convert-st qwen3.6-27b --quant IQ4_XS --mtp
 docker compose up -d llama-server mcp-search-server
 ```
 
@@ -39,32 +39,32 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
 
 > **Without MTP:** if you want a faster first run (skip the safetensors download), use the prebuilt GGUF instead.
 > Comment out `LLAMA_MODEL` and `LLAMA_SPEC_TYPE` in `.env`, then:
-> `docker compose run --rm llama-convert download qwen3.6-27b --quant IQ4_NL`
+> `docker compose run --rm llama-convert download qwen3.6-27b --quant IQ4_XS`
 
 ---
 
 ## Model
 
-| Property | Value |
-|---|---|
-| Model | qwen3.6-27B |
-| Base | qwen3.6-27B |
-| Quant | IQ4_NL (~15 GB) |
-| Architecture | Dense transformer, 64 GQA attention layers |
-| KV cache layers | 64 of 64 |
-| Context | 150K (native 32K; extended via RoPE scaling) |
-| Capabilities | Reasoning, tool use, MTP speculative decoding |
-| MTP speedup | ~2–2.5× tok/s vs. baseline (requires MTP-capable GGUF) |
+| Property        | Value                                                  |
+| --------------- | ------------------------------------------------------ |
+| Model           | qwen3.6-27B                                            |
+| Base            | qwen3.6-27B                                            |
+| Quant           | IQ4_XS (~15 GB)                                        |
+| Architecture    | Dense transformer, 64 GQA attention layers             |
+| KV cache layers | 64 of 64                                               |
+| Context         | 150K (native 32K; extended via RoPE scaling)           |
+| Capabilities    | Reasoning, tool use, MTP speculative decoding          |
+| MTP speedup     | ~2–2.5× tok/s vs. baseline (requires MTP-capable GGUF) |
 
 **VRAM budget (RTX 3090, 24 GB):**
 
-| Component | Size |
-|---|---|
-| Model (IQ4_NL) | ~15.0 GB |
-| KV cache (turbo3, 150K ctx) | ~2.5 GB |
-| draft-mtp KV cache | ~0.3 GB |
-| CUDA context + compute | ~1.6 GB |
-| **Total** | **~19.4 GB** (~4.6 GB headroom) |
+| Component                   | Size                            |
+| --------------------------- | ------------------------------- |
+| Model (IQ4_XS)              | ~15.0 GB                        |
+| KV cache (turbo3, 150K ctx) | ~2.5 GB                         |
+| draft-mtp KV cache          | ~0.3 GB                         |
+| CUDA context + compute      | ~1.6 GB                         |
+| **Total**                   | **~19.4 GB** (~4.6 GB headroom) |
 
 ---
 
@@ -91,10 +91,10 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
 
 > **Note:** `mcp-search-server` provides semantic web search with browser automation via MCP. Accessible at `http://mcp-search-server:3100` on the internal `llama-net` network.
 
-| Interface | URL / Command | Auth |
-|---|---|---|
-| **Local** | `http://localhost:8080/v1` | None (requires `docker-compose.override.yml`) |
-| **API (Cloudflare Access)** | `https://chat.jessfan.com/v1` | Google OAuth / Email (see below) |
+| Interface                   | URL / Command                 | Auth                                          |
+| --------------------------- | ----------------------------- | --------------------------------------------- |
+| **Local**                   | `http://localhost:8080/v1`    | None (requires `docker-compose.override.yml`) |
+| **API (Cloudflare Access)** | `https://chat.jessfan.com/v1` | Google OAuth / Email (see below)              |
 
 ---
 
@@ -158,13 +158,13 @@ docker compose build llama-convert
 
 # Option A (recommended): MTP-capable GGUF from safetensors — ~2–2.5× faster generation
 # Downloads safetensors, converts to fp16 GGUF, quantizes, cleans up.
-docker compose run --rm llama-convert convert-st qwen3.6-27b --quant IQ4_NL --mtp --keep-intermediate
-# Output: ./models/qwen3.6-27b-IQ4_NL-mtp.gguf
+docker compose run --rm llama-convert convert-st qwen3.6-27b --quant IQ4_XS --mtp --keep-intermediate
+# Output: ./models/qwen3.6-27b-IQ4_XS-mtp.gguf
 # .env.default already points LLAMA_MODEL at this file and sets LLAMA_SPEC_TYPE=mtp.
 
 # Option B (faster setup, no MTP): prebuilt GGUF from HuggingFace
 # Comment out LLAMA_MODEL and LLAMA_SPEC_TYPE in .env first.
-docker compose run --rm llama-convert download qwen3.6-27b --quant IQ4_NL
+docker compose run --rm llama-convert download qwen3.6-27b --quant IQ4_XS
 ```
 
 > **Gated models:** set `HF_TOKEN=your_token` in `.env`
@@ -178,6 +178,7 @@ docker compose up -d
 > **Note:** `docker compose up -d` starts `llama-server` and `mcp-search-server` by default. `cloudflared` requires `--profile cloudflare`, and `llama-convert` requires `--profile convert`.
 
 Check the logs:
+
 ```bash
 docker compose logs -f llama-server   # up to 5 min for large model
 docker compose logs -f cloudflared     # should show "connected"
@@ -226,10 +227,10 @@ response = client.chat.completions.create(
 docker compose run --rm llama-convert list
 
 # MTP-capable GGUF (recommended — from safetensors, includes nextn heads)
-docker compose run --rm llama-convert convert-st qwen3.6-27b --quant IQ4_NL --mtp
+docker compose run --rm llama-convert convert-st qwen3.6-27b --quant IQ4_XS --mtp
 
 # Standard prebuilt GGUF (faster setup, no MTP)
-docker compose run --rm llama-convert download qwen3.6-27b --quant IQ4_NL
+docker compose run --rm llama-convert download qwen3.6-27b --quant IQ4_XS
 
 # Re-quantize an existing GGUF already in ./models
 docker compose run --rm llama-convert convert /models/qwen3.6-27b-fp16.gguf --quant Q4_K_M
@@ -239,12 +240,12 @@ docker compose run --rm llama-convert convert /models/qwen3.6-27b-fp16.gguf --qu
 
 ## Docker Compose services
 
-| Service | Purpose |
-|---|---|
-| `llama-server` | llama.cpp inference server (port 8080) |
-| `cloudflared` | Cloudflare Tunnel — exposes llama-server publicly |
-| `llama-convert` | Model conversion tool (download, convert, quantize) |
-| `mcp-search-server` | Web search MCP tool (port 3100) |
+| Service             | Purpose                                             |
+| ------------------- | --------------------------------------------------- |
+| `llama-server`      | llama.cpp inference server (port 8080)              |
+| `cloudflared`       | Cloudflare Tunnel — exposes llama-server publicly   |
+| `llama-convert`     | Model conversion tool (download, convert, quantize) |
+| `mcp-search-server` | Web search MCP tool (port 3100)                     |
 
 ---
 
