@@ -154,11 +154,11 @@ COPY --link --from=builder /llama.cpp/conversion/ /scripts/conversion/
 COPY --link --from=builder /llama.cpp/gguf-py/ /scripts/gguf-py/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-  uv pip install --system \
+  uv pip install --system --break-system-packages \
   torch --index-url https://download.pytorch.org/whl/cpu
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-  uv pip install --system \
+  uv pip install --system --break-system-packages \
   huggingface_hub hf_transfer transformers safetensors \
   sentencepiece accelerate /scripts/gguf-py/
 
