@@ -71,25 +71,23 @@ RUN strip --strip-unneeded /llama.cpp/build/bin/llama-server /llama.cpp/build/bi
 # =============================================================================
 FROM nvidia/cuda:12.9.0-runtime-ubuntu24.04 AS runtime
 
-RUN rm -rf /var/lib/apt/lists/* && \
-  apt-get update && \
-  apt-get install -y --no-install-recommends \
-  curl \
-  libopenblas0t64 \
-  libssl3t64 \
-  libgomp1 && \
-  rm -rf /var/lib/apt/lists/*
-
-# cuBLAS runtime libs from the devel image (avoids apt package naming issues)
+# Runtime shared libs copied from builder — avoids apt repo issues in the
+# minimal CUDA runtime image.  The devel stage already has everything.
+COPY --link --from=builder /usr/lib/*/libopenblas*.so* /usr/lib/
+COPY --link --from=builder /usr/lib/*/libgomp*.so* /usr/lib/
 COPY --link --from=builder /usr/local/cuda/lib64/libcublas*.so* /usr/local/cuda/lib64/
 COPY --link --from=builder /usr/local/cuda/lib64/libcublasLt*.so* /usr/local/cuda/lib64/
+
+# curl is the only tool we need from apt (for healthcheck)
+RUN apt-get update && apt-get install -y --no-install-recommends curl && \
+  rm -rf /var/lib/apt/lists/*
 
 # Binaries and shared libs from builder (already stripped)
 COPY --link --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
 COPY --link --from=builder /staging/lib/ /opt/llama/lib/
 
 ENV MODEL_DIR=/models \
-  LD_LIBRARY_PATH=/opt/llama/lib:/usr/local/cuda/lib64:/usr/local/nvidia/lib64 \
+  LD_LIBRARY_PATH=/opt/llama/lib:/usr/lib:/usr/local/cuda/lib64:/usr/local/nvidia/lib64 \
   PATH=/usr/local/bin:$PATH
 
 COPY entrypoint.sh /entrypoint.sh
