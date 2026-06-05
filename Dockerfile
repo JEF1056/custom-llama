@@ -155,7 +155,9 @@ COPY --link --from=builder /llama.cpp/gguf-py/ /scripts/gguf-py/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
   uv pip install --system \
-  torch --index-url https://download.pytorch.org/whl/cpu && \
+  torch --index-url https://download.pytorch.org/whl/cpu
+
+RUN --mount=type=cache,target=/root/.cache/uv \
   uv pip install --system \
   huggingface_hub hf_transfer transformers safetensors \
   sentencepiece accelerate /scripts/gguf-py/
