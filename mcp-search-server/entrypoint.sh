@@ -7,8 +7,9 @@ if [ ! -d "${PLAYWRIGHT_BROWSERS_PATH:-/opt/playwright}" ]; then
     exit 1
 fi
 
-# Create mcp-files directories and clean stale files (>24h)
-mkdir -p /app/mcp-files/screenshots
+# Ensure mcp-files dirs exist (pre-created in image; this is a safety net)
+# and clean stale files (>24h)
+mkdir -p /app/mcp-files/screenshots 2>/dev/null || true
 find /app/mcp-files -type f -mtime +1 -delete 2>/dev/null || true
 
 echo "=== MCP Search Server ==="

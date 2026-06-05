@@ -23,23 +23,28 @@ FROM python:3.12-slim AS runtime
 
 WORKDIR /app
 
-# Shared browser path — avoids root→appuser copy dance
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
-
 # Copy installed Python packages from builder
 COPY --link --from=builder /install /usr/local
 
 # Install Playwright browser + all its system deps in one shot.
 # --with-deps handles the exact apt packages Chromium needs — no manual list.
+# Browsers go to /opt/playwright (owned root:root, world-readable).
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get update && \
     apt-get install -y --no-install-recommends curl ca-certificates && \
-    playwright install --with-deps chromium
+    playwright install --with-deps chromium && \
+    chmod -R o+rX /opt/playwright
 
-# Create non-root user
+# Create non-root user and pre-create all writable dirs with correct ownership.
+# mcp-files/screenshots  — written by entrypoint and tools at runtime
+# .cache/python          — mounted as a named volume (Docker sets root:root on
+#                          first mount, so we pre-create and chown here so the
+#                          volume inherits the correct owner on first use)
 RUN groupadd -r appuser && \
-    useradd -r -g appuser -d /app -s /sbin/nologin -m appuser && \
+    useradd -r -g appuser -d /home/appuser -s /sbin/nologin -m appuser && \
+    mkdir -p /app/mcp-files/screenshots /app/.cache/python && \
     chown -R appuser:appuser /app
 
 USER appuser
@@ -48,7 +53,7 @@ ENV HOME=/home/appuser
 # Copy entrypoint and source (changes frequently — placed last)
 COPY --chown=appuser:appuser entrypoint.sh .
 RUN chmod +x entrypoint.sh
-COPY --link --from=builder /build/src/ ./src/
+COPY --chown=appuser:appuser --from=builder /build/src/ ./src/
 
 EXPOSE ${MCP_SERVER_PORT:-3100}
 
