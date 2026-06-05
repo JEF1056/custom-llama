@@ -74,6 +74,7 @@ FROM nvidia/cuda:12.9.0-runtime-ubuntu24.04 AS runtime
 # Runtime shared libs copied from builder — avoids apt repo issues in the
 # minimal CUDA runtime image.  The devel stage already has everything.
 COPY --link --from=builder /usr/lib/*/libopenblas*.so* /usr/lib/
+COPY --link --from=builder /usr/lib/*/libgfortran*.so* /usr/lib/
 COPY --link --from=builder /usr/lib/*/libgomp*.so* /usr/lib/
 COPY --link --from=builder /usr/local/cuda/lib64/libcublas*.so* /usr/local/cuda/lib64/
 COPY --link --from=builder /usr/local/cuda/lib64/libcublasLt*.so* /usr/local/cuda/lib64/
