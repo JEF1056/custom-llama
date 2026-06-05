@@ -81,95 +81,21 @@ services:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
 
+      # --- Entrypoint vars (see entrypoint.sh) ---
       LLAMA_HOST: ${LLAMA_HOST:-0.0.0.0}
       LLAMA_PORT: ${LLAMA_PORT:-8080}
-
-      LLAMA_THREADS: ${LLAMA_THREADS:-8}
-      LLAMA_THREADS_BATCH: ${LLAMA_THREADS_BATCH:-10}
-      LLAMA_CTX_SIZE: ${LLAMA_CTX_SIZE:-200000}
-      LLAMA_BATCH_SIZE: ${LLAMA_BATCH_SIZE:-8192}
-      LLAMA_UBATCH_SIZE: ${LLAMA_UBATCH_SIZE:-2048}
-      LLAMA_GPU_LAYERS: ${LLAMA_GPU_LAYERS:-99}
-      LLAMA_MAX_TOKENS: ${LLAMA_MAX_TOKENS:--1}
-      LLAMA_TOP_P: ${LLAMA_TOP_P:-0.95}
-      LLAMA_TEMP: ${LLAMA_TEMP:-0.6}
-      LLAMA_TOP_K: ${LLAMA_TOP_K:-20}
-      LLAMA_MIN_P: ${LLAMA_MIN_P:-0.0}
-      LLAMA_PRESENCE_PENALTY: ${LLAMA_PRESENCE_PENALTY:-0.0}
-      LLAMA_REPETITION_PENALTY: ${LLAMA_REPETITION_PENALTY:-1.0}
-      LLAMA_STOP: ${LLAMA_STOP:-}
-
-      LLAMA_MODEL: ${LLAMA_MODEL:-}
-      LLAMA_MMPROJ: ${LLAMA_MMPROJ:-}
-      LLAMA_IMAGE: ${LLAMA_IMAGE:-}
-
-      MODEL_NAME: ${MODEL_NAME:-}
-      QUANT: ${QUANT:-}
-      TQ_QUANT: ${TQ_QUANT:-}
-
-      LLAMA_CACHE_TYPE_K: ${LLAMA_CACHE_TYPE_K:-turbo3}
-      LLAMA_CACHE_TYPE_V: ${LLAMA_CACHE_TYPE_V:-turbo4}
-      LLAMA_FLASH_ATTN: ${LLAMA_FLASH_ATTN:-on}
-
-      LLAMA_PARALLEL: ${LLAMA_PARALLEL:-3}
-      LLAMA_NO_MMAP: ${LLAMA_NO_MMAP:-off}
-      LLAMA_DIRECT_IO: ${LLAMA_DIRECT_IO:-on}
-      LLAMA_REASONING: ${LLAMA_REASONING:-on}
-      LLAMA_PRESERVE_THINKING: ${LLAMA_PRESERVE_THINKING:-on}
-
-      LLAMA_TS: ${LLAMA_TS:-}
-      LLAMA_NCMOE: ${LLAMA_NCMOE:-}
-
-      LLAMA_NO_KV_OFFLOAD: ${LLAMA_NO_KV_OFFLOAD:-off}
-      LLAMA_KV_UNIFIED: ${LLAMA_KV_UNIFIED:-on}
-      LLAMA_CACHE_RAM: ${LLAMA_CACHE_RAM:-}
-      LLAMA_CLEAR_IDLE: ${LLAMA_CLEAR_IDLE:-on}
-      LLAMA_CHECKPOINT_EVERY_N_TOKENS: ${LLAMA_CHECKPOINT_EVERY_N_TOKENS:-}
-      LLAMA_CTX_CHECKPOINTS: ${LLAMA_CTX_CHECKPOINTS:-}
-
-      # MTP speculative decoding
-      LLAMA_SPEC_TYPE: ${LLAMA_SPEC_TYPE:-}
-      LLAMA_SPEC_DRAFT_N_MAX: ${LLAMA_SPEC_DRAFT_N_MAX:-}
-      LLAMA_SPEC_DRAFT_P_MIN: ${LLAMA_SPEC_DRAFT_P_MIN:-}
-      LLAMA_SPEC_DRAFT_TYPE_K: ${LLAMA_SPEC_DRAFT_TYPE_K:-}
-      LLAMA_SPEC_DRAFT_TYPE_V: ${LLAMA_SPEC_DRAFT_TYPE_V:-}
-      LLAMA_SPEC_DEFAULT: ${LLAMA_SPEC_DEFAULT:-}
-
-      # KV cache reuse via shifting
-      LLAMA_CACHE_REUSE: ${LLAMA_CACHE_REUSE:-}
-
-      # RoPE scaling method
-      LLAMA_ROPE_SCALING: ${LLAMA_ROPE_SCALING:-}
-
-      # WebUI config file — supplies default MCP server + agentic turn limit
-      LLAMA_WEBUI_CONFIG_FILE: ${LLAMA_WEBUI_CONFIG_FILE:-}
-
-      # CUDA diagnostics — forces synchronous kernel execution so illegal memory
-      # access surfaces at the offending launch rather than a later sync point.
-      CUDA_LAUNCH_BLOCKING: "1"
-
-      # CUDA performance
-      GGML_CUDA_GRAPH_OPT: ${GGML_CUDA_GRAPH_OPT:-}
-      CUDA_SCALE_LAUNCH_QUEUES: ${CUDA_SCALE_LAUNCH_QUEUES:-}
-
-      # DRY sampling (Don't Repeat Yourself) — anti-loop protection for reasoning models
-      LLAMA_DRY_MULTIPLIER: ${LLAMA_DRY_MULTIPLIER:-0}
-      LLAMA_DRY_BASE: ${LLAMA_DRY_BASE:-1.75}
-      LLAMA_DRY_ALLOWED_LENGTH: ${LLAMA_DRY_ALLOWED_LENGTH:-128}
-      LLAMA_DRY_PENALTY_LAST_N: ${LLAMA_DRY_PENALTY_LAST_N:-2048}
-      
-      # Reasoning budget — hard cap on tokens inside <think>…</think> per turn
-      LLAMA_REASONING_BUDGET: ${LLAMA_REASONING_BUDGET:-4096}
-      
-      # KV cache slot persistence — saves/restores slot state to disk so
-      # per-conversation KV caches survive server restarts.
-      LLAMA_SLOT_SAVE_PATH: ${LLAMA_SLOT_SAVE_PATH:-/models/slots}
-
-      # Optional API key — when set, all requests to the server must include
-      # Authorization: Bearer <key>. Leave empty for unauthenticated access.
-      # When exposed via Cloudflare Access, this provides an additional
-      # layer of API-level authentication.
       LLAMA_API_KEY: ${LLAMA_API_KEY:-}
+      LLAMA_MODELS_PRESET: ${LLAMA_MODELS_PRESET:-/etc/llama-server/models.ini}
+      LLAMA_MODELS_MAX: ${LLAMA_MODELS_MAX:-1}
+      LLAMA_MODELS_AUTOLOAD: ${LLAMA_MODELS_AUTOLOAD:-on}
+      LLAMA_WEBUI_CONFIG_FILE: ${LLAMA_WEBUI_CONFIG_FILE:-/etc/llama-server/webui-config.json}
+
+      # --- CUDA tuning (env vars read directly by ggml-cuda) ---
+      GGML_CUDA_GRAPH_OPT: ${GGML_CUDA_GRAPH_OPT:-1}
+      CUDA_SCALE_LAUNCH_QUEUES: ${CUDA_SCALE_LAUNCH_QUEUES:-2x}
+
+      # All other configuration (ctx, KV cache, sampling, speculative decoding,
+      # DRY, reasoning budget, etc.) lives in scripts/models.ini.
 
     networks:
       - llama-net
@@ -246,6 +172,7 @@ services:
       CACHE_ENABLED: ${CACHE_ENABLED:-true}
       CACHE_TTL: ${CACHE_TTL:-3600}
       MCP_API_KEY: ${MCP_API_KEY:-}
+      MCP_CORS_ORIGINS: ${MCP_CORS_ORIGINS:-*}
     deploy:
       resources:
         limits:
@@ -266,6 +193,35 @@ services:
 
     networks:
       - llama-net
+
+  # ---------------------------------------------------------------------------
+  # Chat UI — React SPA (Vite dev server)
+  # ---------------------------------------------------------------------------
+  chat-ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    container_name: chat-ui
+    ports:
+      - "${CHAT_UI_PORT:-5173}:5173"
+    environment:
+      VITE_FIREBASE_API_KEY: ${VITE_FIREBASE_API_KEY:-}
+      VITE_FIREBASE_AUTH_DOMAIN: ${VITE_FIREBASE_AUTH_DOMAIN:-}
+      VITE_FIREBASE_PROJECT_ID: ${VITE_FIREBASE_PROJECT_ID:-}
+      VITE_FIREBASE_STORAGE_BUCKET: ${VITE_FIREBASE_STORAGE_BUCKET:-}
+      VITE_FIREBASE_MESSAGING_SENDER_ID: ${VITE_FIREBASE_MESSAGING_SENDER_ID:-}
+      VITE_FIREBASE_APP_ID: ${VITE_FIREBASE_APP_ID:-}
+      VITE_ADMIN_UID: ${VITE_ADMIN_UID:-}
+    networks:
+      - llama-net
+    restart: unless-stopped
+    develop:
+      watch:
+        - action: sync
+          path: ./ui/src
+          target: /app/src
+        - action: rebuild
+          path: ./ui/package.json
 
 volumes:
   mcp-cache:
