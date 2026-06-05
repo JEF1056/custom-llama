@@ -141,6 +141,23 @@ TQ_QUANT_OPTIONS = [
 # Lower quants (Q8_0, Q6_K, …) cannot be re-quantized to TQ targets.
 TQ_SOURCE_QUANTS = ["fp16", "bf16"]
 
+# Unsloth Dynamic (UD) quantization options — pre-built download only.
+# These use a mixed-precision scheme that preserves important layers at higher
+# precision. llama-quantize cannot produce them; they must be downloaded directly
+# from HuggingFace (typically from unsloth/*-GGUF repos).
+# Naming: "UD-<VARIANT>" where VARIANT is the quantization method.
+UD_QUANT_OPTIONS = [
+    "UD-Q8_K_XL",   # ~8-bit (best quality)
+    "UD-Q6_K_XL",   # ~6-bit
+    "UD-Q5_K_XL",   # ~5-bit
+    "UD-Q4_K_XL",   # ~4-bit (recommended balance)
+    "UD-Q3_K_XL",   # ~3-bit
+    "UD-Q2_K_XL",   # ~2-bit
+    "UD-IQ3_XXS",   # ~3-bit iQuant (smaller)
+    "UD-IQ2_M",     # ~2-bit iQuant (medium)
+    "UD-IQ2_XXS",   # ~2-bit iQuant (smallest)
+]
+
 # Ordered list of quantization types from highest to lowest quality.
 # Used when selecting the best available source file for local quantization.
 QUANT_PRIORITY = [
@@ -175,6 +192,16 @@ QUANT_PRIORITY = [
 # For standard quants (Q4_K_M, Q6_K, …) llama-quantize accepts Q8_0 and higher
 # as sources.  TurboQuant is handled separately — see TQ_SOURCE_QUANTS above.
 NON_REQUANTIZABLE: set = set()
+
+
+def _is_ud_quant(quant: str) -> bool:
+    """Return True if the quant string is an Unsloth Dynamic (UD) quantization.
+
+    UD quants are pre-built by Unsloth and must be downloaded directly from
+    HuggingFace. llama-quantize cannot produce them.  They are identified by
+    the "UD-" prefix (case-insensitive).
+    """
+    return quant.upper().startswith("UD-")
 
 
 def _fetch_repo_files(repo_id: str) -> list:
@@ -678,6 +705,7 @@ def download_model(model_name: str, quant: str, output_dir: str, nthreads: int |
 
     hf_repo = model_info["hf_repo"]
     is_turboquant = quant in TQ_QUANT_OPTIONS
+    is_ud = _is_ud_quant(quant)
 
     # ------------------------------------------------------------------ #
     # 2. Pre-built GGUF available on HuggingFace?
@@ -695,6 +723,24 @@ def download_model(model_name: str, quant: str, output_dir: str, nthreads: int |
         _done(canonical)
         _maybe_download_mmproj(model_info, output_path, model_name)
         return
+
+    # ------------------------------------------------------------------ #
+    # 2b. UD quant not found — cannot be produced locally
+    # ------------------------------------------------------------------ #
+    if is_ud:
+        print(
+            f"\nError: {quant} not found in {hf_repo}.\n"
+            "Unsloth Dynamic (UD) quantizations are pre-built by Unsloth and cannot\n"
+            "be produced by llama-quantize. They must be downloaded directly.\n\n"
+            "Possible reasons:\n"
+            f"  • This model does not have UD quants in {hf_repo}\n"
+            "  • The model may exist in a different Unsloth GGUF repo\n\n"
+            "Available UD quants can be browsed at:\n"
+            f"  https://huggingface.co/{hf_repo}/tree/main\n\n"
+            "To use a standard quantization instead, try:\n"
+            f"  --quant Q4_K_M  (or IQ4_XS, Q3_K_L, etc.)"
+        )
+        sys.exit(1)
 
     # ------------------------------------------------------------------ #
     # 3. Local quantization path
@@ -949,6 +995,15 @@ def convert_safetensors(
     #    and for MTP builds — prebuilt GGUFs strip MTP tensors.
     # ------------------------------------------------------------------ #
     is_turboquant = quant in TQ_QUANT_OPTIONS
+
+    if _is_ud_quant(quant):
+        print(
+            f"\nError: UD quants ({quant}) cannot be produced via convert-st.\n"
+            "Unsloth Dynamic (UD) quantizations are pre-built and must be downloaded.\n"
+            "Use the download command instead:\n"
+            f"  docker compose run --rm llama-convert download {model_name} --quant {quant}"
+        )
+        sys.exit(1)
     hf_repo = model_info["hf_repo"]
     if not is_turboquant and not mtp:
         print(f"  Checking HuggingFace for pre-built {quant} in {hf_repo} ...")
@@ -1190,8 +1245,13 @@ def list_models() -> None:
         print()
 
     print("Supported quantizations (pass to --quant):")
-    print("  Standard:", ", ".join(QUANT_PRIORITY[:8]), "...")
-    print("  TurboQuant:", ", ".join(TQ_QUANT_OPTIONS))
+    print("  Standard   :", ", ".join(QUANT_PRIORITY[:8]), "...")
+    print("  TurboQuant :", ", ".join(TQ_QUANT_OPTIONS))
+    print("  Unsloth UD :", ", ".join(UD_QUANT_OPTIONS))
+    print()
+    print("  UD (Unsloth Dynamic) quants use mixed precision to preserve important")
+    print("  layers at higher bit depth. Download-only — cannot be produced locally.")
+    print("  Available from unsloth/*-GGUF repos on HuggingFace.")
     print()
     print("Multimodal models automatically download mmproj.gguf for vision support.")
 
@@ -1226,7 +1286,9 @@ def main():
             "will download the best available source (FP16/BF16) and quantize locally, "
             "then clean up the source file. "
             f"Standard options: {', '.join(QUANT_PRIORITY[:8])} ... "
-            f"TurboQuant options: {', '.join(TQ_QUANT_OPTIONS)}"
+            f"TurboQuant options: {', '.join(TQ_QUANT_OPTIONS)}. "
+            f"Unsloth Dynamic (UD) options: {', '.join(UD_QUANT_OPTIONS)} "
+            "(download-only, mixed-precision, better quality per bit)."
         ),
     )
     download_parser.add_argument(
