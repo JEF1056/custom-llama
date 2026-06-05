@@ -8,8 +8,7 @@ FROM nvidia/cuda:12.9.0-devel-ubuntu24.04 AS builder
 # Use "native" to auto-detect (requires GPU visible at build time).
 ARG CUDA_ARCHS=86
 
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-  --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+RUN rm -rf /var/lib/apt/lists/* && \
   apt-get update && \
   apt-get install -y --no-install-recommends \
   git \
@@ -18,7 +17,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   build-essential \
   libopenblas-dev \
   libssl-dev \
-  pkg-config
+  pkg-config && \
+  rm -rf /var/lib/apt/lists/*
 
 RUN git clone --depth 1 --branch llama-exp --recursive \
   https://github.com/JEF1056/llama-cpp-turboquant.git /llama.cpp
@@ -71,14 +71,14 @@ RUN strip --strip-unneeded /llama.cpp/build/bin/llama-server /llama.cpp/build/bi
 # =============================================================================
 FROM nvidia/cuda:12.9.0-runtime-ubuntu24.04 AS runtime
 
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-  --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+RUN rm -rf /var/lib/apt/lists/* && \
   apt-get update && \
   apt-get install -y --no-install-recommends \
   curl \
   libopenblas0t64 \
   libssl3t64 \
-  libgomp1
+  libgomp1 && \
+  rm -rf /var/lib/apt/lists/*
 
 # cuBLAS runtime libs from the devel image (avoids apt package naming issues)
 COPY --link --from=builder /usr/local/cuda/lib64/libcublas*.so* /usr/local/cuda/lib64/
@@ -144,11 +144,11 @@ COPY --link --from=builder /llama.cpp/build/bin/llama-quantize /usr/local/bin/ll
 # Python stack for model download and HF→GGUF conversion
 # uv: Rust-based pip replacement — 10-100x faster dependency resolution & install.
 COPY --link --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-  --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+RUN rm -rf /var/lib/apt/lists/* && \
   apt-get update && \
   apt-get install -y --no-install-recommends python3 \
-  aria2
+  aria2 && \
+  rm -rf /var/lib/apt/lists/*
 
 # Pull the HF→GGUF conversion script and its support package from the builder.
 COPY --link --from=builder /llama.cpp/convert_hf_to_gguf.py /scripts/convert_hf_to_gguf.py
