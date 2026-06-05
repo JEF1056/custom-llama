@@ -3,9 +3,9 @@
   "plugin": [
     "@opencode_weave/weave"
   ],
-  "model": "jessfan/qwen3.6-27b",
+  "model": "vllm/qwen3.6-27b",
   "provider": {
-    "jessfan": {
+    "vllm": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "vLLM Server",
       "options": {
@@ -18,7 +18,7 @@
           "name": "Qwen3.6-27B",
           "limit": {
             "context": 100000,
-            "output": 64000
+            "output": 32000
           },
           "modalities": {
             "input": [
@@ -38,7 +38,7 @@
   "mcp": {
     "search tools": {
       "type": "remote",
-      "url": "http://localhost:{env:MCP_SERVER_PORT}/mcp",
+      "url": "http://localhost:{env:MCP_SERVER_PORT}",
       "headers": {
         "Authorization": "Bearer {env:MCP_API_KEY}"
       },

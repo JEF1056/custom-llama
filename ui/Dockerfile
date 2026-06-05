@@ -6,7 +6,9 @@ WORKDIR /app
 # npm ci is faster and more reliable than npm install in container environments —
 # it installs directly from package-lock.json without dep resolution.
 COPY package*.json ./
-RUN npm install --no-audit --no-fund --maxsockets=1
+# Upgrade npm — v10.x on Node 22 crashes with "Exit handler never called!" in Docker (npm/cli#8404, fixed in v11.5.0)
+RUN npm install -g npm@11
+RUN npm ci --no-audit --no-fund
 
 # Copy source — Docker Watch syncs incremental changes without rebuilding.
 COPY . .
