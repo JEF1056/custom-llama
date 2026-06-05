@@ -103,6 +103,8 @@ services:
 
     volumes:
       - ./models:/models:rw
+      - ./config/webui-config.json:/etc/llama-server/webui-config.json:ro
+      - ./config/models.ini:/etc/llama-server/models.ini:ro
 
     gpus: all
 
@@ -114,12 +116,10 @@ services:
       LLAMA_HOST: ${LLAMA_HOST:-0.0.0.0}
       LLAMA_PORT: ${LLAMA_PORT:-8080}
       LLAMA_API_KEY: ${LLAMA_API_KEY:-}
-      LLAMA_MODELS_PRESET: ${LLAMA_MODELS_PRESET:-/etc/llama-server/models.ini}
-      LLAMA_MODELS_MAX: ${LLAMA_MODELS_MAX:-1}
+LLAMA_MODELS_MAX: ${LLAMA_MODELS_MAX:-1}
       LLAMA_MODELS_AUTOLOAD: ${LLAMA_MODELS_AUTOLOAD:-on}
-      LLAMA_WEBUI_CONFIG_FILE: ${LLAMA_WEBUI_CONFIG_FILE:-/etc/llama-server/webui-config.json}
 
-      # --- CUDA tuning (env vars read directly by ggml-cuda) ---
+# --- CUDA tuning (env vars read directly by ggml-cuda) ---
       GGML_CUDA_GRAPH_OPT: ${GGML_CUDA_GRAPH_OPT:-1}
       CUDA_SCALE_LAUNCH_QUEUES: ${CUDA_SCALE_LAUNCH_QUEUES:-2x}
 
@@ -223,34 +223,6 @@ services:
     networks:
       - llama-net
 
-  # ---------------------------------------------------------------------------
-  # Chat UI — React SPA (Vite dev server)
-  # ---------------------------------------------------------------------------
-  chat-ui:
-    build:
-      context: ./ui
-      dockerfile: Dockerfile
-    container_name: chat-ui
-    ports:
-      - "${CHAT_UI_PORT:-5173}:5173"
-    environment:
-      VITE_FIREBASE_API_KEY: ${VITE_FIREBASE_API_KEY:-}
-      VITE_FIREBASE_AUTH_DOMAIN: ${VITE_FIREBASE_AUTH_DOMAIN:-}
-      VITE_FIREBASE_PROJECT_ID: ${VITE_FIREBASE_PROJECT_ID:-}
-      VITE_FIREBASE_STORAGE_BUCKET: ${VITE_FIREBASE_STORAGE_BUCKET:-}
-      VITE_FIREBASE_MESSAGING_SENDER_ID: ${VITE_FIREBASE_MESSAGING_SENDER_ID:-}
-      VITE_FIREBASE_APP_ID: ${VITE_FIREBASE_APP_ID:-}
-      VITE_ADMIN_UID: ${VITE_ADMIN_UID:-}
-    networks:
-      - llama-net
-    restart: unless-stopped
-    develop:
-      watch:
-        - action: sync
-          path: ./ui/src
-          target: /app/src
-        - action: rebuild
-          path: ./ui/package.json
 
 volumes:
   mcp-cache:

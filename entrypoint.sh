@@ -1,22 +1,22 @@
 #!/bin/bash
 set -e
 
-# All model configuration lives in LLAMA_MODELS_PRESET
-# (scripts/models.ini → /etc/llama-server/models.ini inside the container).
+# Model configuration lives in config/models.ini (host) →
+# /etc/llama-server/models.ini (container, mounted read-only).
 # Add a [section] per model; [*] sets global defaults.
 # Router supports single-model setups too — just define one section.
 
 HOST=${LLAMA_HOST:-0.0.0.0}
 PORT=${LLAMA_PORT:-8080}
 API_KEY=${LLAMA_API_KEY:-}
-WEBUI_CONFIG_FILE=${LLAMA_WEBUI_CONFIG_FILE:-/etc/llama-server/webui-config.json}
-MODELS_PRESET=${LLAMA_MODELS_PRESET:-/etc/llama-server/models.ini}
+WEBUI_CONFIG_FILE=/etc/llama-server/webui-config.json
+MODELS_PRESET=/etc/llama-server/models.ini
 MODELS_MAX=${LLAMA_MODELS_MAX:-1}
 MODELS_AUTOLOAD=${LLAMA_MODELS_AUTOLOAD:-on}
 
 if [ ! -f "$MODELS_PRESET" ]; then
     echo "ERROR: models preset not found: $MODELS_PRESET"
-    echo "Set LLAMA_MODELS_PRESET or place models.ini at /etc/llama-server/models.ini"
+    echo "Mount config/models.ini to /etc/llama-server/models.ini"
     exit 1
 fi
 

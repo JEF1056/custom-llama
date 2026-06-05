@@ -104,9 +104,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && \
 COPY --link --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
 
 COPY entrypoint.sh /entrypoint.sh
-COPY scripts/webui-config.json /etc/llama-server/webui-config.json
-COPY scripts/models.ini /etc/llama-server/models.ini
-RUN mkdir -p /models && \
+# webui-config.json and models.ini are NOT baked in — they are mounted as
+# read-only bind mounts in docker-compose.yml so edits take effect on
+# `docker compose up --force-recreate` without a rebuild.
+RUN mkdir -p /models /etc/llama-server && \
   chmod +x /entrypoint.sh && sed -i 's/\r$//' /entrypoint.sh && \
   if [ ! -x "/usr/local/bin/llama-server" ]; then \
   echo "ERROR: /usr/local/bin/llama-server is missing or not executable" && exit 1; \
