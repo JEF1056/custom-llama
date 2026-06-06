@@ -167,14 +167,20 @@ COPY --link --from=builder /llama.cpp/convert_hf_to_gguf.py /scripts/convert_hf_
 COPY --link --from=builder /llama.cpp/conversion/ /scripts/conversion/
 COPY --link --from=builder /llama.cpp/gguf-py/ /scripts/gguf-py/
 
+# Install Python deps in one layer.
+# --no-compile: skip .pyc bytecode generation (~200MB saved for torch alone).
+# Two-pass install: torch first (large, slow, pinned index) then the rest
+# so a change to the second group doesn't bust the torch cache entry.
 RUN --mount=type=cache,target=/root/.cache/uv \
-  uv pip install --system --break-system-packages \
+  uv pip install --system --break-system-packages --no-compile \
   torch --index-url https://download.pytorch.org/whl/cu128
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-  uv pip install --system --break-system-packages \
+  uv pip install --system --break-system-packages --no-compile \
   huggingface_hub hf_transfer transformers safetensors \
-  sentencepiece accelerate /scripts/gguf-py/
+  sentencepiece accelerate /scripts/gguf-py/ && \
+  find /usr/lib/python3 /usr/local/lib/python3* -type d -name __pycache__ \
+    -exec rm -rf {} + 2>/dev/null || true
 
 # Copied after pip install so that edits to these scripts don't bust the pip cache.
 COPY scripts/manage_models.py /scripts/manage_models.py
