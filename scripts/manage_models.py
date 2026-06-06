@@ -105,7 +105,7 @@ MODELS = {
         "mmproj": "mmproj-F16.gguf"
     },
     "qwen3.6-35b-a3b-apex": {
-        "hf_repo": "mudler/Qwen3.6-35B-A3B-APEX-GGUF",
+        "hf_repo": "mudler/Qwen3.6-35B-A3B-APEX-MTP-GGUF",
         "fp16_repo": "Qwen/Qwen3.6-35B-A3B",
         "description": "Qwen 3.6 35B-A3B APEX mixed-precision (~17GB, default: APEX-I-Compact)",
         "size_gb": 17,

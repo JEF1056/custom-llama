@@ -49,14 +49,14 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
 
 ### qwen3.6-27B (default, loads on first request)
 
-| Property        | Value                                                  |
-| --------------- | ------------------------------------------------------ |
-| Model           | qwen3.6-27B                                            |
-| Quant           | IQ4_XS + MTP (~15 GB)                                  |
-| Architecture    | Dense transformer, 64 GQA attention layers             |
-| Context         | 150K (native 32K; extended via RoPE scaling)           |
-| Capabilities    | Reasoning, tool use, MTP speculative decoding          |
-| MTP speedup     | ~2–2.5× tok/s vs. baseline (requires MTP-capable GGUF) |
+| Property     | Value                                                  |
+| ------------ | ------------------------------------------------------ |
+| Model        | qwen3.6-27B                                            |
+| Quant        | IQ4_XS + MTP (~15 GB)                                  |
+| Architecture | Dense transformer, 64 GQA attention layers             |
+| Context      | 150K (native 32K; extended via RoPE scaling)           |
+| Capabilities | Reasoning, tool use, MTP speculative decoding          |
+| MTP speedup  | ~2–2.5× tok/s vs. baseline (requires MTP-capable GGUF) |
 
 **VRAM budget (RTX 3090, 24 GB):**
 
@@ -70,35 +70,35 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
 
 ### qwen3.6-35B-A3B (loads at startup)
 
-| Property        | Value                                                                 |
-| --------------- | --------------------------------------------------------------------- |
-| Model           | qwen3.6-35B-A3B                                                       |
-| Quant           | IQ4_XS + MTP (~14.5 GB) or APEX-I-Compact (~17.3 GB)                 |
-| Architecture    | Hybrid MoE — 30 DeltaNet (linear-recurrent) + 10 MoE Attention layers |
-| Active params   | 3.8B of 35B (MoE FFN)                                                 |
-| Context         | 128K                                                                  |
-| Capabilities    | Reasoning, tool use, MTP speculative decoding (standard quant only)   |
+| Property      | Value                                                                 |
+| ------------- | --------------------------------------------------------------------- |
+| Model         | qwen3.6-35B-A3B                                                       |
+| Quant         | IQ4_XS + MTP (~14.5 GB) or APEX-I-Compact (~17.3 GB)                  |
+| Architecture  | Hybrid MoE — 30 DeltaNet (linear-recurrent) + 10 MoE Attention layers |
+| Active params | 3.8B of 35B (MoE FFN)                                                 |
+| Context       | 128K                                                                  |
+| Capabilities  | Reasoning, tool use, MTP speculative decoding (standard quant only)   |
 
 **VRAM budget (RTX 3090, 24 GB) — IQ4_XS:**
 
-| Component                        | Size                            |
-| -------------------------------- | ------------------------------- |
-| Model (IQ4_XS)                   | ~14.5 GB                        |
-| DeltaNet recurrent state         | ~1.5 GB                         |
-| KV cache (turbo4/2, 65K ctx)     | ~0.6 GB                         |
-| draft-mtp KV cache               | ~0.1 GB                         |
-| compute scratch + CUDA           | ~1.5 GB                         |
-| **Total**                        | **~18.2 GB** (~5.8 GB headroom) |
+| Component                    | Size                            |
+| ---------------------------- | ------------------------------- |
+| Model (IQ4_XS)               | ~14.5 GB                        |
+| DeltaNet recurrent state     | ~1.5 GB                         |
+| KV cache (turbo4/2, 65K ctx) | ~0.6 GB                         |
+| draft-mtp KV cache           | ~0.1 GB                         |
+| compute scratch + CUDA       | ~1.5 GB                         |
+| **Total**                    | **~18.2 GB** (~5.8 GB headroom) |
 
 **VRAM budget (RTX 3090, 24 GB) — APEX-I-Compact:**
 
-| Component                        | Size                            |
-| -------------------------------- | ------------------------------- |
-| Model (APEX-I-Compact)           | ~17.3 GB                        |
-| DeltaNet recurrent state         | ~1.5 GB                         |
-| KV cache (turbo4/2, 65K ctx)     | ~0.6 GB                         |
-| compute scratch + CUDA           | ~1.5 GB                         |
-| **Total**                        | **~20.9 GB** (~3.1 GB headroom) |
+| Component                    | Size                            |
+| ---------------------------- | ------------------------------- |
+| Model (APEX-I-Compact)       | ~17.3 GB                        |
+| DeltaNet recurrent state     | ~1.5 GB                         |
+| KV cache (turbo4/2, 65K ctx) | ~0.6 GB                         |
+| compute scratch + CUDA       | ~1.5 GB                         |
+| **Total**                    | **~20.9 GB** (~3.1 GB headroom) |
 
 ---
 
