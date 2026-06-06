@@ -158,8 +158,9 @@ docker compose build llama-convert
 
 # Option A (recommended): MTP-capable GGUF from safetensors — ~2–2.5× faster generation
 # Downloads safetensors, converts to fp16 GGUF, quantizes, cleans up.
+# TriAttention calibration runs automatically (TRIATTENTION_INPUT set in docker-compose.yml).
 docker compose run --rm llama-convert convert-st qwen3.6-27b --quant IQ4_XS --mtp --keep-intermediate
-# Output: ./models/qwen3.6-27b-IQ4_XS-mtp.gguf
+# Output: ./models/qwen3.6-27b-IQ4_XS-mtp.gguf  +  ./models/qwen3.6-27b-triattention.bin
 # .env.default already points LLAMA_MODEL at this file and sets LLAMA_SPEC_TYPE=mtp.
 
 # Option B (faster setup, no MTP): prebuilt GGUF from HuggingFace
@@ -234,7 +235,13 @@ docker compose run --rm llama-convert download qwen3.6-27b --quant IQ4_XS
 
 # Re-quantize an existing GGUF already in ./models
 docker compose run --rm llama-convert convert /models/qwen3.6-27b-fp16.gguf --quant Q4_K_M
+
 ```
+
+> **TriAttention calibration** runs automatically after every `download` and `convert-st` — no extra flags needed.
+> `calibration-data/wikitext-2-raw-test.txt` (~313k tokens, Wikipedia prose) is mounted into the container by default via `TRIATTENTION_INPUT` in `docker-compose.yml`.
+> Stats are written to `./models/{model}-triattention.bin` and reused on subsequent runs (skipped if already present).
+> To skip calibration entirely, set `TRIATTENTION_INPUT=` (empty) in `.env`.
 
 ---
 

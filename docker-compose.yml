@@ -43,6 +43,7 @@ services:
 
     volumes:
       - ./models:/models:rw
+      - ./calibration-data:/calibration-data:ro
 
     environment:
       HF_TOKEN: ${HF_TOKEN:-}
@@ -58,6 +59,11 @@ services:
       # BSODs caused by Docker saturating every CPU core.
       # Override in .env: CONVERT_THREADS=4
       CONVERT_THREADS: ${CONVERT_THREADS:-}
+
+      # Plain-text corpus for TriAttention calibration (per-head RoPE frequency stats).
+      # Wikitext-2-raw-test (~313k tokens) is the default; override in .env if needed.
+      # Set to empty string to skip calibration entirely.
+      TRIATTENTION_INPUT: ${TRIATTENTION_INPUT:-/calibration-data/wikitext-2-raw-test.txt}
 
     # No GPU needed — conversion and quantization run on CPU.
 
