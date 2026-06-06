@@ -68,13 +68,6 @@ services:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
 
-      # Cache HuggingFace model weights to the mounted /models volume so
-      # calibration (and any re-runs) don't re-download from scratch.
-      # ~/.cache/huggingface is discarded when the --rm container exits.
-      # Note: transformers cannot load GGUF — calibration always needs
-      # safetensors. This caches those weights in /models/.hf-cache.
-      HF_HOME: /models/.hf-cache
-
     gpus: all
 
   # ---------------------------------------------------------------------------

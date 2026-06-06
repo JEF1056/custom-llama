@@ -1137,21 +1137,18 @@ def convert_safetensors(
             sys.exit(1)
 
         hf_token = os.environ.get("HF_TOKEN") or None
+        st_dir = output_path / f".{model_name}-safetensors"
 
-        # Download into the HF native cache (HF_HOME/hub) rather than a flat
-        # local_dir.  This means triattention_calibrate.py's from_pretrained()
-        # call will find the weights already cached and skip a second download.
-        # With local_dir the two paths use incompatible layouts and can't share.
-        # max_workers=1 serializes shard downloads to avoid WSL2 vmmem balloon.
-        st_dir = Path(snapshot_download(
+        # max_workers=1 serializes shard downloads to avoid the simultaneous disk-
+        # write pressure that causes WSL2's vmmem to balloon on Windows.
+        snapshot_download(
             repo_id=source_repo,
+            local_dir=str(st_dir),
             token=hf_token,
             ignore_patterns=["*.md", "*.txt", "*.json.lock", "*.gguf"],
             max_workers=1,
-        ))
-        print(f"  Cached : {st_dir}")
-        # from_pretrained(source_repo) will be a cache hit — no re-download.
-        _calib_model_path = source_repo
+        )
+        _calib_model_path = str(st_dir)
 
         # -------------------------------------------------------------- #
         # 1b. Convert safetensors → fp16 GGUF
@@ -1178,8 +1175,15 @@ def convert_safetensors(
         fp16_size = _fmt_bytes(fp16_gguf.stat().st_size) if fp16_gguf.exists() else "unknown"
         print(f"\n  Done: {fp16_gguf.name} ({fp16_size})")
 
-        # Weights are in HF cache — no intermediate dir to clean up here.
-        # Calibration runs below using source_repo (cache hit via HF_HOME).
+        # Run calibration while st_dir is still on disk, then clean up.
+        _run_calibration(model_name, model_info, output_dir, calib_input, model_path=_calib_model_path)
+        _calib_model_path = None  # already ran; suppress second call at end
+
+        if keep_intermediate:
+            print(f"  Keeping safetensors : {st_dir.name}")
+        else:
+            print(f"  Removing safetensors : {st_dir.name}")
+            shutil.rmtree(st_dir, ignore_errors=True)
 
     # ------------------------------------------------------------------ #
     # 3. Quantize fp16 GGUF → target quant
@@ -1247,8 +1251,8 @@ def convert_safetensors(
 
     _done(canonical)
     _maybe_download_mmproj(model_info, output_path, model_name)
-    # _calib_model_path is the HF repo ID (source_repo) — from_pretrained will
-    # find it in HF_HOME (/models/.hf-cache) without re-downloading.
+    # _calib_model_path is None when calibration already ran in the full convert
+    # path above. For cached-fp16 and prebuilt paths, run now via fp16_repo.
     _run_calibration(model_name, model_info, output_dir, calib_input, model_path=_calib_model_path)
 
     if mtp:
