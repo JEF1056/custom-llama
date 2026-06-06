@@ -145,15 +145,10 @@ ENTRYPOINT ["/entrypoint.sh"]
 # =============================================================================
 FROM base AS convert
 
-# llama-quantize is linked against libcuda.so.1, which is normally injected by
-# the NVIDIA container runtime from the host driver.  llama-convert runs without
-# GPU access, so the injection never happens and the binary fails to start.
-# Copying the build-time stub satisfies the dynamic linker; quantization itself
-# is purely CPU-bound so nothing ever calls into the real driver.
-# libcuda.so.1 is injected at runtime by the NVIDIA container runtime when GPU
-# access is granted.  We no longer need the build-time stub here — keeping the
-# stubs dir on LD_LIBRARY_PATH would shadow the real driver and cause
-# torch.cuda.is_available() to return False even with gpus: all in compose.
+# libcuda.so.1 is injected at runtime by the NVIDIA container runtime (gpus: all
+# in compose).  No build-time stub needed — adding the stubs dir to
+# LD_LIBRARY_PATH would shadow the real driver and cause
+# torch.cuda.is_available() to return False.
 
 # Model management tools not present in the runtime image
 COPY --link --from=builder /llama.cpp/build/bin/llama-quantize /usr/local/bin/llama-quantize
