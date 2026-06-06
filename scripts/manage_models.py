@@ -104,6 +104,15 @@ MODELS = {
         "size_gb": 17,
         "mmproj": "mmproj-F16.gguf"
     },
+    "qwen3.6-35b-a3b-apex": {
+        "hf_repo": "mudler/Qwen3.6-35B-A3B-APEX-GGUF",
+        "fp16_repo": "Qwen/Qwen3.6-35B-A3B",
+        "description": "Qwen 3.6 35B-A3B APEX mixed-precision (~17GB, default: APEX-I-Compact)",
+        "size_gb": 17,
+        "mmproj": "mmproj.gguf",
+        "notes": "APEX quants are pre-built by mudler. Use --quant APEX-I-Compact (default), "
+                 "APEX-I-Mini, APEX-I-Quality, APEX-I-Balanced, etc.",
+    },
     "qwopus3.6-35b": {
         "hf_repo": "Jackrong/Qwopus3.6-35B-A3B-v1-GGUF",
         "fp16_repo": "Jackrong/Qwopus3.6-35B-A3B-v1",
@@ -142,6 +151,20 @@ TQ_QUANT_OPTIONS = [
 # llama-quantize only accepts fp16 or bf16 as input when producing TurboQuant.
 # Lower quants (Q8_0, Q6_K, …) cannot be re-quantized to TQ targets.
 TQ_SOURCE_QUANTS = ["fp16", "bf16"]
+
+# APEX quantization options — pre-built download only (mudler/Qwen3.6-35B-A3B-APEX-GGUF).
+# APEX quants use mixed-precision GGUF files produced by mudler; llama-quantize
+# cannot produce them. They are identified by the "APEX-" prefix.
+# Naming: "APEX-<VARIANT>" where VARIANT is one of the mudler variants.
+APEX_QUANT_OPTIONS = [
+    "APEX-I-Quality",   # ~22.8 GB  (highest quality)
+    "APEX-I-Balanced",  # ~25.6 GB  (balanced, larger)
+    "APEX-I-Compact",   # ~17.3 GB  (recommended — fits 24 GB VRAM)
+    "APEX-I-Mini",      # ~14.3 GB  (smallest)
+    "APEX-Quality",     # ~22.8 GB  (non-imatrix quality)
+    "APEX-Balanced",    # ~25.6 GB  (non-imatrix balanced)
+    "APEX-Compact",     # ~17.3 GB  (non-imatrix compact)
+]
 
 # Unsloth Dynamic (UD) quantization options — pre-built download only.
 # These use a mixed-precision scheme that preserves important layers at higher
@@ -194,6 +217,16 @@ QUANT_PRIORITY = [
 # For standard quants (Q4_K_M, Q6_K, …) llama-quantize accepts Q8_0 and higher
 # as sources.  TurboQuant is handled separately — see TQ_SOURCE_QUANTS above.
 NON_REQUANTIZABLE: set = set()
+
+
+def _is_apex_quant(quant: str) -> bool:
+    """Return True if the quant string is an APEX quantization (mudler/Qwen3.6-35B-A3B-APEX-GGUF).
+
+    APEX quants are pre-built by mudler and must be downloaded directly from
+    HuggingFace. llama-quantize cannot produce them.  They are identified by
+    the "APEX-" prefix (case-insensitive).
+    """
+    return quant.upper().startswith("APEX-")
 
 
 def _is_ud_quant(quant: str) -> bool:
@@ -798,6 +831,7 @@ def download_model(model_name: str, quant: str, output_dir: str, nthreads: int |
     hf_repo = model_info["hf_repo"]
     is_turboquant = quant in TQ_QUANT_OPTIONS
     is_ud = _is_ud_quant(quant)
+    is_apex = _is_apex_quant(quant)
 
     # ------------------------------------------------------------------ #
     # 2. Pre-built GGUF available on HuggingFace?
@@ -806,6 +840,11 @@ def download_model(model_name: str, quant: str, output_dir: str, nthreads: int |
     if not is_turboquant:
         print(f"  Checking HuggingFace for pre-built {quant} in {hf_repo} ...")
         hf_file = find_quant_in_repo(hf_repo, quant)
+
+    # APEX quants embed the model name in the filename (e.g. Qwen3.6-35B-A3B-APEX-I-Compact.gguf).
+    # find_quant_in_repo looks for the quant token ("APEX-I-Compact") which is present as a suffix,
+    # so the standard path works. If not found we must error — cannot produce APEX locally.
+
 
     if hf_file:
         print(f"  Found pre-built {quant}: {Path(hf_file).name}")
@@ -832,6 +871,27 @@ def download_model(model_name: str, quant: str, output_dir: str, nthreads: int |
             f"  https://huggingface.co/{hf_repo}/tree/main\n\n"
             "To use a standard quantization instead, try:\n"
             f"  --quant Q4_K_M  (or IQ4_XS, Q3_K_L, etc.)"
+        )
+        sys.exit(1)
+
+    # ------------------------------------------------------------------ #
+    # 2c. APEX quant not found — cannot be produced locally
+    # ------------------------------------------------------------------ #
+    if is_apex:
+        apex_options = ", ".join(APEX_QUANT_OPTIONS)
+        print(
+            f"\nError: {quant} not found in {hf_repo}.\n"
+            "APEX quantizations are pre-built by mudler and cannot\n"
+            "be produced by llama-quantize. They must be downloaded directly.\n\n"
+            "Possible reasons:\n"
+            f"  • Quant variant '{quant}' does not exist in {hf_repo}\n\n"
+            "Available APEX quants can be browsed at:\n"
+            f"  https://huggingface.co/{hf_repo}/tree/main\n\n"
+            f"Known variants: {apex_options}\n\n"
+            "To use the default APEX quant:\n"
+            f"  --quant APEX-I-Compact  (recommended, ~17 GB)\n\n"
+            "To use a standard quantization instead, try:\n"
+            f"  --quant IQ4_XS  (or Q4_K_M, Q3_K_L, etc.)"
         )
         sys.exit(1)
 
@@ -1403,7 +1463,9 @@ def main():
             f"Standard options: {', '.join(QUANT_PRIORITY[:8])} ... "
             f"TurboQuant options: {', '.join(TQ_QUANT_OPTIONS)}. "
             f"Unsloth Dynamic (UD) options: {', '.join(UD_QUANT_OPTIONS)} "
-            "(download-only, mixed-precision, better quality per bit)."
+            "(download-only, mixed-precision, better quality per bit). "
+            f"APEX options (qwen3.6-35b-a3b-apex only): {', '.join(APEX_QUANT_OPTIONS)} "
+            "(download-only, mixed-precision, default: APEX-I-Compact)."
         ),
     )
     download_parser.add_argument(
