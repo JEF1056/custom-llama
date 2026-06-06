@@ -43,6 +43,7 @@ services:
 
     volumes:
       - ./models:/models:rw
+      - ./config:/config:rw
       - ./calibration-data:/calibration-data:ro
 
     environment:

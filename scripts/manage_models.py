@@ -130,6 +130,8 @@ MODELS = {
 
 DEFAULT_MODELS_DIR = "./models"
 DEFAULT_OUTPUT_DIR_HELP = "Output directory (default: ./models)"
+DEFAULT_CALIB_DIR = "./config"
+DEFAULT_CALIB_DIR_HELP = "TriAttention stats output directory (default: ./config)"
 
 # TurboQuant quantization options (extreme compression, must be quantized locally)
 TQ_QUANT_OPTIONS = [
@@ -662,12 +664,13 @@ def _run_calibration(
     output_dir: str,
     calib_input: str,
     model_path: str | None = None,
+    calib_dir: str | None = None,
 ) -> None:
     """Run triattention_calibrate.py for a model after download/convert.
 
     Silently skips when:
     - calib_input is empty / None (no corpus provided)
-    - {output_dir}/{model_name}-triattention.bin already exists
+    - {calib_dir}/{model_name}-triattention.bin already exists
     - The model has no safetensors repo (fp16_repo) and no local path
 
     On any calibration failure, prints a warning and continues — never
@@ -676,15 +679,20 @@ def _run_calibration(
     Args:
         model_name: Key from the MODELS dict.
         model_info: Model metadata dict.
-        output_dir: Output directory (stats file written here).
+        output_dir: Directory where the GGUF model was written (unused here,
+            kept for call-site symmetry).
         calib_input: Path to plain-text calibration corpus, or empty string.
         model_path: Optional local path to safetensors dir (e.g. st_dir from
             convert-st). When provided, avoids re-downloading weights.
+        calib_dir: Directory for the output .bin stats file. Defaults to
+            DEFAULT_CALIB_DIR (/config in the container).
     """
     if not calib_input:
         return
 
-    stats_path = Path(output_dir) / f"{model_name}-triattention.bin"
+    stats_dir = Path(calib_dir) if calib_dir else Path(DEFAULT_CALIB_DIR)
+    stats_dir.mkdir(parents=True, exist_ok=True)
+    stats_path = stats_dir / f"{model_name}-triattention.bin"
     if stats_path.exists():
         size_str = _fmt_bytes(stats_path.stat().st_size)
         print(f"\n  TriAttention stats already exist: {stats_path.name} ({size_str}) — skipping calibration.")
@@ -739,7 +747,7 @@ def _run_calibration(
         print(f"\n  Warning: TriAttention calibration error ({e}) — continuing.")
 
 
-def download_model(model_name: str, quant: str, output_dir: str, nthreads: int | None = None, keep_intermediate: bool = False, calib_input: str = "") -> None:
+def download_model(model_name: str, quant: str, output_dir: str, nthreads: int | None = None, keep_intermediate: bool = False, calib_input: str = "", calib_dir: str = DEFAULT_CALIB_DIR) -> None:
     """Download (and if necessary locally quantize) a model.
 
     Algorithm
@@ -784,7 +792,7 @@ def download_model(model_name: str, quant: str, output_dir: str, nthreads: int |
         size_str = _fmt_bytes(canonical.stat().st_size)
         print(f"\n  ✓ Already on disk: {canonical.name} ({size_str}) — skipping download.")
         _maybe_download_mmproj(model_info, output_path, model_name)
-        _run_calibration(model_name, model_info, output_dir, calib_input)
+        _run_calibration(model_name, model_info, output_dir, calib_input, calib_dir=calib_dir)
         return
 
     hf_repo = model_info["hf_repo"]
@@ -806,7 +814,7 @@ def download_model(model_name: str, quant: str, output_dir: str, nthreads: int |
             shutil.move(str(downloaded), str(canonical))
         _done(canonical)
         _maybe_download_mmproj(model_info, output_path, model_name)
-        _run_calibration(model_name, model_info, output_dir, calib_input)
+        _run_calibration(model_name, model_info, output_dir, calib_input, calib_dir=calib_dir)
         return
 
     # ------------------------------------------------------------------ #
@@ -881,7 +889,7 @@ def download_model(model_name: str, quant: str, output_dir: str, nthreads: int |
 
     _done(canonical)
     _maybe_download_mmproj(model_info, output_path, model_name)
-    _run_calibration(model_name, model_info, output_dir, calib_input)
+    _run_calibration(model_name, model_info, output_dir, calib_input, calib_dir=calib_dir)
 
 
 def _find_mmproj_in_repo(repo_id: str) -> str | None:
@@ -1014,6 +1022,7 @@ def convert_safetensors(
     mtp: bool = False,
     keep_intermediate: bool = False,
     calib_input: str = "",
+    calib_dir: str = DEFAULT_CALIB_DIR,
 ) -> None:
     """Convert a safetensors model to a quantized GGUF via fp16 GGUF intermediate.
 
@@ -1079,7 +1088,8 @@ def convert_safetensors(
         print(f"\n  ✓ Already on disk: {canonical.name} ({size_str}) — skipping.")
         _maybe_download_mmproj(model_info, output_path, model_name)
         _run_calibration(model_name, model_info, output_dir, calib_input,
-                         model_path=str(st_dir) if st_dir.exists() else None)
+                         model_path=str(st_dir) if st_dir.exists() else None,
+                         calib_dir=calib_dir)
         return
 
     # ------------------------------------------------------------------ #
@@ -1110,7 +1120,8 @@ def convert_safetensors(
             _done(canonical)
             _maybe_download_mmproj(model_info, output_path, model_name)
             _run_calibration(model_name, model_info, output_dir, calib_input,
-                             model_path=str(st_dir) if st_dir.exists() else None)
+                             model_path=str(st_dir) if st_dir.exists() else None,
+                             calib_dir=calib_dir)
             return
         print(f"  No pre-built {quant} found — falling back to safetensors conversion.")
     elif mtp:
@@ -1182,7 +1193,7 @@ def convert_safetensors(
         print(f"\n  Done: {fp16_gguf.name} ({fp16_size})")
 
         # Run calibration while st_dir is still on disk, then clean up.
-        _run_calibration(model_name, model_info, output_dir, calib_input, model_path=_calib_model_path)
+        _run_calibration(model_name, model_info, output_dir, calib_input, model_path=_calib_model_path, calib_dir=calib_dir)
         _calib_model_path = None  # already ran; suppress second call at end
 
         if keep_intermediate:
@@ -1259,7 +1270,7 @@ def convert_safetensors(
     _maybe_download_mmproj(model_info, output_path, model_name)
     # _calib_model_path is None when calibration already ran in the full convert
     # path above. For cached-fp16 and prebuilt paths, run now via fp16_repo.
-    _run_calibration(model_name, model_info, output_dir, calib_input, model_path=_calib_model_path)
+    _run_calibration(model_name, model_info, output_dir, calib_input, model_path=_calib_model_path, calib_dir=calib_dir)
 
     if mtp:
         print(
@@ -1424,6 +1435,12 @@ def main():
             "Skipped when not provided. Requires fp16_repo to be set for the model."
         ),
     )
+    download_parser.add_argument(
+        "--calib-dir",
+        default=DEFAULT_CALIB_DIR,
+        metavar="DIR",
+        help=DEFAULT_CALIB_DIR_HELP,
+    )
 
     # Convert model (re-quantize an existing GGUF)
     convert_parser = subparsers.add_parser("convert", help="Re-quantize an existing GGUF")
@@ -1535,6 +1552,12 @@ def main():
             "before cleanup (avoids re-downloading weights)."
         ),
     )
+    cst_parser.add_argument(
+        "--calib-dir",
+        default=DEFAULT_CALIB_DIR,
+        metavar="DIR",
+        help=DEFAULT_CALIB_DIR_HELP,
+    )
 
     args = parser.parse_args()
 
@@ -1542,14 +1565,16 @@ def main():
         list_models()
     elif args.command == "download":
         calib_input = getattr(args, "calib_input", "") or os.environ.get("TRIATTENTION_INPUT", "")
-        download_model(args.model, args.quant, args.output_dir, nthreads=args.threads, keep_intermediate=args.keep_intermediate, calib_input=calib_input)
+        calib_dir = getattr(args, "calib_dir", DEFAULT_CALIB_DIR)
+        download_model(args.model, args.quant, args.output_dir, nthreads=args.threads, keep_intermediate=args.keep_intermediate, calib_input=calib_input, calib_dir=calib_dir)
     elif args.command == "convert":
         convert_model(args.model_path, args.quant, args.output_dir, nthreads=args.threads)
     elif args.command == "turboquant":
         turboquant_model(args.model_path, args.quant, args.output_dir, nthreads=args.threads)
     elif args.command == "convert-st":
         calib_input = getattr(args, "calib_input", "") or os.environ.get("TRIATTENTION_INPUT", "")
-        convert_safetensors(args.model, args.quant, args.output_dir, nthreads=args.threads, mtp=args.mtp, keep_intermediate=args.keep_intermediate, calib_input=calib_input)
+        calib_dir = getattr(args, "calib_dir", DEFAULT_CALIB_DIR)
+        convert_safetensors(args.model, args.quant, args.output_dir, nthreads=args.threads, mtp=args.mtp, keep_intermediate=args.keep_intermediate, calib_input=calib_input, calib_dir=calib_dir)
     else:
         parser.print_help()
 
