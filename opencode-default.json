@@ -15,7 +15,7 @@
         "qwen3.6-35b-a3b": {
           "name": "Qwen3.6-35B-A3B",
           "limit": {
-            "context": "{ini:qwen3.6-35b-a3b.ctx-size}",
+            "context": "{ctx:qwen3.6-35b-a3b}",
             "output": 32000
           },
           "modalities": {
@@ -28,7 +28,7 @@
         "qwopus3.6-27b": {
           "name": "Qwen3.6-27B",
           "limit": {
-            "context": "{ini:qwopus3.6-27b.ctx-size}",
+            "context": "{ctx:qwopus3.6-27b}",
             "output": 32000
           },
           "modalities": {

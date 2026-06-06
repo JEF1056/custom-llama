@@ -11,20 +11,34 @@ Root .env behaviour:
   - Stale variables (removed from .env.default) are DELETED.
   - Auto-generated tokens (LLAMA_API_KEY, MCP_API_KEY) are created on first run.
 
-opencode.json is generated from opencode-default.json by substituting {env:VAR}
-placeholders from root .env and "{ini:SECTION.KEY}" placeholders from config/models.ini
-(e.g. "{ini:qwopus3.6-27b.ctx-size}" → the ctx-size value for that model).
+opencode.json is generated from opencode-default.json by substituting:
+  {env:VAR}    → value from root .env
+  {ini:SEC.KEY} → value from config/models.ini
+  "{ctx:MODEL}" → model context length (live from server if reachable, else
+                  fit-ctx from models.ini), emitted as bare integer
+
+When the server is reachable (--server-url), each model is loaded in turn,
+n_ctx is read from GET /props, then the model is unloaded.  This gives the
+exact context fit determined at load time.  When the server is unreachable,
+the fit-ctx floor from models.ini [*] is used as a conservative fallback.
 
 Usage:
-    python sync-env.py              # sync root .env
-    python sync-env.py --dry-run    # preview changes without writing
-    python sync-env.py --regenerate # force-regenerate token variables
+    python sync-env.py                              # sync root .env
+    python sync-env.py --dry-run                    # preview changes without writing
+    python sync-env.py --regenerate                 # force-regenerate token variables
+    python sync-env.py --server-url http://host:8080  # override server URL
+    python sync-env.py --no-server                  # skip server probe entirely
 """
 import argparse
 import configparser
 import re
 import secrets
 import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import json as _json
 from pathlib import Path
 
 # ── Secret variables (never overwritten after initial write in root .env) ──────
@@ -207,6 +221,151 @@ def sync_target(
     return True
 
 
+# ── Server context-length discovery ───────────────────────────────────────────
+
+def _http_json(url: str, method: str = "GET", body: dict | None = None,
+               api_key: str = "", timeout: float = 10.0) -> dict | list | None:
+    """Minimal HTTP helper — returns parsed JSON or None on error."""
+    data = _json.dumps(body).encode() if body else None
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return _json.loads(resp.read().decode())
+    except Exception:
+        return None
+
+
+def _server_reachable(base_url: str, api_key: str) -> bool:
+    result = _http_json(f"{base_url}/health", timeout=3.0, api_key=api_key)
+    return result is not None
+
+
+def _load_model(base_url: str, api_key: str, model_name: str) -> bool:
+    result = _http_json(
+        f"{base_url}/models/load",
+        method="POST",
+        body={"model": model_name},
+        api_key=api_key,
+    )
+    return result is not None
+
+
+def _unload_model(base_url: str, api_key: str, model_name: str) -> None:
+    _http_json(
+        f"{base_url}/models/unload",
+        method="POST",
+        body={"model": model_name},
+        api_key=api_key,
+    )
+
+
+def _wait_for_model(base_url: str, api_key: str, model_name: str,
+                    timeout: float = 300.0, poll: float = 2.0) -> bool:
+    """Poll /v1/models until model_name is 'loaded'. Returns True on success."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        data = _http_json(f"{base_url}/v1/models", api_key=api_key)
+        if isinstance(data, dict):
+            for m in data.get("data", []):
+                name = m.get("id", "")
+                status = m.get("status", {}).get("value", "")
+                if name == model_name and status == "loaded":
+                    return True
+        time.sleep(poll)
+    return False
+
+
+def _get_n_ctx(base_url: str, api_key: str) -> int | None:
+    """Read n_ctx from /props of the currently loaded model."""
+    props = _http_json(f"{base_url}/props", api_key=api_key)
+    if isinstance(props, dict):
+        val = props.get("n_ctx")
+        if isinstance(val, int) and val > 0:
+            return val
+    return None
+
+
+def fetch_model_context_lengths(
+    base_url: str,
+    api_key: str,
+    model_names: list[str],
+) -> dict[str, int]:
+    """Load each model in turn, read n_ctx from /props, unload. Returns {name: n_ctx}."""
+    results: dict[str, int] = {}
+    base_url = base_url.rstrip("/")
+
+    for name in model_names:
+        print(f"  [ctx]     Loading '{name}' to probe context length …")
+        if not _load_model(base_url, api_key, name):
+            print(f"  [ctx]     ✗ Failed to request load for '{name}'")
+            continue
+
+        if not _wait_for_model(base_url, api_key, name, timeout=300.0):
+            print(f"  [ctx]     ✗ Timed out waiting for '{name}' to load")
+            _unload_model(base_url, api_key, name)
+            continue
+
+        n_ctx = _get_n_ctx(base_url, api_key)
+        if n_ctx:
+            results[name] = n_ctx
+            print(f"  [ctx]     ✓ '{name}' n_ctx = {n_ctx:,}")
+        else:
+            print(f"  [ctx]     ✗ Could not read n_ctx for '{name}'")
+
+        _unload_model(base_url, api_key, name)
+        # Brief pause before next model to let VRAM settle
+        time.sleep(2.0)
+
+    return results
+
+
+# ── Context length resolution ──────────────────────────────────────────────────
+
+def resolve_context_lengths(
+    ini: configparser.ConfigParser,
+    model_names: list[str],
+    server_ctx: dict[str, int],
+) -> dict[str, int]:
+    """Return {model: context_length} for each model name.
+
+    Priority:
+      1. Live value from server (server_ctx)
+      2. ctx-size from model's INI section (if set explicitly)
+      3. fit-ctx from [*] global defaults (the minimum fit floor)
+      4. 200000 as hard fallback
+    """
+    # fit-ctx from [*]
+    fit_ctx_floor = 200_000
+    if ini.has_option("*", "fit-ctx"):
+        try:
+            fit_ctx_floor = int(ini.get("*", "fit-ctx").strip())
+        except ValueError:
+            pass
+
+    results: dict[str, int] = {}
+    for name in model_names:
+        if name in server_ctx:
+            results[name] = server_ctx[name]
+            continue
+
+        # Try explicit ctx-size in the model section
+        if ini.has_option(name, "ctx-size"):
+            try:
+                results[name] = int(ini.get(name, "ctx-size").strip())
+                continue
+            except ValueError:
+                pass
+
+        # Fall back to fit-ctx floor
+        results[name] = fit_ctx_floor
+        print(f"  [ctx]     '{name}' context length not available — using fit-ctx floor: {fit_ctx_floor:,}")
+
+    return results
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -217,6 +376,8 @@ def main() -> None:
     parser.add_argument("--regenerate",   action="store_true", help="Force-regenerate auto-generated tokens")
     parser.add_argument("--default-file", default=".env.default", help="Path to the root .env.default")
     parser.add_argument("--env-file",     default=".env",         help="Path to the root .env output")
+    parser.add_argument("--server-url",   default="",            help="llama-server base URL (default: read from .env LLAMA_PORT)")
+    parser.add_argument("--no-server",    action="store_true",    help="Skip server probe; use INI fallbacks for context lengths")
     args = parser.parse_args()
 
     default_path = Path(args.default_file)
@@ -246,20 +407,52 @@ def main() -> None:
     if not changed and not args.dry_run:
         print("All env files up to date.")
 
-    # ── 3. models.ini — compute ctx-checkpoints for each model ──────────────
+    # ── 2. models.ini — compute ctx-checkpoints for each model ──────────────
     ini_changed = sync_models_ini(
         ini_path=Path("config/models.ini"),
         dry_run=args.dry_run,
     )
     changed |= ini_changed
 
-    # ── 2. opencode.json (substitute {env:VAR} and {ini:...} from models.ini) ──
+    # ── 3. Resolve context lengths (server probe or INI fallback) ─────────────
+    ini = parse_models_ini(Path("config/models.ini"))
+
+    # Collect model names from non-global, non-preamble sections
+    model_names = [
+        s for s in ini.sections()
+        if s not in ("__preamble__", "*")
+    ]
+
+    server_ctx: dict[str, int] = {}
+    if not args.no_server:
+        # Determine server URL
+        env_vals = parse_env(root_env_path) if root_env_path.exists() else {}
+        if args.server_url:
+            base_url = args.server_url.rstrip("/")
+        else:
+            port = env_vals.get("LLAMA_PORT", "8080")
+            base_url = f"http://localhost:{port}"
+
+        api_key = env_vals.get("LLAMA_API_KEY", "")
+
+        print(f"\n  [ctx]     Probing server at {base_url} …")
+        if _server_reachable(base_url, api_key):
+            server_ctx = fetch_model_context_lengths(base_url, api_key, model_names)
+        else:
+            print(f"  [ctx]     Server not reachable — using INI fallbacks")
+    else:
+        print("\n  [ctx]     --no-server: using INI fallbacks for context lengths")
+
+    ctx_lengths = resolve_context_lengths(ini, model_names, server_ctx)
+
+    # ── 4. opencode.json ──────────────────────────────────────────────────────
     sync_opencode(
         env_path=root_env_path,
         template=Path("opencode-default.json"),
         output=Path("opencode.json"),
         dry_run=args.dry_run,
         models_ini_path=Path("config/models.ini"),
+        ctx_lengths=ctx_lengths,
     )
 
 
@@ -298,18 +491,21 @@ def sync_opencode(
     output: Path,
     dry_run: bool,
     models_ini_path: Path | None = None,
+    ctx_lengths: dict[str, int] | None = None,
 ) -> None:
-    """Substitute {env:VAR} and "{ini:SECTION.KEY}" placeholders in template → output.
+    """Substitute placeholders in template → output.
 
     {env:VAR}         → string value from env_path (quotes kept)
     "{ini:SEC.KEY}"   → numeric value from models_ini_path (surrounding quotes stripped,
                         bare integer emitted so JSON stays valid)
+    "{ctx:MODEL}"     → resolved context length for MODEL (bare integer, no quotes)
     """
     if not template.exists():
         return
 
     env = parse_env(env_path) if env_path.exists() else {}
     ini = parse_models_ini(models_ini_path) if models_ini_path else configparser.ConfigParser(interpolation=None)
+    ctx = ctx_lengths or {}
     text = template.read_text(encoding="utf-8")
 
     missing: list[str] = []
@@ -339,9 +535,19 @@ def sync_opencode(
         missing.append(f"ini:{ref}")
         return m.group(0)
 
+    def ctx_replacer(m: re.Match) -> str:
+        """Replace quoted "{ctx:MODEL}" with bare integer context length."""
+        model = m.group(1)
+        if model in ctx:
+            return str(ctx[model])
+        missing.append(f"ctx:{model}")
+        return m.group(0)
+
     result = re.sub(r"\{env:([^}]+)\}", env_replacer, text)
     # Match the full quoted placeholder: "{ini:SECTION.KEY}" → bare value
     result = re.sub(r'"\{ini:([^}]+)\}"', ini_replacer, result)
+    # Match the full quoted placeholder: "{ctx:MODEL}" → bare integer
+    result = re.sub(r'"\{ctx:([^}]+)\}"', ctx_replacer, result)
 
     if dry_run:
         print(f"  [opencode] Would write {output}")
