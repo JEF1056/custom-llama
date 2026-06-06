@@ -2,7 +2,7 @@
 
 A self-hosted LLM inference server built around [llama.cpp (TurboQuant + MTP fork)](https://github.com/JEF1056/llama-cpp-turboquant/tree/llama-next). Exposed publicly via Cloudflare Tunnel with Cloudflare Access authentication.
 
-**Default model:** [qwen3.6-27B](https://huggingface.co/unsloth/qwen3.6-27B-GGUF) — a reasoning model with native MTP speculative decoding support.
+**Default model:** [qwopus3.6-27B-v2](https://huggingface.co/Jackrong/Qwopus3.6-27B-v2-GGUF) — a reasoning model with native MTP speculative decoding support.
 
 **35B model:** [qwen3.6-35B-A3B](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) — hybrid MoE (DeltaNet + MoE Attention), 3.8B active params. Also available as [APEX MTP mixed-precision quants](https://huggingface.co/mudler/Qwen3.6-35B-A3B-APEX-MTP-GGUF) (`qwen3.6-35b-a3b-apex`, default: `APEX-MTP-I-Compact`).
 
@@ -15,7 +15,7 @@ No Cloudflare or secrets needed — just the inference server on this machine.
 ```bash
 python sync-env.py
 docker compose build llama-server llama-convert mcp-search-server
-docker compose run --rm llama-convert convert-st qwen3.6-27b --quant IQ4_XS --mtp
+docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS --mtp
 docker compose up -d llama-server mcp-search-server
 ```
 
@@ -41,17 +41,17 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
 
 > **Without MTP:** if you want a faster first run (skip the safetensors download), use the prebuilt GGUF instead.
 > Comment out `LLAMA_MODEL` and `LLAMA_SPEC_TYPE` in `.env`, then:
-> `docker compose run --rm llama-convert download qwen3.6-27b --quant IQ4_XS`
+> `docker compose run --rm llama-convert download qwopus3.6-27b --quant IQ4_XS`
 
 ---
 
 ## Models
 
-### qwen3.6-27B (default, loads on first request)
+### qwopus3.6-27B-v2 (default, loads on first request)
 
 | Property     | Value                                                  |
 | ------------ | ------------------------------------------------------ |
-| Model        | qwen3.6-27B                                            |
+| Model        | qwopus3.6-27B-v2                                       |
 | Quant        | IQ4_XS + MTP (~15 GB)                                  |
 | Architecture | Dense transformer, 64 GQA attention layers             |
 | Context      | 150K (native 32K; extended via RoPE scaling)           |
@@ -195,13 +195,13 @@ docker compose build llama-convert
 # Option A (recommended): MTP-capable GGUF from safetensors — ~2–2.5× faster generation
 # Downloads safetensors, converts to fp16 GGUF, quantizes, cleans up.
 # TriAttention calibration runs automatically (TRIATTENTION_INPUT set in docker-compose.yml).
-docker compose run --rm llama-convert convert-st qwen3.6-27b --quant IQ4_XS --mtp --keep-intermediate
-# Output: ./models/qwen3.6-27b-IQ4_XS-mtp.gguf  +  ./models/qwen3.6-27b-triattention.bin
+docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS --mtp --keep-intermediate
+# Output: ./models/qwopus3.6-27b-IQ4_XS-mtp.gguf  +  ./models/qwopus3.6-27b-triattention.bin
 # .env.default already points LLAMA_MODEL at this file and sets LLAMA_SPEC_TYPE=mtp.
 
 # Option B (faster setup, no MTP): prebuilt GGUF from HuggingFace
 # Comment out LLAMA_MODEL and LLAMA_SPEC_TYPE in .env first.
-docker compose run --rm llama-convert download qwen3.6-27b --quant IQ4_XS
+docker compose run --rm llama-convert download qwopus3.6-27b --quant IQ4_XS
 
 # ── 35B standard (loads at startup) ────────────────────────────────────────
 
@@ -246,7 +246,7 @@ curl -H "CF-Access-Client-Id: <id>" \
      -H "CF-Access-Client-Secret: <secret>" \
      https://api.jessfan.com/v1/chat/completions \
      -H "Content-Type: application/json" \
-     -d '{"model": "qwen3.6-27b", "messages": [{"role": "user", "content": "Hello"}]}'
+     -d '{"model": "qwopus3.6-27b", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
 ### Step 7: Connect an OpenAI-compatible client
@@ -264,7 +264,7 @@ client = openai.OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="qwen3.6-27b",
+    model="qwopus3.6-27b",
     messages=[{"role": "user", "content": "Hello"}],
 )
 ```
@@ -280,8 +280,8 @@ docker compose run --rm llama-convert list
 # ── 27B (default) ──────────────────────────────────────────────────────────
 
 # MTP-capable GGUF (recommended — from safetensors, includes nextn heads)
-docker compose run --rm llama-convert convert-st qwen3.6-27b --quant IQ4_XS --mtp
-# Output: ./models/qwen3.6-27b-IQ4_XS-mtp.gguf
+docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS --mtp
+# Output: ./models/qwopus3.6-27b-IQ4_XS-mtp.gguf
 
 # ── 35B standard ───────────────────────────────────────────────────────────
 
@@ -299,20 +299,8 @@ docker compose run --rm llama-convert download qwen3.6-35b-a3b --quant IQ4_XS
 docker compose run --rm llama-convert download qwen3.6-35b-a3b-apex --quant APEX-MTP-I-Compact
 # Output: ./models/qwen3.6-35b-a3b-apex-APEX-MTP-I-Compact.gguf + mmproj
 
-# Smallest (~11.7 GB)
-docker compose run --rm llama-convert download qwen3.6-35b-a3b-apex --quant APEX-MTP-I-Nano
-
-# Small (~14.3 GB)
-docker compose run --rm llama-convert download qwen3.6-35b-a3b-apex --quant APEX-MTP-I-Mini
-
-# Higher quality (~23.5 GB)
-docker compose run --rm llama-convert download qwen3.6-35b-a3b-apex --quant APEX-MTP-I-Quality
-
-# Largest balanced (~26.1 GB)
-docker compose run --rm llama-convert download qwen3.6-35b-a3b-apex --quant APEX-MTP-I-Balanced
-
 # ── Re-quantize an existing GGUF already in ./models ───────────────────────
-docker compose run --rm llama-convert convert /models/qwen3.6-27b-fp16.gguf --quant Q4_K_M
+docker compose run --rm llama-convert convert /models/qwopus3.6-27b-fp16.gguf --quant Q4_K_M
 ```
 
 > **APEX MTP quants** are pre-built by [mudler](https://huggingface.co/mudler/Qwen3.6-35B-A3B-APEX-MTP-GGUF) and use mixed-precision packing with embedded MTP heads. They cannot be produced locally — only downloaded. `APEX-MTP-I-*` variants use imatrix quantization for better quality.

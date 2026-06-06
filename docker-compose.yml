@@ -17,7 +17,7 @@ services:
   #     docker compose run --rm llama-convert download qwen3.5-27b --quant Q4_K_M
   #
   #   No pre-built quant but fp16 GGUF exists (quantized locally):
-  #     docker compose run --rm llama-convert download qwen3.6-27b --quant TQ2_0
+  #     docker compose run --rm llama-convert download qwopus3.6-27b --quant TQ2_0
   #
   #   Safetensors-only repo (convert → fp16 GGUF → quantize):
   #     docker compose run --rm llama-convert convert-st qwen3.6-35b-a3b --quant TQ2_0
@@ -193,6 +193,10 @@ services:
       CACHE_TTL: ${CACHE_TTL:-3600}
       MCP_API_KEY: ${MCP_API_KEY:-}
       MCP_CORS_ORIGINS: ${MCP_CORS_ORIGINS:-*}
+      ADVISOR_BASE_URL: ${ADVISOR_BASE_URL:-http://localhost:8080/v1}
+      ADVISOR_MODEL: ${ADVISOR_MODEL:-qwopus3.6-27b}
+      ADVISOR_API_KEY: ${ADVISOR_API_KEY:-}
+      ADVISOR_MAX_TOKENS: ${ADVISOR_MAX_TOKENS:-8192}
     deploy:
       resources:
         limits:

@@ -357,6 +357,6 @@ def test_config_has_advisor_settings():
 def test_config_defaults():
     """Test that config defaults match expected values."""
     assert settings.ADVISOR_BASE_URL == "http://localhost:8080/v1"
-    assert settings.ADVISOR_MODEL == "qwen3.6-27b"
+    assert settings.ADVISOR_MODEL == "qwopus3.6-27b"
     assert settings.ADVISOR_API_KEY == ""
     assert settings.ADVISOR_MAX_TOKENS == 8192

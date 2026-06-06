@@ -134,7 +134,7 @@ ENTRYPOINT ["/entrypoint.sh"]
 #   docker compose run --rm llama-convert download qwen3.5-27b --quant Q4_K_M
 #
 #   # Download + quantize (fp16 GGUF source on HF):
-#   docker compose run --rm llama-convert download qwen3.6-27b --quant TQ2_0
+#   docker compose run --rm llama-convert download qwopus3.6-27b --quant TQ2_0
 #
 #   # Convert safetensors → fp16 GGUF → quant (no pre-built GGUF exists):
 #   docker compose run --rm llama-convert convert-st qwen3.6-35b-a3b --quant TQ2_0

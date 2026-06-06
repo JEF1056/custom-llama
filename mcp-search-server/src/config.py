@@ -56,7 +56,7 @@ class Settings(BaseSettings):
         description="Base URL for the local LLM server (OpenAI-compatible API)",
     )
     ADVISOR_MODEL: str = Field(
-        default="qwen3.6-27b",
+        default="qwopus3.6-27b",
         description="Default model to use for the advisor tool",
     )
     ADVISOR_API_KEY: str = Field(
