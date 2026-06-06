@@ -92,6 +92,13 @@ services:
       # triattention .bin stats files are all accessible at /etc/llama-server/.
       - ./config:/etc/llama-server:ro
 
+    # Allow time for slot KV-cache saves to complete on SIGTERM before SIGKILL.
+    # slot-flush-interval=120s means the worst-case un-flushed window is 2 min,
+    # but the shutdown save itself (one round of POST /slots/?action=save per
+    # loaded model) can take 10-60 s depending on KV size.
+    # Rule of thumb: set to max(slot-flush-interval, expected_save_time) + 10s.
+    stop_grace_period: 180s
+
     gpus: all
 
     environment:
