@@ -35,8 +35,6 @@ services:
       target: convert
       args:
         CUDA_ARCHS: ${CUDA_ARCHS:-86}
-      cache_from:
-        - llama-convert:latest
     image: llama-convert:latest
     container_name: llama-convert
     profiles: ["convert"]
@@ -83,8 +81,6 @@ services:
       target: runtime
       args:
         CUDA_ARCHS: ${CUDA_ARCHS:-86}
-      cache_from:
-        - llama-server:latest
     image: llama-server:latest
     container_name: llama-server
 
