@@ -107,11 +107,11 @@ MODELS = {
     "qwen3.6-35b-a3b-apex": {
         "hf_repo": "mudler/Qwen3.6-35B-A3B-APEX-MTP-GGUF",
         "fp16_repo": "Qwen/Qwen3.6-35B-A3B",
-        "description": "Qwen 3.6 35B-A3B APEX mixed-precision (~17GB, default: APEX-I-Compact)",
+        "description": "Qwen 3.6 35B-A3B APEX mixed-precision MTP (~17GB, default: APEX-MTP-I-Compact)",
         "size_gb": 17,
         "mmproj": "mmproj.gguf",
-        "notes": "APEX quants are pre-built by mudler. Use --quant APEX-I-Compact (default), "
-                 "APEX-I-Mini, APEX-I-Quality, APEX-I-Balanced, etc.",
+        "notes": "APEX MTP quants are pre-built by mudler. Use --quant APEX-MTP-I-Compact (default), "
+                 "APEX-MTP-I-Nano, APEX-MTP-I-Mini, APEX-MTP-I-Quality, APEX-MTP-I-Balanced, etc.",
     },
     "qwopus3.6-35b": {
         "hf_repo": "Jackrong/Qwopus3.6-35B-A3B-v1-GGUF",
@@ -152,18 +152,20 @@ TQ_QUANT_OPTIONS = [
 # Lower quants (Q8_0, Q6_K, …) cannot be re-quantized to TQ targets.
 TQ_SOURCE_QUANTS = ["fp16", "bf16"]
 
-# APEX quantization options — pre-built download only (mudler/Qwen3.6-35B-A3B-APEX-GGUF).
+# APEX quantization options — pre-built download only (mudler/Qwen3.6-35B-A3B-APEX-MTP-GGUF).
 # APEX quants use mixed-precision GGUF files produced by mudler; llama-quantize
-# cannot produce them. They are identified by the "APEX-" prefix.
-# Naming: "APEX-<VARIANT>" where VARIANT is one of the mudler variants.
+# cannot produce them. They are identified by the "APEX-MTP-" infix.
+# Naming: "APEX-MTP-<VARIANT>" where VARIANT is one of the mudler variants.
+# Filenames: Qwen3.6-35B-A3B-APEX-MTP-<VARIANT>.gguf
 APEX_QUANT_OPTIONS = [
-    "APEX-I-Quality",   # ~22.8 GB  (highest quality)
-    "APEX-I-Balanced",  # ~25.6 GB  (balanced, larger)
-    "APEX-I-Compact",   # ~17.3 GB  (recommended — fits 24 GB VRAM)
-    "APEX-I-Mini",      # ~14.3 GB  (smallest)
-    "APEX-Quality",     # ~22.8 GB  (non-imatrix quality)
-    "APEX-Balanced",    # ~25.6 GB  (non-imatrix balanced)
-    "APEX-Compact",     # ~17.3 GB  (non-imatrix compact)
+    "APEX-MTP-I-Quality",   # ~23.5 GB  (highest imatrix quality)
+    "APEX-MTP-I-Balanced",  # ~26.1 GB  (balanced imatrix, larger)
+    "APEX-MTP-I-Compact",   # ~17.3 GB  (recommended — fits 24 GB VRAM)
+    "APEX-MTP-I-Mini",      # ~14.3 GB  (small)
+    "APEX-MTP-I-Nano",      # ~11.7 GB  (smallest imatrix)
+    "APEX-MTP-Quality",     # ~23.5 GB  (non-imatrix quality)
+    "APEX-MTP-Balanced",    # ~26.1 GB  (non-imatrix balanced)
+    "APEX-MTP-Compact",     # ~17.3 GB  (non-imatrix compact)
 ]
 
 # Unsloth Dynamic (UD) quantization options — pre-built download only.
@@ -220,11 +222,11 @@ NON_REQUANTIZABLE: set = set()
 
 
 def _is_apex_quant(quant: str) -> bool:
-    """Return True if the quant string is an APEX quantization (mudler/Qwen3.6-35B-A3B-APEX-GGUF).
+    """Return True if the quant string is an APEX quantization (mudler/Qwen3.6-35B-A3B-APEX-MTP-GGUF).
 
     APEX quants are pre-built by mudler and must be downloaded directly from
     HuggingFace. llama-quantize cannot produce them.  They are identified by
-    the "APEX-" prefix (case-insensitive).
+    the "APEX-" prefix (case-insensitive); current variants use "APEX-MTP-*".
     """
     return quant.upper().startswith("APEX-")
 
@@ -910,7 +912,7 @@ def download_model(model_name: str, quant: str, output_dir: str, nthreads: int |
             f"  https://huggingface.co/{hf_repo}/tree/main\n\n"
             f"Known variants: {apex_options}\n\n"
             "To use the default APEX quant:\n"
-            f"  --quant APEX-I-Compact  (recommended, ~17 GB)\n\n"
+            f"  --quant APEX-MTP-I-Compact  (recommended, ~17 GB)\n\n"
             "To use a standard quantization instead, try:\n"
             f"  --quant IQ4_XS  (or Q4_K_M, Q3_K_L, etc.)"
         )
