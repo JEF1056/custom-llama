@@ -457,7 +457,7 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
     download_rate = os.environ.get("CONVERT_DOWNLOAD_RATE", "").strip()
     if download_rate:
         print(f"  Rate limit  : {download_rate} (CONVERT_DOWNLOAD_RATE)")
-        return _curl_download_file(repo_id, filename, dest, limit_rate=download_rate)
+        return _download_file_fallback(repo_id, filename, dest, limit_rate=download_rate)
 
     # Import huggingface_hub module first; guard hf_hub_download separately from
     # enable_progress_bars so a missing/renamed helper doesn't prevent downloads.
@@ -466,7 +466,7 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
         _hf_hub_download = _hfh.hf_hub_download
     except (ImportError, AttributeError):
         print("  huggingface_hub not available — using aria2c/urllib fallback.")
-        return _curl_download_file(repo_id, filename, dest, on_wsl2=on_wsl2)
+        return _download_file_fallback(repo_id, filename, dest, on_wsl2=on_wsl2)
 
     # enable_progress_bars: present since 0.14.0; silently skip if absent.
     try:
@@ -509,7 +509,7 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
         sys.exit(1)
 
 
-def _curl_download_file(
+def _download_file_fallback(
     repo_id: str, filename: str, dest: Path, limit_rate: str = "", on_wsl2: bool | None = None
 ) -> Path:
     """Download a file from HuggingFace without requiring curl.
@@ -620,7 +620,6 @@ def _keepalive(interval: int = 30, label: str = ""):
     ``interval`` seconds so the watchdog sees continuous activity.
     """
     stop = threading.Event()
-    prefix = f"  [{label}] " if label else "  "
 
     def _loop():
         while not stop.wait(interval):
@@ -847,7 +846,7 @@ def download_model(model_name: str, quant: str, output_dir: str, nthreads: int |
     if canonical.exists():
         size_str = _fmt_bytes(canonical.stat().st_size)
         print(f"\n  ✓ Already on disk: {canonical.name} ({size_str}) — skipping download.")
-        _maybe_download_mmproj(model_info, output_path, model_name)
+        _ensure_mmproj(model_info, output_path, model_name)
         _run_calibration(model_name, model_info, output_dir, calib_input, calib_dir=calib_dir)
         return
 
@@ -875,7 +874,7 @@ def download_model(model_name: str, quant: str, output_dir: str, nthreads: int |
         if downloaded.resolve() != canonical.resolve():
             shutil.move(str(downloaded), str(canonical))
         _done(canonical)
-        _maybe_download_mmproj(model_info, output_path, model_name)
+        _ensure_mmproj(model_info, output_path, model_name)
         _run_calibration(model_name, model_info, output_dir, calib_input, calib_dir=calib_dir)
         return
 
@@ -971,7 +970,7 @@ def download_model(model_name: str, quant: str, output_dir: str, nthreads: int |
         actual_source.unlink(missing_ok=True)
 
     _done(canonical)
-    _maybe_download_mmproj(model_info, output_path, model_name)
+    _ensure_mmproj(model_info, output_path, model_name)
     _run_calibration(model_name, model_info, output_dir, calib_input, calib_dir=calib_dir)
 
 
@@ -990,22 +989,92 @@ def _find_mmproj_in_repo(repo_id: str) -> str | None:
     return None
 
 
-def _maybe_download_mmproj(model_info: dict, output_path: Path, model_name: str = "") -> None:
-    """Download the multimodal projector file if this model requires one.
+def _ensure_mmproj(
+    model_info: dict,
+    output_path: Path,
+    model_name: str = "",
+    st_dir: Path | None = None,
+    convert_script: Path | None = None,
+) -> None:
+    """Download (or locally generate) the multimodal projector file if required.
 
-    The downloaded file is always renamed to ``{model_name}-mmproj.gguf`` so
-    that the entrypoint can locate it by model name without needing an explicit
-    ``LLAMA_MMPROJ`` path.
+    The output file is always named ``{model_name}-mmproj.gguf`` so the
+    entrypoint can locate it by model name without an explicit LLAMA_MMPROJ.
+
+    Priority:
+    1. Already on disk → skip everything.
+    2. Local safetensors dir (``st_dir``) + ``convert_hf_to_gguf.py`` available
+       → run ``--mmproj --outtype f16`` to build fp16 mmproj locally.
+       Falls back to download if the conversion fails (unsupported arch, etc.).
+    3. Download from HuggingFace (original behaviour).
 
     The ``mmproj`` field in the model entry can be:
-    - A specific filename string → download that exact file.
+    - A specific filename string → download that exact file (step 3).
     - ``True`` → auto-detect the mmproj filename by searching the GGUF repo.
     - Absent / falsy → model has no mmproj, skip.
+
+    Args:
+        st_dir: Path to a local safetensors directory. When present and
+            ``convert_script`` is also set, attempt local mmproj generation
+            before falling back to the download path.
+        convert_script: Path to ``convert_hf_to_gguf.py``. Required for local
+            generation; if None the local-generation step is skipped.
     """
     mmproj_value = model_info.get("mmproj")
     if not mmproj_value:
         return
 
+    canonical_name = f"{model_name}-mmproj.gguf" if model_name else "mmproj.gguf"
+    canonical_path = output_path / canonical_name
+
+    if canonical_path.exists():
+        size_str = _fmt_bytes(canonical_path.stat().st_size)
+        print(f"  Multimodal projector already exists: {canonical_name} ({size_str})")
+        return
+
+    # ------------------------------------------------------------------ #
+    # Try local generation from safetensors first (fp16, best quality)
+    # ------------------------------------------------------------------ #
+    local_generated = False
+    if st_dir and st_dir.exists() and convert_script and convert_script.exists():
+        _section("Generating mmproj from local safetensors (fp16)")
+        print(f"  Source : {st_dir}")
+        print(f"  Output : {canonical_name}")
+        tmp_mmproj = output_path / f"{model_name}-mmproj-tmp.gguf"
+        try:
+            with _keepalive(30, "mmproj"):
+                result = subprocess.run(
+                    [
+                        "python3", str(convert_script),
+                        str(st_dir),
+                        "--mmproj",
+                        "--outtype", "f16",
+                        "--outfile", str(tmp_mmproj),
+                    ],
+                    stdout=None,
+                    stderr=None,
+                )
+            if result.returncode == 0 and tmp_mmproj.exists():
+                shutil.move(str(tmp_mmproj), str(canonical_path))
+                size_str = _fmt_bytes(canonical_path.stat().st_size)
+                print(f"\n  ✓ mmproj generated (fp16): {canonical_name} ({size_str})")
+                local_generated = True
+            else:
+                print(
+                    f"\n  Warning: mmproj generation failed (exit {result.returncode}) "
+                    "— falling back to HuggingFace download."
+                )
+                tmp_mmproj.unlink(missing_ok=True)
+        except Exception as e:
+            print(f"\n  Warning: mmproj generation error ({e}) — falling back to HuggingFace download.")
+            tmp_mmproj.unlink(missing_ok=True)
+
+    if local_generated:
+        return
+
+    # ------------------------------------------------------------------ #
+    # Fall back: download from HuggingFace
+    # ------------------------------------------------------------------ #
     repo_id = model_info["hf_repo"]
 
     if mmproj_value is True:
@@ -1017,14 +1086,6 @@ def _maybe_download_mmproj(model_info: dict, output_path: Path, model_name: str 
         print(f"  Found: {mmproj_filename}")
     else:
         mmproj_filename = mmproj_value
-
-    canonical_name = f"{model_name}-mmproj.gguf" if model_name else Path(mmproj_filename).name
-    canonical_path = output_path / canonical_name
-
-    if canonical_path.exists():
-        size_str = _fmt_bytes(canonical_path.stat().st_size)
-        print(f"  Multimodal projector already exists: {canonical_name} ({size_str})")
-        return
 
     print(f"\nDownloading multimodal projector: {Path(mmproj_filename).name} ...")
     downloaded = _hf_download_file(repo_id, mmproj_filename, str(output_path))
@@ -1156,11 +1217,10 @@ def convert_safetensors(
     else:
         canonical = output_path / f"{model_name}-{quant}.gguf"
 
-    mtp_label = "  MTP    : enabled (nextn tensors will be included)" if mtp else ""
     _section(f"Model: {model_name}  |  Quant: {quant}  |  Source: {source_repo}")
     print(f"  Output : {canonical}")
-    if mtp_label:
-        print(mtp_label)
+    if mtp:
+        print("  MTP    : enabled (nextn tensors will be included)")
 
     # st_dir is computed early so early-exit paths can reuse local safetensors
     # if they happen to still be on disk (e.g. from a previous partial run).
@@ -1169,7 +1229,7 @@ def convert_safetensors(
     if canonical.exists():
         size_str = _fmt_bytes(canonical.stat().st_size)
         print(f"\n  ✓ Already on disk: {canonical.name} ({size_str}) — skipping.")
-        _maybe_download_mmproj(model_info, output_path, model_name)
+        _ensure_mmproj(model_info, output_path, model_name)
         _run_calibration(model_name, model_info, output_dir, calib_input,
                          model_path=str(st_dir) if st_dir.exists() else None,
                          calib_dir=calib_dir)
@@ -1201,7 +1261,7 @@ def convert_safetensors(
             if downloaded.resolve() != canonical.resolve():
                 shutil.move(str(downloaded), str(canonical))
             _done(canonical)
-            _maybe_download_mmproj(model_info, output_path, model_name)
+            _ensure_mmproj(model_info, output_path, model_name)
             _run_calibration(model_name, model_info, output_dir, calib_input,
                              model_path=str(st_dir) if st_dir.exists() else None,
                              calib_dir=calib_dir)
@@ -1275,9 +1335,17 @@ def convert_safetensors(
         fp16_size = _fmt_bytes(fp16_gguf.stat().st_size) if fp16_gguf.exists() else "unknown"
         print(f"\n  Done: {fp16_gguf.name} ({fp16_size})")
 
-        # Run calibration while st_dir is still on disk, then clean up.
+        # Run calibration while st_dir is still on disk.
         _run_calibration(model_name, model_info, output_dir, calib_input, model_path=_calib_model_path, calib_dir=calib_dir)
         _calib_model_path = None  # already ran; suppress second call at end
+
+        # Generate mmproj from local safetensors before cleanup (fp16, best quality).
+        # This is the preferred path — avoids downloading a pre-built BF16/f32 mmproj.
+        if model_info.get("mmproj"):
+            _ensure_mmproj(
+                model_info, output_path, model_name,
+                st_dir=st_dir, convert_script=convert_script,
+            )
 
         if keep_intermediate:
             print(f"  Keeping safetensors : {st_dir.name}")
@@ -1350,7 +1418,12 @@ def convert_safetensors(
         fp16_gguf.unlink(missing_ok=True)
 
     _done(canonical)
-    _maybe_download_mmproj(model_info, output_path, model_name)
+    # Pass st_dir/convert_script so local fp16 generation is preferred if
+    # safetensors are still present (e.g. cached-fp16 path or --keep-intermediate).
+    _ensure_mmproj(
+        model_info, output_path, model_name,
+        st_dir=st_dir, convert_script=convert_script,
+    )
     # _calib_model_path is None when calibration already ran in the full convert
     # path above. For cached-fp16 and prebuilt paths, run now via fp16_repo.
     _run_calibration(model_name, model_info, output_dir, calib_input, model_path=_calib_model_path, calib_dir=calib_dir)

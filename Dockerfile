@@ -162,15 +162,12 @@ RUN rm -rf /var/lib/apt/lists/* && \
   aria2 && \
   rm -rf /var/lib/apt/lists/*
 
-# Pull the HF→GGUF conversion script and its support package from the builder.
-COPY --link --from=builder /llama.cpp/convert_hf_to_gguf.py /scripts/convert_hf_to_gguf.py
-COPY --link --from=builder /llama.cpp/conversion/ /scripts/conversion/
-COPY --link --from=builder /llama.cpp/gguf-py/ /scripts/gguf-py/
-
-# Install Python deps in one layer.
+# Install Python deps in three layers ordered from slowest-changing to fastest:
+#   1. torch  — large, pinned CUDA index; almost never changes
+#   2. HF stack — changes occasionally with upstream releases
+#   3. gguf-py — changes only when llama.cpp is rebuilt (from builder stage)
+#
 # --no-compile: skip .pyc bytecode generation (~200MB saved for torch alone).
-# Two-pass install: torch first (large, slow, pinned index) then the rest
-# so a change to the second group doesn't bust the torch cache entry.
 RUN --mount=type=cache,target=/root/.cache/uv \
   uv pip install --system --break-system-packages --no-compile \
   torch --index-url https://download.pytorch.org/whl/cu128
@@ -178,11 +175,21 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 RUN --mount=type=cache,target=/root/.cache/uv \
   uv pip install --system --break-system-packages --no-compile \
   huggingface_hub hf_transfer transformers safetensors \
-  sentencepiece accelerate /scripts/gguf-py/ && \
+  sentencepiece accelerate
+
+# Pull the HF→GGUF conversion script and its support package from the builder.
+# Done after the HF stack install so that a llama.cpp rebuild only busts this
+# layer and below — not the large torch/HF layers above.
+COPY --link --from=builder /llama.cpp/convert_hf_to_gguf.py /scripts/convert_hf_to_gguf.py
+COPY --link --from=builder /llama.cpp/conversion/ /scripts/conversion/
+COPY --link --from=builder /llama.cpp/gguf-py/ /scripts/gguf-py/
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+  uv pip install --system --break-system-packages --no-compile /scripts/gguf-py/ && \
   find /usr/lib/python3 /usr/local/lib/python3* -type d -name __pycache__ \
     -exec rm -rf {} + 2>/dev/null || true
 
-# Copied after pip install so that edits to these scripts don't bust the pip cache.
+# Copied last so edits to these scripts never bust any pip cache layer.
 COPY scripts/manage_models.py /scripts/manage_models.py
 COPY scripts/triattention_calibrate.py /scripts/triattention_calibrate.py
 COPY scripts/triattention_common.py /scripts/triattention_common.py

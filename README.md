@@ -4,7 +4,7 @@ A self-hosted LLM inference server built around [llama.cpp (TurboQuant + MTP for
 
 **Default model:** [qwopus3.6-27B-v2](https://huggingface.co/Jackrong/Qwopus3.6-27B-v2-GGUF) — a reasoning model with native MTP speculative decoding support.
 
-**35B model:** [qwen3.6-35B-A3B](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) — hybrid MoE (DeltaNet + MoE Attention), 3.8B active params. Also available as [APEX MTP mixed-precision quants](https://huggingface.co/mudler/Qwen3.6-35B-A3B-APEX-MTP-GGUF) (`qwen3.6-35b-a3b-apex`, default: `APEX-MTP-I-Compact`).
+**35B model:** [qwen3.6-35B-A3B](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) — hybrid MoE (DeltaNet + MoE Attention), 3.8B active params. Currently running as [APEX MTP mixed-precision](https://huggingface.co/mudler/Qwen3.6-35B-A3B-APEX-MTP-GGUF) (`qwen3.6-35b-a3b-apex`, `APEX-MTP-I-Compact`). Standard IQ4_XS+MTP GGUF also buildable via `convert-st`.
 
 ---
 
@@ -68,16 +68,16 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
 | CUDA context + compute      | ~1.6 GB                         |
 | **Total**                   | **~19.4 GB** (~4.6 GB headroom) |
 
-### qwen3.6-35B-A3B (loads at startup)
+### qwen3.6-35B-A3B APEX (loads at startup)
 
-| Property      | Value                                                                 |
-| ------------- | --------------------------------------------------------------------- |
-| Model         | qwen3.6-35B-A3B                                                       |
-| Quant         | IQ4_XS + MTP (~14.5 GB) or APEX-MTP-I-Compact (~17.3 GB)                  |
+| Property      | Value                                                                  |
+| ------------- | ---------------------------------------------------------------------- |
+| Model         | qwen3.6-35B-A3B (APEX-MTP-I-Compact)                                  |
+| Quant         | APEX-MTP-I-Compact (~17.3 GB, MTP included)                           |
 | Architecture  | Hybrid MoE — 30 DeltaNet (linear-recurrent) + 10 MoE Attention layers |
-| Active params | 3.8B of 35B (MoE FFN)                                                 |
-| Context       | 128K                                                                  |
-| Capabilities  | Reasoning, tool use, MTP speculative decoding                         |
+| Active params | 3.8B of 35B (MoE FFN)                                                  |
+| Context       | 128K                                                                   |
+| Capabilities  | Reasoning, tool use, MTP speculative decoding                          |
 
 **VRAM budget (RTX 3090, 24 GB) — IQ4_XS:**
 
@@ -196,7 +196,8 @@ docker compose build llama-convert
 # Downloads safetensors, converts to fp16 GGUF, quantizes, cleans up.
 # TriAttention calibration runs automatically (TRIATTENTION_INPUT set in docker-compose.yml).
 docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS --mtp --keep-intermediate
-# Output: ./models/qwopus3.6-27b-IQ4_XS-mtp.gguf  +  ./models/qwopus3.6-27b-triattention.bin
+# Output: ./models/qwopus3.6-27b-IQ4_XS-mtp.gguf  +  ./models/qwopus3.6-27b-mmproj.gguf  +  ./models/qwopus3.6-27b-triattention.bin
+# mmproj is generated as fp16 from the local safetensors (no separate download needed).
 # .env.default already points LLAMA_MODEL at this file and sets LLAMA_SPEC_TYPE=mtp.
 
 # Option B (faster setup, no MTP): prebuilt GGUF from HuggingFace
@@ -207,15 +208,14 @@ docker compose run --rm llama-convert download qwopus3.6-27b --quant IQ4_XS
 
 # Option A (recommended): MTP-capable GGUF from safetensors
 docker compose run --rm llama-convert convert-st qwen3.6-35b-a3b --quant IQ4_XS --mtp
-# Output: ./models/qwen3.6-35b-a3b-IQ4_XS-mtp.gguf
+# Output: ./models/qwen3.6-35b-a3b-IQ4_XS-mtp.gguf + ./models/qwen3.6-35b-a3b-mmproj.gguf
 
-# ── 35B APEX MTP (alternative, download-only, includes MTP heads) ──────────
+# ── 35B APEX MTP (currently active, download-only, MTP heads included) ─────
 
 # APEX-MTP-I-Compact (~17.3 GB, default — fits 24 GB VRAM)
 docker compose run --rm llama-convert download qwen3.6-35b-a3b-apex --quant APEX-MTP-I-Compact
-# Output: ./models/qwen3.6-35b-a3b-apex-APEX-MTP-I-Compact.gguf + mmproj
-# Note: To use APEX at startup, set load-on-startup = true in config/models.ini [qwen3.6-35b-a3b-apex]
-#       and load-on-startup = false in [qwen3.6-35b-a3b].
+# Output: ./models/qwen3.6-35b-a3b-apex-APEX-MTP-I-Compact.gguf + ./models/qwen3.6-35b-a3b-apex-mmproj.gguf
+# Note: load-on-startup = true is set in config/models.ini [qwen3.6-35b-a3b] for this variant.
 ```
 
 > **Gated models:** set `HF_TOKEN=your_token` in `.env`
@@ -281,23 +281,24 @@ docker compose run --rm llama-convert list
 
 # MTP-capable GGUF (recommended — from safetensors, includes nextn heads)
 docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS --mtp
-# Output: ./models/qwopus3.6-27b-IQ4_XS-mtp.gguf
+# Output: ./models/qwopus3.6-27b-IQ4_XS-mtp.gguf + ./models/qwopus3.6-27b-mmproj.gguf
+# mmproj is generated as fp16 from safetensors (no separate download).
 
-# ── 35B standard ───────────────────────────────────────────────────────────
+# ── 35B APEX MTP (currently active, download-only, MTP + mmproj included) ──
+
+# APEX-MTP-I-Compact (~17.3 GB, recommended — fits 24 GB VRAM)
+docker compose run --rm llama-convert download qwen3.6-35b-a3b-apex --quant APEX-MTP-I-Compact
+# Output: ./models/qwen3.6-35b-a3b-apex-APEX-MTP-I-Compact.gguf + ./models/qwen3.6-35b-a3b-apex-mmproj.gguf
+
+# ── 35B standard (alternative, build from safetensors) ─────────────────────
 
 # MTP-capable GGUF from safetensors
 docker compose run --rm llama-convert convert-st qwen3.6-35b-a3b --quant IQ4_XS --mtp
-# Output: ./models/qwen3.6-35b-a3b-IQ4_XS-mtp.gguf
+# Output: ./models/qwen3.6-35b-a3b-IQ4_XS-mtp.gguf + ./models/qwen3.6-35b-a3b-mmproj.gguf
 
 # Standard prebuilt GGUF (no MTP)
 docker compose run --rm llama-convert download qwen3.6-35b-a3b --quant IQ4_XS
 # Output: ./models/qwen3.6-35b-a3b-IQ4_XS.gguf
-
-# ── 35B APEX MTP (mudler mixed-precision, download-only, MTP included) ─────
-
-# APEX-MTP-I-Compact (~17.3 GB, recommended — fits 24 GB VRAM)
-docker compose run --rm llama-convert download qwen3.6-35b-a3b-apex --quant APEX-MTP-I-Compact
-# Output: ./models/qwen3.6-35b-a3b-apex-APEX-MTP-I-Compact.gguf + mmproj
 
 # ── Re-quantize an existing GGUF already in ./models ───────────────────────
 docker compose run --rm llama-convert convert /models/qwopus3.6-27b-fp16.gguf --quant Q4_K_M
@@ -307,7 +308,7 @@ docker compose run --rm llama-convert convert /models/qwopus3.6-27b-fp16.gguf --
 
 > **TriAttention calibration** runs automatically after every `download` and `convert-st` — no extra flags needed.
 > `calibration-data/wikitext-2-raw-test.txt` (~313k tokens, Wikipedia prose) is mounted into the container by default via `TRIATTENTION_INPUT` in `docker-compose.yml`.
-> Stats are written to `./models/{model}-triattention.bin` and reused on subsequent runs (skipped if already present).
+> Stats are written to `./config/{model}-triattention.bin` and reused on subsequent runs (skipped if already present).
 > To skip calibration entirely, set `TRIATTENTION_INPUT=` (empty) in `.env`.
 
 ---
