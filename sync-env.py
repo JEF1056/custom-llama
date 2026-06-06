@@ -11,7 +11,9 @@ Root .env behaviour:
   - Stale variables (removed from .env.default) are DELETED.
   - Auto-generated tokens (LLAMA_API_KEY, MCP_API_KEY) are created on first run.
 
-opencode.json uses {env:VAR} native interpolation — no sync needed.
+opencode.json is generated from opencode-default.json by substituting {env:VAR}
+placeholders from root .env and "{ini:SECTION.KEY}" placeholders from config/models.ini
+(e.g. "{ini:qwen3.6-27b.ctx-size}" → the ctx-size value for that model).
 
 Usage:
     python sync-env.py              # sync root .env
@@ -19,6 +21,7 @@ Usage:
     python sync-env.py --regenerate # force-regenerate token variables
 """
 import argparse
+import configparser
 import re
 import secrets
 import sys
@@ -243,13 +246,26 @@ def main() -> None:
     if not changed and not args.dry_run:
         print("All env files up to date.")
 
-    # ── 2. opencode.json (substitute {env:VAR} from root .env) ───────────────
+    # ── 2. opencode.json (substitute {env:VAR} and {ini:...} from models.ini) ──
     sync_opencode(
         env_path=root_env_path,
         template=Path("opencode-default.json"),
         output=Path("opencode.json"),
         dry_run=args.dry_run,
+        models_ini_path=Path("config/models.ini"),
     )
+
+
+def parse_models_ini(path: Path) -> configparser.ConfigParser:
+    """Parse models.ini, handling bare key=value lines before the first section."""
+    cfg = configparser.ConfigParser(interpolation=None)
+    if not path.exists():
+        return cfg
+    raw = path.read_text(encoding="utf-8")
+    # models.ini starts with bare `version = 1` before any section header;
+    # configparser requires a section, so we prepend a synthetic [__preamble__].
+    cfg.read_string("[__preamble__]\n" + raw)
+    return cfg
 
 
 def sync_opencode(
@@ -257,25 +273,51 @@ def sync_opencode(
     template: Path,
     output: Path,
     dry_run: bool,
+    models_ini_path: Path | None = None,
 ) -> None:
-    """Substitute {env:VAR} placeholders in template → output using values from env_path."""
+    """Substitute {env:VAR} and "{ini:SECTION.KEY}" placeholders in template → output.
+
+    {env:VAR}         → string value from env_path (quotes kept)
+    "{ini:SEC.KEY}"   → numeric value from models_ini_path (surrounding quotes stripped,
+                        bare integer emitted so JSON stays valid)
+    """
     if not template.exists():
         return
 
     env = parse_env(env_path) if env_path.exists() else {}
+    ini = parse_models_ini(models_ini_path) if models_ini_path else configparser.ConfigParser(interpolation=None)
     text = template.read_text(encoding="utf-8")
 
     missing: list[str] = []
 
-    def replacer(m: re.Match) -> str:
+    def env_replacer(m: re.Match) -> str:
         var = m.group(1)
         val = env.get(var, "")
         if val == "":
-            missing.append(var)
+            missing.append(f"env:{var}")
             return m.group(0)
         return val
 
-    result = re.sub(r"\{env:([^}]+)\}", replacer, text)
+    def ini_replacer(m: re.Match) -> str:
+        """Replace quoted "{ini:SECTION.KEY}" with bare numeric value."""
+        ref = m.group(1)  # e.g. "qwen3.6-27b.ctx-size"
+        # Split on last dot to allow dots in section names (e.g. "qwen3.6-27b")
+        dot = ref.rfind(".")
+        if dot == -1:
+            missing.append(f"ini:{ref}")
+            return m.group(0)
+        section, key = ref[:dot], ref[dot + 1:]
+        if ini.has_option(section, key):
+            return ini.get(section, key).strip()
+        # Fallback to [*] global defaults
+        if ini.has_option("*", key):
+            return ini.get("*", key).strip()
+        missing.append(f"ini:{ref}")
+        return m.group(0)
+
+    result = re.sub(r"\{env:([^}]+)\}", env_replacer, text)
+    # Match the full quoted placeholder: "{ini:SECTION.KEY}" → bare value
+    result = re.sub(r'"\{ini:([^}]+)\}"', ini_replacer, result)
 
     if dry_run:
         print(f"  [opencode] Would write {output}")
