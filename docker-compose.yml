@@ -92,8 +92,9 @@ services:
 
     volumes:
       - ./models:/models:rw
-      - ./config/webui-config.json:/etc/llama-server/webui-config.json:ro
-      - ./config/models.ini:/etc/llama-server/models.ini:ro
+      # Mount entire config dir so models.ini, webui-config.json, and
+      # triattention .bin stats files are all accessible at /etc/llama-server/.
+      - ./config:/etc/llama-server:ro
 
     gpus: all
 
