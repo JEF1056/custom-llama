@@ -16,7 +16,8 @@ docker-compose.override.yml
 Thumbs.db
 
 # IDE
-.opencode/
+.opencode/*
+!.opencode/weave-opencode.json
 .weave/
 .vscode/
 .idea/
