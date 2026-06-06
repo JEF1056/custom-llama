@@ -29,6 +29,7 @@ from src.tools.pptx_create import pptx_create_handler
 from src.tools.pptx_edit import pptx_edit_handler
 from src.tools.pptx_read import pptx_read_handler
 from src.tools.pptx_slide_image import pptx_slide_image_handler
+from src.tools.advisor import advisor_handler
 from src.tools.search import search_handler
 from src.tools.time_now import time_now_handler
 from src.tools.xlsx_create import xlsx_create_handler
@@ -134,17 +135,26 @@ def create_server() -> FastMCP:
         stateless_http=True,
         instructions=(
             "Web search, browser automation, HTTP, code execution, files, math, time, "
-            "and Office document tools.\n\n"
+            "Office documents, and an advisor model for expert reasoning.\n\n"
             "Use when: agent needs live web data, URL fetching, API calls, Python computation, "
-            "file I/O, math, timezone conversion, or spreadsheet/presentation generation.\n\n"
+            "file I/O, math, timezone conversion, spreadsheet/presentation generation, "
+            "or expert reasoning from the local LLM.\n\n"
+            "ADVISOR TOOL — USE FREQUENTLY: The advisor tool calls the local LLM (qwen3.6-27b) "
+            "for expert reasoning. Call it liberally — whenever you're stuck, need a second "
+            "opinion, facing a complex multi-step problem, or unsure about your approach. "
+            "Pass detailed context and a clear question. This is your most important tool "
+            "for reasoning. Use it at the start of complex tasks and whenever you hit a dead end.\n\n"
+            "For complex reasoning tasks, use the advisor tool to call the local LLM (qwen3.6-27b) "
+            "for expert analysis. Pass context and question clearly.\n\n"
             "Prefer browser_* for JS-heavy pages; http_request for REST APIs.\n\n"
             "Documents (xlsx/pptx): build iteratively — create minimal → read to verify → "
             "edit incrementally. Use pptx_slide_image to visually verify slides.\n\n"
             "Common chains:\n"
-            "- search/fetch → code_run → create_file/xlsx_create\n"
-            "- http_request → code_run → xlsx_create → xlsx_read\n"
+            "- advisor(context, question) → search/fetch → code_run → create_file/xlsx_create\n"
+            "- advisor(context, question) → http_request → code_run → xlsx_create → xlsx_read\n"
             "- pptx_create → pptx_edit → pptx_slide_image\n"
-            "- calculator (symbolic) or code_run (numeric) for math"
+            "- calculator (symbolic) or code_run (numeric) for math\n"
+            "- advisor(context, question) for expert reasoning at any point"
         ),
     )
     return server
@@ -156,6 +166,7 @@ def register_tools(server: FastMCP) -> None:
     Args:
         server: The MCP server instance.
     """
+    advisor_handler(server)
     search_handler(server)
     fetch_handler(server)
     deep_search_handler(server)

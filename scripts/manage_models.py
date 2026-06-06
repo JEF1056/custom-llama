@@ -121,11 +121,11 @@ MODELS = {
         "mmproj": "mmproj.gguf",
     },
     "qwopus3.6-27b": {
-        "hf_repo": "Jackrong/Qwopus3.6-27B-v1-preview-GGUF",
-        "fp16_repo": "Jackrong/Qwopus3.6-27B-v1-preview",
+        "hf_repo": "Jackrong/Qwopus3.6-27B-v2-GGUF",
+        "fp16_repo": "Jackrong/Qwopus3.6-27B-v2",
         "description": "Qwopus 3.6 27B-v1-preview (~14GB)",
         "size_gb": 14,
-        "mmproj": "mmproj.gguf",
+        "mmproj": "mmproj-f32.gguf",
     },
     "minimax-m2.7": {
         "hf_repo": "unsloth/MiniMax-M2.7-GGUF",

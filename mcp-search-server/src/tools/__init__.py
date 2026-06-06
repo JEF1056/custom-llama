@@ -1,4 +1,5 @@
 # Tools module - MCP tool definitions
+from src.tools.advisor import advisor_handler
 from src.tools.browser import browser_handler
 from src.tools.calculator import calculator_handler
 from src.tools.code_run import code_run_handler

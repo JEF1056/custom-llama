@@ -12,6 +12,21 @@ An advanced MCP (Model Context Protocol) server for semantic web search with bro
 
 ## MCP Tools
 
+### `advisor`
+Ask the local LLM for expert reasoning on complex problems. Use this tool whenever
+you need deeper analysis, when you're stuck on a reasoning task, or when you need
+a second opinion on a plan.
+
+**Parameters:**
+- `context` (string): The problem context or background information (as much detail as needed).
+- `question` (string): The specific question or task to ask the advisor.
+- `model` (string, optional): The model to use (overrides config default).
+
+**Returns:** JSON with status, model name, and the advisor's analysis.
+
+> **When to use:** Whenever you're unsure about an approach, need to reason through
+> a multi-step plan, or hit a dead end. Call it early and often.
+
 ### `search`
 Search the web for information using the configured search engine.
 
@@ -176,52 +191,39 @@ The MCP search server should be called in the following scenarios:
 
 2. **The user specifies URLs that need to be fetched**: When the user provides specific URLs and asks the agent to retrieve or analyze content from those pages, the agent should use the fetch tool or browser automation tools to access the content.
 
-### Search Tools vs. Browser Automation Tools
+3. **Complex reasoning tasks**: When faced with multi-step planning, debugging, or analysis, call the `advisor` tool to get expert reasoning from the local LLM before proceeding.
 
-The MCP server provides two categories of tools that work together:
+### Tool Categories
 
 | Category | Tools | Purpose |
 |----------|-------|---------|
-| **Search Tools** | `search`, `fetch`, `deep_search` | Quick information retrieval via HTTP requests and content extraction. Best for pages that don't require JavaScript rendering. |
-| **Browser Automation Tools** | `browser_navigate`, `browser_screenshot`, `browser_click`, `browser_fill`, `browser_evaluate`, `browser_get_text`, `browser_get_content`, `browser_monitor`, `browser_close`, `browser_list_sessions` | Full browser interaction for JavaScript-heavy pages that can't be scraped with simple HTTP requests. |
+| **Expert Reasoning** | `advisor` | Call this whenever you're stuck, need a second opinion, or face a complex reasoning task. Use it liberally. |
+| **Search Tools** | `search`, `fetch`, `deep_search` | Quick information retrieval via HTTP requests and content extraction. |
+| **Browser Automation** | `browser_navigate`, `browser_screenshot`, `browser_click`, `browser_fill`, `browser_evaluate`, `browser_get_text`, `browser_get_content`, `browser_monitor`, `browser_close`, `browser_list_sessions` | Full browser interaction for JavaScript-heavy pages. |
+| **Data / Files** | `code_run`, `calculator`, `xlsx_create`, `xlsx_read`, `xlsx_edit`, `pptx_create`, `pptx_edit`, `pptx_read`, `pptx_slide_image`, `create_file`, `file_operations`, `http_request`, `time_now` | Computation, file I/O, spreadsheet/presentation generation, HTTP calls, time zones. |
 
-**When to use search tools:**
-- Quick web searches for information
-- Fetching simple web pages (HTML without heavy JavaScript)
-- Extracting structured content from pages that render server-side
-
-**When to use browser automation tools:**
-- Interacting with JavaScript-heavy pages (SPAs, dynamic content)
-- Filling forms and clicking buttons
-- Taking screenshots for visual verification
-- Executing JavaScript on pages
-- Monitoring page changes over time
-
-### Workflow: Search + Browser Automation Together
-
-The search tools and browser automation tools are designed to work together in a complementary workflow:
+### Workflow: Search + Reasoning + Browser
 
 ```
-1. Initial Information Gathering
-   └── Use search tools (search, fetch, deep_search) for quick results
-       ├── search: Find relevant pages via web search
-       ├── fetch: Extract content from specific URLs
-       └── deep_search: Get search results with extracted content
+1. Understand the problem
+   └── If complex or multi-step: call advisor(context, question) first
 
-2. Deep Dive into Specific Pages
-   └── If search results indicate a page needs deeper interaction:
-       ├── browser_navigate: Navigate to the URL
-       ├── browser_screenshot: Verify the page loaded correctly
-       ├── browser_get_content: Extract text content
-       ├── browser_click: Click links/buttons to navigate
-       ├── browser_fill: Fill forms (search boxes, login forms, etc.)
-       ├── browser_evaluate: Execute JavaScript for custom data extraction
-       └── browser_get_text: Get specific element text
+2. Gather information
+   ├── search/query: Find relevant pages
+   ├── fetch: Extract content from specific URLs
+   └── deep_search: Get results with extracted content
 
-3. Iterative Exploration
-   └── Repeat step 2 as needed for different pages
-       ├── Use browser_monitor for pages that change over time
-       └── Use browser_close when done with a session
+3. Reason and plan
+   └── Call advisor() to validate approach or get guidance
+
+4. Execute
+   ├── Browser tools for JS-heavy pages
+   ├── code_run for computation
+   ├── file operations for output
+   └── http_request for API calls
+
+5. Verify and iterate
+   └── Use advisor() again if results seem off or you need a different approach
 ```
 
 ### Example Scenarios
@@ -468,12 +470,14 @@ mcp-search-server/
 │   │   └── content.py      # Content extraction
 │   └── tools/
 │       ├── __init__.py
+│       ├── advisor.py      # Expert reasoning via local LLM
 │       ├── browser.py      # Browser automation tools
 │       ├── search.py       # Search tool
 │       ├── fetch.py        # Fetch tool
 │       └── deep_search.py  # Deep search tool
 └── tests/
     ├── __init__.py
+    ├── test_advisor.py     # Advisor tool tests
     └── test_server.py
 ```
 

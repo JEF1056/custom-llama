@@ -819,5 +819,17 @@ class BrowserManager:
         os.makedirs(value, exist_ok=True)
 
 
-# Global browser manager instance
-browser_manager = BrowserManager()
+# Lazy singleton — created on first access to avoid side effects at import time
+_browser_manager: BrowserManager | None = None
+
+
+def get_browser_manager() -> BrowserManager:
+    """Get (or create) the global browser manager instance."""
+    global _browser_manager
+    if _browser_manager is None:
+        _browser_manager = BrowserManager()
+    return _browser_manager
+
+
+# Backwards compat alias — deprecated, use get_browser_manager()
+browser_manager = get_browser_manager()

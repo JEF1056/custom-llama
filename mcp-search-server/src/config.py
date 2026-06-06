@@ -50,6 +50,24 @@ class Settings(BaseSettings):
     REDIS_PORT: int = Field(default=6379, description="Redis port")
     REDIS_PASSWORD: str = Field(default="", description="Redis password")
 
+    # Advisor (local LLM) settings
+    ADVISOR_BASE_URL: str = Field(
+        default="http://localhost:8080/v1",
+        description="Base URL for the local LLM server (OpenAI-compatible API)",
+    )
+    ADVISOR_MODEL: str = Field(
+        default="qwen3.6-27b",
+        description="Default model to use for the advisor tool",
+    )
+    ADVISOR_API_KEY: str = Field(
+        default="",
+        description="API key for the local LLM server (leave empty if no auth required)",
+    )
+    ADVISOR_MAX_TOKENS: int = Field(
+        default=8192,
+        description="Maximum tokens for advisor responses",
+    )
+
     @property
     def redis_url(self) -> str | None:
         """Get Redis URL if configured."""

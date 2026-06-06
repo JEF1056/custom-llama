@@ -9,7 +9,7 @@ import os
 from mcp.server import FastMCP
 from mcp.types import ImageContent, TextContent
 
-from src.browser.automation import browser_manager
+from src.browser.automation import get_browser_manager as _get_browser_manager
 from src.config import settings
 
 logger = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 def _get_page_for_session(session_id: str):
     """Get the last page from a session, or None if the session has no pages."""
-    session = browser_manager._sessions.get(session_id)
+    session = _get_browser_manager()._sessions.get(session_id)
     if session and session.pages:
         return session.pages[-1]
     return None
@@ -27,10 +27,10 @@ async def _ensure_page(session_id: str):
     """Get existing page from session or create a new one and store it."""
     page = _get_page_for_session(session_id)
     if page is not None:
-        browser_manager._touch_session(session_id)
+        _get_browser_manager()._touch_session(session_id)
         return page
     # Create a new page in the session's context
-    session = browser_manager._sessions.get(session_id)
+    session = _get_browser_manager()._sessions.get(session_id)
     if not session:
         raise RuntimeError(f"Session {session_id} not found. Create one with browser_create_session first.")
     page = await session.context.new_page()
@@ -41,7 +41,7 @@ async def _ensure_page(session_id: str):
 async def _interactables_summary(page) -> str:
     """Extract and format a summary of interactable elements on the page."""
     try:
-        elements = await browser_manager.get_interactables(page)
+        elements = await _get_browser_manager().get_interactables(page)
         visible = [e for e in elements if e.get("visible")]
         if not visible:
             return ""
@@ -78,10 +78,10 @@ def browser_handler(server: FastMCP) -> None:
         For one-off actions, use browser_screenshot(url=...) directly.
         """
         try:
-            if not browser_manager.is_running:
-                await browser_manager.start()
+            if not _get_browser_manager().is_running:
+                await _get_browser_manager().start()
 
-            session_id = await browser_manager.create_session()
+            session_id = await _get_browser_manager().create_session()
             result = {
                 "status": "success",
                 "session_id": session_id,
@@ -107,8 +107,8 @@ def browser_handler(server: FastMCP) -> None:
         """
         try:
             # Start browser if not running
-            if not browser_manager.is_running:
-                await browser_manager.start()
+            if not _get_browser_manager().is_running:
+                await _get_browser_manager().start()
 
             if session_id:
                 # Use session-based page tracking
@@ -120,7 +120,7 @@ def browser_handler(server: FastMCP) -> None:
                 )
             else:
                 # One-off navigation — create page, navigate, close
-                context = await browser_manager.get_session(None)
+                context = await _get_browser_manager().get_session(None)
                 if not context:
                     raise RuntimeError("Browser not running")
                 page = await context.new_page()
@@ -165,8 +165,8 @@ def browser_handler(server: FastMCP) -> None:
         """
         try:
             # Start browser if not running
-            if not browser_manager.is_running:
-                await browser_manager.start()
+            if not _get_browser_manager().is_running:
+                await _get_browser_manager().start()
 
             if session_id:
                 # Use session-based page tracking
@@ -179,7 +179,7 @@ def browser_handler(server: FastMCP) -> None:
                     )
             else:
                 # One-off screenshot
-                context = await browser_manager.get_session(None)
+                context = await _get_browser_manager().get_session(None)
                 if not context:
                     raise RuntimeError("Browser not running")
                 page = await context.new_page()
@@ -191,7 +191,7 @@ def browser_handler(server: FastMCP) -> None:
                     )
 
             # Take screenshot - returns (bytes, file_path)
-            screenshot_bytes, screenshot_path = await browser_manager.screenshot(
+            screenshot_bytes, screenshot_path = await _get_browser_manager().screenshot(
                 page,
                 full_page=full_page,
                 session_id=session_id,
@@ -249,8 +249,8 @@ def browser_handler(server: FastMCP) -> None:
         """
         try:
             # Start browser if not running
-            if not browser_manager.is_running:
-                await browser_manager.start()
+            if not _get_browser_manager().is_running:
+                await _get_browser_manager().start()
 
             if session_id:
                 page = await _ensure_page(session_id)
@@ -261,7 +261,7 @@ def browser_handler(server: FastMCP) -> None:
                         wait_until="domcontentloaded",
                     )
             else:
-                context = await browser_manager.get_session(None)
+                context = await _get_browser_manager().get_session(None)
                 if not context:
                     return json.dumps({"status": "error", "error": "Browser not running"})
                 page = await context.new_page()
@@ -273,7 +273,7 @@ def browser_handler(server: FastMCP) -> None:
                     )
 
             # Click the element
-            await browser_manager.click(page, selector)
+            await _get_browser_manager().click(page, selector)
 
             # Wait for navigation if specified
             if wait_until:
@@ -312,8 +312,8 @@ def browser_handler(server: FastMCP) -> None:
         """
         try:
             # Start browser if not running
-            if not browser_manager.is_running:
-                await browser_manager.start()
+            if not _get_browser_manager().is_running:
+                await _get_browser_manager().start()
 
             if session_id:
                 page = await _ensure_page(session_id)
@@ -324,7 +324,7 @@ def browser_handler(server: FastMCP) -> None:
                         wait_until="domcontentloaded",
                     )
             else:
-                context = await browser_manager.get_session(None)
+                context = await _get_browser_manager().get_session(None)
                 if not context:
                     return json.dumps({"status": "error", "error": "Browser not running"})
                 page = await context.new_page()
@@ -336,7 +336,7 @@ def browser_handler(server: FastMCP) -> None:
                     )
 
             # Fill the input
-            await browser_manager.fill(page, selector, value)
+            await _get_browser_manager().fill(page, selector, value)
 
             # Extract interactable elements for the LLM
             summary = await _interactables_summary(page)
@@ -369,8 +369,8 @@ def browser_handler(server: FastMCP) -> None:
         """
         try:
             # Start browser if not running
-            if not browser_manager.is_running:
-                await browser_manager.start()
+            if not _get_browser_manager().is_running:
+                await _get_browser_manager().start()
 
             if session_id:
                 page = await _ensure_page(session_id)
@@ -381,7 +381,7 @@ def browser_handler(server: FastMCP) -> None:
                         wait_until="domcontentloaded",
                     )
             else:
-                context = await browser_manager.get_session(None)
+                context = await _get_browser_manager().get_session(None)
                 if not context:
                     return json.dumps({"status": "error", "error": "Browser not running"})
                 page = await context.new_page()
@@ -393,7 +393,7 @@ def browser_handler(server: FastMCP) -> None:
                     )
 
             # Execute JavaScript
-            result = await browser_manager.evaluate(page, script)
+            result = await _get_browser_manager().evaluate(page, script)
 
             # Clean up page only for one-off
             if not session_id:
@@ -420,8 +420,8 @@ def browser_handler(server: FastMCP) -> None:
         """
         try:
             # Start browser if not running
-            if not browser_manager.is_running:
-                await browser_manager.start()
+            if not _get_browser_manager().is_running:
+                await _get_browser_manager().start()
 
             if session_id:
                 page = await _ensure_page(session_id)
@@ -432,7 +432,7 @@ def browser_handler(server: FastMCP) -> None:
                         wait_until="domcontentloaded",
                     )
             else:
-                context = await browser_manager.get_session(None)
+                context = await _get_browser_manager().get_session(None)
                 if not context:
                     return json.dumps({"status": "error", "error": "Browser not running"})
                 page = await context.new_page()
@@ -444,7 +444,7 @@ def browser_handler(server: FastMCP) -> None:
                     )
 
             # Get text
-            text = await browser_manager.get_text(page, selector)
+            text = await _get_browser_manager().get_text(page, selector)
 
             # Clean up page only for one-off
             if not session_id:
@@ -472,8 +472,8 @@ def browser_handler(server: FastMCP) -> None:
         """
         try:
             # Start browser if not running
-            if not browser_manager.is_running:
-                await browser_manager.start()
+            if not _get_browser_manager().is_running:
+                await _get_browser_manager().start()
 
             if session_id:
                 page = await _ensure_page(session_id)
@@ -484,7 +484,7 @@ def browser_handler(server: FastMCP) -> None:
                         wait_until="domcontentloaded",
                     )
             else:
-                context = await browser_manager.get_session(None)
+                context = await _get_browser_manager().get_session(None)
                 if not context:
                     return json.dumps({"status": "error", "error": "Browser not running"})
                 page = await context.new_page()
@@ -496,7 +496,7 @@ def browser_handler(server: FastMCP) -> None:
                     )
 
             # Get interactable elements
-            elements = await browser_manager.get_interactables(page)
+            elements = await _get_browser_manager().get_interactables(page)
 
             # Clean up page only for one-off
             if not session_id:
@@ -564,8 +564,8 @@ def browser_handler(server: FastMCP) -> None:
         """
         try:
             # Start browser if not running
-            if not browser_manager.is_running:
-                await browser_manager.start()
+            if not _get_browser_manager().is_running:
+                await _get_browser_manager().start()
 
             if session_id:
                 page = await _ensure_page(session_id)
@@ -576,7 +576,7 @@ def browser_handler(server: FastMCP) -> None:
                         wait_until="domcontentloaded",
                     )
             else:
-                context = await browser_manager.get_session(None)
+                context = await _get_browser_manager().get_session(None)
                 if not context:
                     return json.dumps({"status": "error", "error": "Browser not running"})
                 page = await context.new_page()
@@ -588,7 +588,7 @@ def browser_handler(server: FastMCP) -> None:
                     )
 
             # Get content
-            content = await browser_manager.get_content(page)
+            content = await _get_browser_manager().get_content(page)
 
             # Clean up page only for one-off
             if not session_id:
@@ -619,11 +619,11 @@ def browser_handler(server: FastMCP) -> None:
         """
         try:
             # Start browser if not running
-            if not browser_manager.is_running:
-                await browser_manager.start()
+            if not _get_browser_manager().is_running:
+                await _get_browser_manager().start()
 
             # Use provided path or default screenshot directory
-            output_dir = path or browser_manager.screenshot_dir
+            output_dir = path or _get_browser_manager().screenshot_dir
             os.makedirs(output_dir, exist_ok=True)
 
             # Calculate number of screenshots
@@ -632,7 +632,7 @@ def browser_handler(server: FastMCP) -> None:
             if session_id:
                 page = await _ensure_page(session_id)
             else:
-                context = await browser_manager.get_session(None)
+                context = await _get_browser_manager().get_session(None)
                 if not context:
                     return json.dumps({"status": "error", "error": "Browser not running"})
                 page = await context.new_page()
@@ -682,7 +682,7 @@ def browser_handler(server: FastMCP) -> None:
     ) -> str:
         """Close a browser session. session_id=None closes the default context."""
         try:
-            success = await browser_manager.close_session(session_id)
+            success = await _get_browser_manager().close_session(session_id)
             if success:
                 result = {
                     "status": "success",
@@ -702,7 +702,7 @@ def browser_handler(server: FastMCP) -> None:
     async def browser_list_sessions() -> str:
         """List active browser sessions."""
         try:
-            sessions = browser_manager.active_sessions
+            sessions = _get_browser_manager().active_sessions
             result = {
                 "status": "success",
                 "sessions": sessions,
