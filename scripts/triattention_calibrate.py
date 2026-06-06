@@ -197,15 +197,34 @@ def calibrate(
     dtype = torch.bfloat16
 
     # --- Load model ---
-    print(f"Loading {model_name} ...", file=sys.stderr)
+    # Use device_map="auto" for multi-GPU / CPU-offload fallback.
+    # For a single explicit device (e.g. "cpu") pass it directly so the model
+    # isn't split across devices unnecessarily.
+    cuda_available = torch.cuda.is_available()
+    if device == "cuda" and not cuda_available:
+        print("  WARNING: --device cuda requested but no CUDA device found; falling back to cpu.",
+              file=sys.stderr)
+        device = "cpu"
+
+    if device == "cpu":
+        device_map = None
+        load_dtype = torch.float32  # bf16 is emulated on CPU — use float32
+    else:
+        device_map = "auto"
+        load_dtype = dtype
+
+    print(f"Loading {model_name} ... (device={device}, dtype={load_dtype})", file=sys.stderr)
     config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
-        model_name, dtype=dtype,
+        model_name,
+        torch_dtype=load_dtype,
         attn_implementation="sdpa",
         trust_remote_code=True,
-        device_map="auto",
+        device_map=device_map,
     )
+    if device_map is None:
+        model = model.to(device)
     model.eval()
 
     # --- Extract config (handle nested/multimodal) ---
