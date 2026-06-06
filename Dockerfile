@@ -139,8 +139,9 @@ ENTRYPOINT ["/entrypoint.sh"]
 #   # Convert safetensors → fp16 GGUF → quant (no pre-built GGUF exists):
 #   docker compose run --rm llama-convert convert-st qwen3.6-35b-a3b --quant TQ2_0
 #
-# CPU-only torch keeps the image ~3 GB lighter than CUDA torch.
-# Conversion is memory-bound, not compute-bound — CPU is fine.
+# CUDA torch for GPU-accelerated TriAttention calibration (forward pass).
+# Quantization (llama-quantize) remains CPU-bound but benefits from the real
+# libcuda.so.1 injected at runtime rather than the build-time stub.
 # =============================================================================
 FROM base AS convert
 
@@ -149,9 +150,10 @@ FROM base AS convert
 # GPU access, so the injection never happens and the binary fails to start.
 # Copying the build-time stub satisfies the dynamic linker; quantization itself
 # is purely CPU-bound so nothing ever calls into the real driver.
-COPY --link --from=builder /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so
-RUN ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
-ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH}
+# libcuda.so.1 is injected at runtime by the NVIDIA container runtime when GPU
+# access is granted.  We no longer need the build-time stub here — keeping the
+# stubs dir on LD_LIBRARY_PATH would shadow the real driver and cause
+# torch.cuda.is_available() to return False even with gpus: all in compose.
 
 # Model management tools not present in the runtime image
 COPY --link --from=builder /llama.cpp/build/bin/llama-quantize /usr/local/bin/llama-quantize
@@ -172,7 +174,7 @@ COPY --link --from=builder /llama.cpp/gguf-py/ /scripts/gguf-py/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
   uv pip install --system --break-system-packages \
-  torch --index-url https://download.pytorch.org/whl/cpu
+  torch --index-url https://download.pytorch.org/whl/cu128
 
 RUN --mount=type=cache,target=/root/.cache/uv \
   uv pip install --system --break-system-packages \

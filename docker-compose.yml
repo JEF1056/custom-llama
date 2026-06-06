@@ -65,7 +65,10 @@ services:
       # Set to empty string to skip calibration entirely.
       TRIATTENTION_INPUT: ${TRIATTENTION_INPUT:-/calibration-data/wikitext-2-raw-test.txt}
 
-    # No GPU needed — conversion and quantization run on CPU.
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+
+    gpus: all
 
   # ---------------------------------------------------------------------------
   # llama.cpp inference server (TurboQuant fork)
