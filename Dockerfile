@@ -179,8 +179,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
   huggingface_hub hf_transfer transformers safetensors \
   sentencepiece accelerate /scripts/gguf-py/
 
-# Copied after pip install so that edits to this script don't bust the pip cache.
+# Copied after pip install so that edits to these scripts don't bust the pip cache.
 COPY scripts/manage_models.py /scripts/manage_models.py
+COPY scripts/triattention_calibrate.py /scripts/triattention_calibrate.py
+COPY scripts/triattention_common.py /scripts/triattention_common.py
 
 # Enable hf_transfer: Rust-based parallel downloader that ships with
 # huggingface_hub.  Provides multi-connection HTTP range downloads for
