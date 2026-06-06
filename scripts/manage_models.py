@@ -1070,11 +1070,16 @@ def convert_safetensors(
     if mtp_label:
         print(mtp_label)
 
+    # st_dir is computed early so early-exit paths can reuse local safetensors
+    # if they happen to still be on disk (e.g. from a previous partial run).
+    st_dir = output_path / f".{model_name}-safetensors"
+
     if canonical.exists():
         size_str = _fmt_bytes(canonical.stat().st_size)
         print(f"\n  ✓ Already on disk: {canonical.name} ({size_str}) — skipping.")
         _maybe_download_mmproj(model_info, output_path, model_name)
-        _run_calibration(model_name, model_info, output_dir, calib_input)
+        _run_calibration(model_name, model_info, output_dir, calib_input,
+                         model_path=str(st_dir) if st_dir.exists() else None)
         return
 
     # ------------------------------------------------------------------ #
@@ -1104,7 +1109,8 @@ def convert_safetensors(
                 shutil.move(str(downloaded), str(canonical))
             _done(canonical)
             _maybe_download_mmproj(model_info, output_path, model_name)
-            _run_calibration(model_name, model_info, output_dir, calib_input)
+            _run_calibration(model_name, model_info, output_dir, calib_input,
+                             model_path=str(st_dir) if st_dir.exists() else None)
             return
         print(f"  No pre-built {quant} found — falling back to safetensors conversion.")
     elif mtp:
@@ -1118,8 +1124,9 @@ def convert_safetensors(
     fp16_stem = f"{model_name}-fp16-mtp" if mtp else f"{model_name}-fp16"
     fp16_gguf = output_path / f"{fp16_stem}.gguf"
 
-    # Track the best local model path for calibration (safetensors dir > HF repo).
-    _calib_model_path: str | None = None
+    # Prefer local st_dir for calibration if it exists (e.g. partial prior run).
+    # Falls back to fp16_repo (HF download) if not present.
+    _calib_model_path: str | None = str(st_dir) if st_dir.exists() else None
 
     if fp16_gguf.exists():
         fp16_size = _fmt_bytes(fp16_gguf.stat().st_size)
@@ -1137,7 +1144,6 @@ def convert_safetensors(
             sys.exit(1)
 
         hf_token = os.environ.get("HF_TOKEN") or None
-        st_dir = output_path / f".{model_name}-safetensors"
 
         # max_workers=1 serializes shard downloads to avoid the simultaneous disk-
         # write pressure that causes WSL2's vmmem to balloon on Windows.
