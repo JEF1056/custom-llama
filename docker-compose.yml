@@ -107,11 +107,7 @@ services:
 
       # --- CUDA tuning (env vars read directly by ggml-cuda) ---
       GGML_CUDA_GRAPH_OPT: ${GGML_CUDA_GRAPH_OPT:-1}
-      CUDA_SCALE_LAUNCH_QUEUES: ${CUDA_SCALE_LAUNCH_QUEUES:-4x}
-      # Disable CUDA VMM pooling — prevents cuMemSetAccess "device not ready" crashes
-      # during large flash-attention prefill passes (13K+ tokens). Falls back to
-      # cudaMalloc which is safe under concurrent GPU load.
-      GGML_CUDA_NO_VMM: ${GGML_CUDA_NO_VMM:-1}
+      CUDA_SCALE_LAUNCH_QUEUES: ${CUDA_SCALE_LAUNCH_QUEUES:-2x}
 
       # All other configuration (ctx, KV cache, sampling, speculative decoding,
       # DRY, reasoning budget, etc.) lives in scripts/models.ini.
