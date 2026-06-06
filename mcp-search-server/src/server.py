@@ -80,6 +80,10 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         if not settings.MCP_API_KEY:
             return await call_next(request)
 
+        # Skip CORS preflight requests — browsers don't send auth headers on OPTIONS
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         path = request.scope["path"]
 
         # Public endpoints — no auth
@@ -432,13 +436,14 @@ def create_app(server: FastMCP) -> Starlette:
         lifespan=lifespan,
     )
     _cors_origins = [o.strip() for o in os.environ.get("MCP_CORS_ORIGINS", "*").split(",") if o.strip()]
+    # Auth first (inner), then CORS (outer) so CORS headers appear on all responses
+    app.add_middleware(ApiKeyAuthMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.add_middleware(ApiKeyAuthMiddleware)
     return app
 
 
