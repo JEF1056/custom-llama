@@ -240,22 +240,36 @@ def _is_ud_quant(quant: str) -> bool:
 
 
 def _fetch_repo_files(repo_id: str) -> list:
-    """Return the list of file entries from the HuggingFace /tree/main API."""
+    """Return the list of file entries from the HuggingFace /tree/main API.
+
+    Tries huggingface_hub first (available in the convert image), then falls
+    back to urllib so curl is never required.
+    """
+    # Preferred: huggingface_hub (always installed in the convert image)
+    try:
+        from huggingface_hub import HfApi
+        hf_token = os.environ.get("HF_TOKEN") or None
+        api = HfApi()
+        items = api.list_repo_tree(repo_id=repo_id, token=hf_token, recursive=False)
+        return [
+            {"type": item.type if hasattr(item, "type") else ("file" if hasattr(item, "size") else "directory"),
+             "path": item.path,
+             "size": getattr(item, "size", 0)}
+            for item in items
+        ]
+    except Exception:
+        pass
+
+    # Fallback: urllib (stdlib, no curl needed)
     api_url = f"https://huggingface.co/api/models/{repo_id}/tree/main"
     try:
-        result = subprocess.run(
-            ["curl", "-s", api_url],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode != 0:
-            print(f"Warning: Failed to fetch file list from HuggingFace for {repo_id}")
-            return []
-        return json.loads(result.stdout)
-    except subprocess.TimeoutExpired:
-        print(f"Warning: Timeout fetching file list from HuggingFace for {repo_id}")
-        return []
+        import urllib.request
+        hf_token = os.environ.get("HF_TOKEN") or None
+        req = urllib.request.Request(api_url)
+        if hf_token:
+            req.add_header("Authorization", f"Bearer {hf_token}")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode())
     except Exception as e:
         print(f"Warning: Error fetching file list from HuggingFace for {repo_id}: {e}")
         return []
@@ -398,10 +412,11 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
     Uses the Python API (not the CLI) so that progress bars display correctly
     even in non-TTY environments such as Docker detached mode.
 
-    When CONVERT_DOWNLOAD_RATE is set (e.g. "300M"), routes through curl with
-    --limit-rate instead.  Throttling write throughput reduces the disk-write
-    interrupt storm that causes WSL2's vmmem to balloon and can trigger a
-    CLOCK_WATCHDOG_TIMEOUT BSOD on Windows before quantization even starts.
+    When CONVERT_DOWNLOAD_RATE is set (e.g. "300M"), routes through aria2c
+    with --max-download-limit instead.  Throttling write throughput reduces
+    the disk-write interrupt storm that causes WSL2's vmmem to balloon and
+    can trigger a CLOCK_WATCHDOG_TIMEOUT BSOD on Windows before quantization
+    even starts.
 
     When hf_transfer is installed (pip install hf-transfer) and
     HF_HUB_ENABLE_HF_TRANSFER=1 is set, huggingface_hub routes all downloads
@@ -409,8 +424,8 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
     On WSL2, hf_transfer is NOT auto-enabled because its burst writes
     overwhelm WSL2's vmmem and can crash the guest on large files.
 
-    Falls back to aria2c (16 connections on Linux/macOS, 4 on WSL2) or curl
-    when huggingface_hub is not available.
+    Falls back to aria2c (16 connections on Linux/macOS, 4 on WSL2) or
+    urllib (stdlib) when huggingface_hub is not available. curl is not used.
 
     Returns:
         Path to the downloaded file (always a flat path inside local_dir).
@@ -435,7 +450,7 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
         print("                (hf_transfer suppressed; aria2c capped at 4 connections)")
         print("                Set CONVERT_DOWNLOAD_RATE (e.g. 300M) to throttle further if crashes persist.")
 
-    # When CONVERT_DOWNLOAD_RATE is set, use curl with --limit-rate to cap
+    # When CONVERT_DOWNLOAD_RATE is set, use aria2c with --max-download-limit to cap
     # write throughput and prevent WSL2 memory balloon / BSOD on Windows.
     download_rate = os.environ.get("CONVERT_DOWNLOAD_RATE", "").strip()
     if download_rate:
@@ -448,7 +463,7 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
         import huggingface_hub as _hfh
         _hf_hub_download = _hfh.hf_hub_download
     except (ImportError, AttributeError):
-        print("  huggingface_hub not available — using aria2c/curl fallback.")
+        print("  huggingface_hub not available — using aria2c/urllib fallback.")
         return _curl_download_file(repo_id, filename, dest, on_wsl2=on_wsl2)
 
     # enable_progress_bars: present since 0.14.0; silently skip if absent.
@@ -495,21 +510,21 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> Path:
 def _curl_download_file(
     repo_id: str, filename: str, dest: Path, limit_rate: str = "", on_wsl2: bool | None = None
 ) -> Path:
-    """Download a file from HuggingFace.
+    """Download a file from HuggingFace without requiring curl.
 
-    When *limit_rate* is empty and aria2c is available, downloads via
-    aria2c.  On WSL2, uses 4 parallel connections to avoid the burst
-    disk-write pressure that causes vmmem to balloon.  On bare-metal Linux
-    or macOS, uses 16 connections to saturate the link.
+    Tries aria2c first (multi-connection, supports --max-download-limit for
+    rate-capping).  Falls back to urllib (stdlib) when aria2c is absent.
 
-    When *limit_rate* is set (WSL2 BSOD throttle path), or when aria2c is
-    absent, falls back to curl.  curl's --limit-rate caps write throughput
-    which prevents the WSL2 vmmem balloon that causes CLOCK_WATCHDOG_TIMEOUT
-    BSODs on Windows during large file downloads.
+    On WSL2, uses 4 parallel connections to avoid the burst disk-write
+    pressure that causes vmmem to balloon.  On bare-metal Linux or macOS,
+    uses 16 connections to saturate the link.
+
+    When *limit_rate* is set (e.g. "300M") aria2c's --max-download-limit is
+    used.  The urllib fallback ignores rate limits (no stdlib mechanism).
 
     Args:
-        limit_rate: Optional curl --limit-rate value (e.g. "300M").  When
-            empty, aria2c is tried first.
+        limit_rate: Optional rate cap value (e.g. "300M").  Passed to aria2c
+            as --max-download-limit.  When empty, no cap is applied.
         on_wsl2: Pre-computed result of _is_wsl2(); detected automatically
             when None.
     """
@@ -518,15 +533,18 @@ def _curl_download_file(
 
     hf_token = os.environ.get("HF_TOKEN", "")
 
-    # ── aria2c path (multi-connection, no rate limit) ─────────────────────
-    if not limit_rate and shutil.which("aria2c"):
+    if on_wsl2 is None:
+        on_wsl2 = _is_wsl2()
+
+    # ── aria2c path ────────────────────────────────────────────────────────
+    if shutil.which("aria2c"):
         # On WSL2 reduce to 4 connections — 16 creates a disk-write burst
         # that balloons vmmem and can crash the WSL2 guest on large files.
-        if on_wsl2 is None:
-            on_wsl2 = _is_wsl2()
         connections = 4 if on_wsl2 else 16
         if on_wsl2:
             print(f"  Using aria2c ({connections} parallel connections — WSL2 conservative mode) ...")
+        else:
+            print(f"  Using aria2c ({connections} parallel connections) ...")
         cmd = [
             "aria2c",
             f"--max-connection-per-server={connections}",
@@ -536,53 +554,56 @@ def _curl_download_file(
             "--dir", str(dest.parent),
             "--out", dest.name,
         ]
+        if limit_rate:
+            cmd += [f"--max-download-limit={limit_rate}"]
         if hf_token:
             cmd += ["--header", f"Authorization: Bearer {hf_token}"]
         cmd.append(download_url)
-        if not on_wsl2:
-            print(f"  Using aria2c ({connections} parallel connections) ...")
         try:
             result = subprocess.run(cmd, capture_output=False, timeout=7200)
             if result.returncode == 0 and dest.exists():
                 size_str = _fmt_bytes(dest.stat().st_size)
                 print(f"\n  Done: {dest.name} ({size_str})")
                 return dest
-            print(f"\nWarning: aria2c failed (exit {result.returncode}), falling back to curl ...")
+            print(f"\nWarning: aria2c failed (exit {result.returncode}), falling back to urllib ...")
         except subprocess.TimeoutExpired:
-            print("\nWarning: aria2c timed out, falling back to curl ...")
+            print("\nWarning: aria2c timed out, falling back to urllib ...")
         except FileNotFoundError:
-            pass  # shutil.which lied somehow; continue to curl
+            pass  # shutil.which lied somehow; fall through to urllib
 
-    # ── curl path (rate-limited or aria2c unavailable) ────────────────────
-    if hf_token:
-        auth_url = f"{download_url}?token={hf_token}"
-    else:
-        auth_url = download_url
+    # ── urllib fallback (stdlib, no external tools required) ──────────────
+    import urllib.request
 
-    # Default curl progress meter shows % done, speed, and time-left (ETA).
-    # -# (hash bar) is intentionally omitted — it hides the ETA column.
-    # -C - resumes an interrupted download using HTTP range requests;
-    # HuggingFace supports range requests so this is always safe to pass.
-    cmd = ["curl", "-L", "-f", "-C", "-", "-o", str(dest)]
     if limit_rate:
-        cmd += ["--limit-rate", limit_rate]
-    cmd.append(auth_url)
+        print(f"  Note: CONVERT_DOWNLOAD_RATE={limit_rate} ignored by urllib fallback (aria2c unavailable).")
 
-    print("  Using curl to download ...")
+    headers = {}
+    if hf_token:
+        headers["Authorization"] = f"Bearer {hf_token}"
+
+    print("  Using urllib to download ...")
     try:
-        result = subprocess.run(cmd, capture_output=False, timeout=7200)
-        if result.returncode != 0:
-            print(f"\nError: curl download failed (exit {result.returncode})")
-            sys.exit(1)
-    except subprocess.TimeoutExpired:
-        print("\nError: curl download timed out after 2 hours")
-        sys.exit(1)
-    except FileNotFoundError:
-        print("Error: curl not found. Please install curl or huggingface_hub.")
+        req = urllib.request.Request(download_url, headers=headers)
+        chunk = 1024 * 1024  # 1 MiB chunks
+        downloaded_bytes = 0
+        with urllib.request.urlopen(req, timeout=7200) as resp, open(dest, "wb") as fh:
+            total = int(resp.headers.get("Content-Length") or 0)
+            while True:
+                data = resp.read(chunk)
+                if not data:
+                    break
+                fh.write(data)
+                downloaded_bytes += len(data)
+                if total:
+                    pct = downloaded_bytes * 100 // total
+                    print(f"\r  {_fmt_bytes(downloaded_bytes)} / {_fmt_bytes(total)} ({pct}%)", end="", flush=True)
+        print()
+    except Exception as e:
+        print(f"\nError: urllib download failed: {e}")
         sys.exit(1)
 
     size_str = _fmt_bytes(dest.stat().st_size) if dest.exists() else "unknown"
-    print(f"\n  Done: {dest.name} ({size_str})")
+    print(f"  Done: {dest.name} ({size_str})")
     return dest
 
 
