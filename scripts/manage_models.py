@@ -849,8 +849,17 @@ def download_model(model_name: str, quant: str, output_dir: str, nthreads: int |
     if canonical.exists():
         size_str = _fmt_bytes(canonical.stat().st_size)
         print(f"\n  ✓ Already on disk: {canonical.name} ({size_str}) — skipping download.")
-        _ensure_mmproj(model_info, output_path, model_name)
-        _run_calibration(model_name, model_info, output_dir, calib_input, calib_dir=calib_dir)
+        mmproj_st_dir = _ensure_mmproj(model_info, output_path, model_name, keep_st_dir=True)
+        try:
+            _run_calibration(
+                model_name, model_info, output_dir, calib_input,
+                model_path=str(mmproj_st_dir) if mmproj_st_dir else None,
+                calib_dir=calib_dir,
+            )
+        finally:
+            if mmproj_st_dir and mmproj_st_dir.exists():
+                print(f"  Removing safetensors: {mmproj_st_dir.name}")
+                shutil.rmtree(mmproj_st_dir, ignore_errors=True)
         return
 
     hf_repo = model_info["hf_repo"]
@@ -877,8 +886,20 @@ def download_model(model_name: str, quant: str, output_dir: str, nthreads: int |
         if downloaded.resolve() != canonical.resolve():
             shutil.move(str(downloaded), str(canonical))
         _done(canonical)
-        _ensure_mmproj(model_info, output_path, model_name)
-        _run_calibration(model_name, model_info, output_dir, calib_input, calib_dir=calib_dir)
+        # keep_st_dir=True: if _ensure_mmproj downloads safetensors for mmproj
+        # generation (APEX path), reuse that dir for calibration instead of
+        # letting it be deleted and re-downloaded by _run_calibration.
+        mmproj_st_dir = _ensure_mmproj(model_info, output_path, model_name, keep_st_dir=True)
+        try:
+            _run_calibration(
+                model_name, model_info, output_dir, calib_input,
+                model_path=str(mmproj_st_dir) if mmproj_st_dir else None,
+                calib_dir=calib_dir,
+            )
+        finally:
+            if mmproj_st_dir and mmproj_st_dir.exists():
+                print(f"  Removing safetensors: {mmproj_st_dir.name}")
+                shutil.rmtree(mmproj_st_dir, ignore_errors=True)
         return
 
     # ------------------------------------------------------------------ #
@@ -998,7 +1019,8 @@ def _ensure_mmproj(
     model_name: str = "",
     st_dir: Path | None = None,
     convert_script: Path | None = None,
-) -> None:
+    keep_st_dir: bool = False,
+) -> Path | None:
     """Download (or locally generate) the multimodal projector file if required.
 
     The output file is always named ``{model_name}-mmproj.gguf`` so the
@@ -1028,6 +1050,13 @@ def _ensure_mmproj(
             before falling back to the download path.
         convert_script: Path to ``convert_hf_to_gguf.py``. Required for local
             generation; if None the local-generation step is skipped.
+        keep_st_dir: When True, skip removing the temporary safetensors dir
+            created in step 3. Returns the dir path so the caller can reuse
+            it (e.g. for triattention calibration) before cleaning up.
+
+    Returns:
+        The temporary safetensors Path if one was created via step 3 and
+        ``keep_st_dir=True``; None in all other cases.
     """
     mmproj_value = model_info.get("mmproj")
     if not mmproj_value:
@@ -1087,6 +1116,7 @@ def _ensure_mmproj(
     # the model's fp16_repo has vision weights.
     # ------------------------------------------------------------------ #
     fp16_repo = model_info.get("fp16_repo")
+    _tmp_st_dir: Path | None = None  # set in step 3 if we download safetensors for mmproj
     if (
         not local_generated
         and fp16_repo
@@ -1161,11 +1191,18 @@ def _ensure_mmproj(
             except Exception as e:
                 print(f"\n  Warning: safetensors download failed ({e}) — falling back to HuggingFace download.")
             finally:
-                print(f"  Removing temporary safetensors: {_tmp_st_dir.name}")
-                shutil.rmtree(_tmp_st_dir, ignore_errors=True)
+                if keep_st_dir and local_generated:
+                    # Caller will reuse this dir (e.g. triattention calibration)
+                    # and is responsible for cleanup.
+                    pass
+                else:
+                    print(f"  Removing temporary safetensors: {_tmp_st_dir.name}")
+                    shutil.rmtree(_tmp_st_dir, ignore_errors=True)
 
     if local_generated:
-        return
+        if keep_st_dir and _tmp_st_dir is not None and _tmp_st_dir.exists():
+            return _tmp_st_dir
+        return None
 
     # ------------------------------------------------------------------ #
     # Fall back: download from HuggingFace
