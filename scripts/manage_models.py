@@ -109,16 +109,19 @@ MODELS = {
         "fp16_repo": "Qwen/Qwen3.6-35B-A3B",
         "description": "Qwen 3.6 35B-A3B APEX mixed-precision MTP (~17GB, default: APEX-MTP-I-Compact)",
         "size_gb": 17,
-        "mmproj": "mmproj.gguf",
         "notes": "APEX MTP quants are pre-built by mudler. Use --quant APEX-MTP-I-Compact (default), "
                  "APEX-MTP-I-Nano, APEX-MTP-I-Mini, APEX-MTP-I-Quality, APEX-MTP-I-Balanced, etc.",
+        # mmproj must be generated from fp16_repo safetensors (mudler repo has none).
+        # _ensure_mmproj will download Qwen/Qwen3.6-35B-A3B, run convert_hf_to_gguf.py
+        # --mmproj --outtype f16, then remove the safetensors dir.
+        "mmproj": True,
     },
     "qwopus3.6-35b": {
         "hf_repo": "Jackrong/Qwopus3.6-35B-A3B-v1-GGUF",
         "fp16_repo": "Jackrong/Qwopus3.6-35B-A3B-v1",
         "description": "Qwopus 3.6 35B-A3B-v1 (~17GB)",
         "size_gb": 17,
-        "mmproj": "mmproj.gguf",
+        "mmproj": "mmproj-F32.gguf",
     },
     "qwopus3.6-27b": {
         "hf_repo": "Jackrong/Qwopus3.6-27B-v2-GGUF",
@@ -1006,11 +1009,17 @@ def _ensure_mmproj(
     2. Local safetensors dir (``st_dir``) + ``convert_hf_to_gguf.py`` available
        → run ``--mmproj --outtype f16`` to build fp16 mmproj locally.
        Falls back to download if the conversion fails (unsupported arch, etc.).
-    3. Download from HuggingFace (original behaviour).
+    3. ``fp16_repo`` set + ``convert_hf_to_gguf.py`` available (no pre-existing
+       ``st_dir``) → download safetensors from ``fp16_repo`` to a temp dir,
+       generate mmproj fp16 locally, then remove the temp dir.
+       Used for download-only models (e.g. APEX) where the GGUF repo has no
+       pre-built mmproj but the base safetensors repo has vision weights.
+    4. Download from HuggingFace (original behaviour).
 
     The ``mmproj`` field in the model entry can be:
-    - A specific filename string → download that exact file (step 3).
-    - ``True`` → auto-detect the mmproj filename by searching the GGUF repo.
+    - A specific filename string → download that exact file (step 4).
+    - ``True`` → auto-detect the mmproj filename by searching the GGUF repo
+      (step 4), after attempting local generation (steps 2–3).
     - Absent / falsy → model has no mmproj, skip.
 
     Args:
@@ -1068,6 +1077,92 @@ def _ensure_mmproj(
         except Exception as e:
             print(f"\n  Warning: mmproj generation error ({e}) — falling back to HuggingFace download.")
             tmp_mmproj.unlink(missing_ok=True)
+
+    if local_generated:
+        return
+
+    # ------------------------------------------------------------------ #
+    # Step 3: download fp16_repo safetensors, generate mmproj, then clean up.
+    # Used when st_dir was not available (e.g. APEX download-only path) but
+    # the model's fp16_repo has vision weights.
+    # ------------------------------------------------------------------ #
+    fp16_repo = model_info.get("fp16_repo")
+    if (
+        not local_generated
+        and fp16_repo
+        and convert_script is None
+    ):
+        # Auto-locate convert_hf_to_gguf.py next to this script (available in
+        # the convert Docker image). Skip silently if not present — the caller
+        # is running outside the convert container.
+        _script_dir = Path(__file__).parent
+        _candidate = _script_dir / "convert_hf_to_gguf.py"
+        if _candidate.exists():
+            convert_script = _candidate
+
+    if (
+        not local_generated
+        and fp16_repo
+        and convert_script is not None
+        and convert_script.exists()
+        and not (st_dir and st_dir.exists())
+    ):
+        _tmp_st_dir = output_path / f".{model_name}-mmproj-safetensors"
+        _section(f"Downloading safetensors for mmproj generation: {fp16_repo}")
+        print(f"  Target : {_tmp_st_dir}")
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError:
+            print("  Warning: huggingface_hub not installed — skipping fp16 mmproj generation.")
+            _tmp_st_dir = None
+
+        if _tmp_st_dir is not None:
+            hf_token = os.environ.get("HF_TOKEN") or None
+            try:
+                snapshot_download(
+                    repo_id=fp16_repo,
+                    local_dir=str(_tmp_st_dir),
+                    token=hf_token,
+                    ignore_patterns=["*.md", "*.txt", "*.json.lock", "*.gguf"],
+                    max_workers=1,
+                )
+                # Generate mmproj from the freshly downloaded safetensors.
+                tmp_mmproj = output_path / f"{model_name}-mmproj-tmp.gguf"
+                _section("Generating mmproj from fp16_repo safetensors (fp16)")
+                print(f"  Source : {_tmp_st_dir}")
+                print(f"  Output : {canonical_name}")
+                try:
+                    with _keepalive(30, "mmproj"):
+                        result = subprocess.run(
+                            [
+                                "python3", str(convert_script),
+                                str(_tmp_st_dir),
+                                "--mmproj",
+                                "--outtype", "f16",
+                                "--outfile", str(tmp_mmproj),
+                            ],
+                            stdout=None,
+                            stderr=None,
+                        )
+                    if result.returncode == 0 and tmp_mmproj.exists():
+                        shutil.move(str(tmp_mmproj), str(canonical_path))
+                        size_str = _fmt_bytes(canonical_path.stat().st_size)
+                        print(f"\n  ✓ mmproj generated (fp16): {canonical_name} ({size_str})")
+                        local_generated = True
+                    else:
+                        print(
+                            f"\n  Warning: mmproj generation failed (exit {result.returncode}) "
+                            "— falling back to HuggingFace download."
+                        )
+                        tmp_mmproj.unlink(missing_ok=True)
+                except Exception as e:
+                    print(f"\n  Warning: mmproj generation error ({e}) — falling back to HuggingFace download.")
+                    tmp_mmproj.unlink(missing_ok=True)
+            except Exception as e:
+                print(f"\n  Warning: safetensors download failed ({e}) — falling back to HuggingFace download.")
+            finally:
+                print(f"  Removing temporary safetensors: {_tmp_st_dir.name}")
+                shutil.rmtree(_tmp_st_dir, ignore_errors=True)
 
     if local_generated:
         return

@@ -417,6 +417,9 @@ def main() -> None:
     # ── 3. Resolve context lengths (server probe or INI fallback) ─────────────
     ini = parse_models_ini(Path("config/models.ini"))
 
+    # ── 2b. Slot save-path directories ────────────────────────────────────────
+    sync_slot_dirs(ini, dry_run=args.dry_run)
+
     # Collect model names from non-global, non-preamble sections
     model_names = [
         s for s in ini.sections()
@@ -559,6 +562,75 @@ def sync_opencode(
     print(f"  [opencode] ✓ Wrote {output}")
     if missing:
         print(f"  [opencode] Warning — unresolved placeholders: {', '.join(missing)}")
+
+
+def sync_slot_dirs(ini: configparser.ConfigParser, dry_run: bool) -> None:
+    """Create slot-save-path dirs for all models in models.ini; remove unused ones.
+
+    Paths in models.ini use the container namespace (/models/...).
+    The host-side mount is ./models (docker-compose: ./models:/models),
+    so /models/slots/foo → ./models/slots/foo on the host.
+
+    Creates:  any slot dir referenced by slot-save-path that does not exist.
+    Removes:  any subdirectory of ./models/slots/ NOT referenced by any model.
+              Skipped entirely if the expected set is empty (parse miss guard).
+    """
+    CONTAINER_PREFIX = "/models/"
+    HOST_PREFIX = "models/"
+
+    def container_to_host(container_path: str) -> Path | None:
+        """Translate /models/slots/foo → Path('models/slots/foo')."""
+        if container_path.startswith(CONTAINER_PREFIX):
+            return Path(HOST_PREFIX + container_path[len(CONTAINER_PREFIX):])
+        return None
+
+    # Collect all slot-save-path values from non-global sections
+    expected: dict[str, Path] = {}  # section → host path
+    for section in ini.sections():
+        if section in ("__preamble__", "*"):
+            continue
+        raw = ini.get(section, "slot-save-path", fallback="").strip()
+        if not raw:
+            continue
+        host_path = container_to_host(raw)
+        if host_path is None:
+            print(f"  [slots]   Warning: unrecognised slot-save-path for [{section}]: {raw!r}")
+            continue
+        expected[section] = host_path
+
+    # Parse guard: if we found no slot dirs, don't touch anything
+    if not expected:
+        return
+
+    slots_root = Path("models/slots")
+
+    # ── Create missing dirs ────────────────────────────────────────────────────
+    for section, host_path in sorted(expected.items()):
+        if host_path.exists():
+            continue
+        if dry_run:
+            print(f"  [slots]   Would create: {host_path}")
+        else:
+            host_path.mkdir(parents=True, exist_ok=True)
+            print(f"  [slots]   ✓ Created:    {host_path}")
+
+    # ── Remove unused subdirs ─────────────────────────────────────────────────
+    if not slots_root.exists():
+        return
+
+    expected_names = {p.resolve() for p in expected.values()}
+
+    for candidate in sorted(slots_root.iterdir()):
+        if not candidate.is_dir():
+            continue
+        if candidate.resolve() in expected_names:
+            continue
+        if dry_run:
+            print(f"  [slots]   Would remove: {candidate} (not referenced by any model)")
+        else:
+            import shutil
+            shutil.rmtree(candidate)
+            print(f"  [slots]   ✗ Removed:    {candidate} (not referenced by any model)")
 
 
 def sync_models_ini(ini_path: Path, dry_run: bool) -> bool:

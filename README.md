@@ -16,7 +16,11 @@ No Cloudflare or secrets needed — just the inference server on this machine.
 python sync-env.py
 docker compose build llama-server llama-convert mcp-search-server
 docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS --mtp
+docker compose run --rm llama-convert download qwen3.6-35b-a3b-apex --quant APEX-MTP-I-Compact
 docker compose up -d llama-server mcp-search-server
+
+# Optional, run again to update opencode ctx max lengths
+python sync-env.py
 ```
 
 Port 8080 is not exposed by default. Create `docker-compose.override.yml` (gitignored) to open it on localhost:
@@ -215,6 +219,7 @@ docker compose run --rm llama-convert convert-st qwen3.6-35b-a3b --quant IQ4_XS 
 # APEX-MTP-I-Compact (~17.3 GB, default — fits 24 GB VRAM)
 docker compose run --rm llama-convert download qwen3.6-35b-a3b-apex --quant APEX-MTP-I-Compact
 # Output: ./models/qwen3.6-35b-a3b-apex-APEX-MTP-I-Compact.gguf + ./models/qwen3.6-35b-a3b-apex-mmproj.gguf
+# mmproj is generated as fp16 from Qwen/Qwen3.6-35B-A3B safetensors (mudler repo has none).
 # Note: load-on-startup = true is set in config/models.ini [qwen3.6-35b-a3b] for this variant.
 ```
 
@@ -284,11 +289,12 @@ docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS --
 # Output: ./models/qwopus3.6-27b-IQ4_XS-mtp.gguf + ./models/qwopus3.6-27b-mmproj.gguf
 # mmproj is generated as fp16 from safetensors (no separate download).
 
-# ── 35B APEX MTP (currently active, download-only, MTP + mmproj included) ──
+# ── 35B APEX MTP (currently active, download-only, MTP heads included) ──────
 
 # APEX-MTP-I-Compact (~17.3 GB, recommended — fits 24 GB VRAM)
 docker compose run --rm llama-convert download qwen3.6-35b-a3b-apex --quant APEX-MTP-I-Compact
 # Output: ./models/qwen3.6-35b-a3b-apex-APEX-MTP-I-Compact.gguf + ./models/qwen3.6-35b-a3b-apex-mmproj.gguf
+# mmproj is generated as fp16 from Qwen/Qwen3.6-35B-A3B safetensors (mudler repo has none).
 
 # ── 35B standard (alternative, build from safetensors) ─────────────────────
 
