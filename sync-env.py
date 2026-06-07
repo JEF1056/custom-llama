@@ -34,7 +34,6 @@ import configparser
 import re
 import secrets
 import sys
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -243,81 +242,39 @@ def _server_reachable(base_url: str, api_key: str) -> bool:
     return result is not None
 
 
-def _load_model(base_url: str, api_key: str, model_name: str) -> bool:
-    result = _http_json(
-        f"{base_url}/models/load",
-        method="POST",
-        body={"model": model_name},
-        api_key=api_key,
-    )
-    return result is not None
-
-
-def _unload_model(base_url: str, api_key: str, model_name: str) -> None:
-    _http_json(
-        f"{base_url}/models/unload",
-        method="POST",
-        body={"model": model_name},
-        api_key=api_key,
-    )
-
-
-def _wait_for_model(base_url: str, api_key: str, model_name: str,
-                    timeout: float = 300.0, poll: float = 2.0) -> bool:
-    """Poll /v1/models until model_name is 'loaded'. Returns True on success."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        data = _http_json(f"{base_url}/v1/models", api_key=api_key)
-        if isinstance(data, dict):
-            for m in data.get("data", []):
-                name = m.get("id", "")
-                status = m.get("status", {}).get("value", "")
-                if name == model_name and status == "loaded":
-                    return True
-        time.sleep(poll)
-    return False
-
-
-def _get_n_ctx(base_url: str, api_key: str) -> int | None:
-    """Read n_ctx from /props of the currently loaded model."""
-    props = _http_json(f"{base_url}/props", api_key=api_key)
-    if isinstance(props, dict):
-        val = props.get("n_ctx")
-        if isinstance(val, int) and val > 0:
-            return val
-    return None
-
-
 def fetch_model_context_lengths(
     base_url: str,
     api_key: str,
     model_names: list[str],
 ) -> dict[str, int]:
-    """Load each model in turn, read n_ctx from /props, unload. Returns {name: n_ctx}."""
+    """Read n_ctx from /v1/models for currently loaded models.
+
+    The /v1/models endpoint returns n_ctx in the 'meta' field for loaded models.
+    Unloaded models don't have n_ctx available without loading them, so we skip
+    those and fall back to INI values in resolve_context_lengths().
+
+    This avoids the fragile load/unload cycle and the need for /models/load,
+    /models/unload, and /props endpoints which may not be available.
+    """
     results: dict[str, int] = {}
     base_url = base_url.rstrip("/")
 
-    for name in model_names:
-        print(f"  [ctx]     Loading '{name}' to probe context length …")
-        if not _load_model(base_url, api_key, name):
-            print(f"  [ctx]     ✗ Failed to request load for '{name}'")
-            continue
+    data = _http_json(f"{base_url}/v1/models", api_key=api_key)
+    if not isinstance(data, dict):
+        return results
 
-        if not _wait_for_model(base_url, api_key, name, timeout=300.0):
-            print(f"  [ctx]     ✗ Timed out waiting for '{name}' to load")
-            _unload_model(base_url, api_key, name)
+    for m in data.get("data", []):
+        name = m.get("id", "")
+        if name not in model_names:
             continue
-
-        n_ctx = _get_n_ctx(base_url, api_key)
-        if n_ctx:
+        meta = m.get("meta", {})
+        n_ctx = meta.get("n_ctx")
+        if isinstance(n_ctx, int) and n_ctx > 0:
             results[name] = n_ctx
-            print(f"  [ctx]     ✓ '{name}' n_ctx = {n_ctx:,}")
+            print(f"  [ctx]     ✓ '{name}' n_ctx = {n_ctx:,} (from /v1/models)")
         else:
-            print(f"  [ctx]     ✗ Could not read n_ctx for '{name}'")
-
-        _unload_model(base_url, api_key, name)
-        # Brief pause before next model to let VRAM settle
-        time.sleep(2.0)
+            status = m.get("status", {}).get("value", "unknown")
+            print(f"  [ctx]     ⊘ '{name}' not loaded (status={status}) — will use INI fallback")
 
     return results
 
