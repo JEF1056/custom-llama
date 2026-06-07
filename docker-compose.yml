@@ -131,6 +131,79 @@ services:
       start_period: 300s  # allow up to 5 min for large model to load from disk
 
   # ---------------------------------------------------------------------------
+  # Debug service — runs llama-server under compute-sanitizer memcheck.
+  #
+  # Skips router mode and launches the model server directly so the sanitizer
+  # can instrument the GPU kernels that trigger the crash.
+  #
+  # Build:
+  #   docker compose build llama-debug
+  #
+  # Run (pass the same args as the crashing model preset):
+    # docker compose run --service-ports --rm llama-debug \
+    #   --model /models/qwopus3.6-27b-IQ4_XS-mtp.gguf \
+    #   --alias qwopus3.6-27b \
+    #   --n-gpu-layers 99 \
+    #   --parallel 1 \
+    #   --ctx-size 64000 \
+    #   --batch-size 4086 \
+    #   --ubatch-size 1024 \
+    #   --flash-attn true \
+    #   --jinja \
+    #   --reasoning on \
+    #   --reasoning-budget 4096 \
+    #   --reasoning-format deepseek \
+    #   --spec-type draft-mtp,ngram-mod \
+    #   --spec-draft-n-max 5 \
+    #   --cache-type-k turbo4 \
+    #   --cache-type-v turbo2 \
+    #   --spec-draft-type-k turbo4 \
+    #   --spec-draft-type-v turbo2 \
+    #   --fit true \
+    #   --fit-target 3000 \
+    #   --host 0.0.0.0 \
+    #   --port 8080
+  #
+  # Notes:
+  #   - CUDA_LAUNCH_BLOCKING=1 is set in the image so errors are attributed
+  #     to the exact kernel rather than the next sync point.
+  #   - memcheck adds ~10-20x GPU slowdown. Generation will be very slow.
+  #   - Reduce --fit-target if the sanitizer OOMs (it adds GPU memory overhead).
+  #   - Reproduce by sending the same sequence of requests that triggered the crash.
+  # ---------------------------------------------------------------------------
+  llama-debug:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: debug
+      args:
+        CUDA_ARCHS: ${CUDA_ARCHS:-86}
+    image: llama-debug:latest
+    container_name: llama-debug
+    profiles: ["debug"]
+
+    ports:
+      - "8080:8080"
+
+    volumes:
+      - ./models:/models:rw
+      - ./config:/etc/llama-server:ro
+
+    gpus: all
+
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      # Forces synchronous kernel launches — the illegal memory access is then
+      # attributed to the exact guilty kernel, not a later unrelated sync.
+      CUDA_LAUNCH_BLOCKING: "1"
+
+    networks:
+      - llama-net
+    # No restart — crash once, read the output, fix it.
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
   # Cloudflare Tunnel — exposes both llama-server and mcp-search-server publicly:
   #   - chat.jessfan.com → http://llama-server:8080
   #   - mcp.jessfan.com → http://mcp-search-server:3100
