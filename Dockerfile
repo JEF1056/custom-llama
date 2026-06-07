@@ -122,6 +122,75 @@ ENTRYPOINT ["/entrypoint.sh"]
 
 
 # =============================================================================
+# Stage 3b: Debug (compute-sanitizer memcheck for CUDA crash reproduction)
+#
+# Based on the builder stage (devel image) because compute-sanitizer ships with
+# the CUDA toolkit and is NOT present in the runtime image.
+#
+# Build:
+#   docker compose build llama-debug
+#
+# Run (skips router mode — launches the model server directly so compute-sanitizer
+# instruments the right process; router mode spawns a child that sanitizer won't
+# see unless you add --target-processes all):
+#   docker compose run --rm llama-debug
+#
+# Performance: memcheck adds ~10-20x GPU slowdown. Expect very slow generation.
+# The bug only appears after many high-context requests — be patient.
+# =============================================================================
+FROM builder AS debug
+
+# compute-sanitizer is already at /usr/local/cuda/bin/compute-sanitizer in the
+# devel image. Install curl for optional health probing.
+RUN apt-get update && apt-get install -y --no-install-recommends curl && \
+  rm -rf /var/lib/apt/lists/*
+
+# Rebuild without stripping and with debug line info so sanitizer output
+# names the exact CUDA kernel + source line.
+RUN cmake \
+  -B build-debug -G Ninja \
+  -DBUILD_SHARED_LIBS=ON \
+  -DGGML_CUDA=ON \
+  -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHS} \
+  -DGGML_BLAS=ON \
+  -DGGML_BLAS_VENDOR=OpenBLAS \
+  -DGGML_HBM=OFF \
+  -DLLAMA_BUILD_TESTS=OFF \
+  -DLLAMA_BUILD_EXAMPLES=OFF \
+  -DLLAMA_BUILD_TOOLS=ON \
+  -DLLAMA_BUILD_TESTS_CXX=OFF \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_CUDA_FLAGS="-lineinfo" \
+  -DCMAKE_EXE_LINKER_FLAGS="-Wl,--allow-shlib-undefined" \
+  -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--allow-shlib-undefined" \
+  . && \
+  cmake --build build-debug --parallel $(nproc)
+
+# Copy debug-built server into expected path (no strip)
+RUN cp /llama.cpp/build-debug/bin/llama-server /usr/local/bin/llama-server-debug
+
+# Stage shared libs from debug build into /opt/llama/lib so LD_LIBRARY_PATH works
+RUN mkdir -p /opt/llama/lib && \
+  find /llama.cpp/build-debug \( -name "libllama*.so*" -o -name "libggml*.so*" -o -name "libmtmd*.so*" \) | \
+  xargs -I{} cp {} /opt/llama/lib/
+
+ENV LD_LIBRARY_PATH=/opt/llama/lib:/usr/lib:/usr/local/cuda/lib64:/usr/local/nvidia/lib64 \
+  MODEL_DIR=/models
+
+# CUDA_LAUNCH_BLOCKING=1 forces synchronous kernel launches so the illegal
+# memory access error is attributed to the exact kernel that caused it, rather
+# than appearing at the next unrelated cudaStreamSynchronize.
+ENV CUDA_LAUNCH_BLOCKING=1
+
+# Direct model launch (no router) — args mirror the qwopus3.6-27b preset
+# from config/models.ini. Router mode spawns a child process that compute-sanitizer
+# won't instrument by default; direct launch avoids that complexity entirely.
+# Adjust --fit-target downward if the sanitizer OOMs (it adds GPU memory overhead).
+ENTRYPOINT ["/usr/local/cuda/bin/compute-sanitizer", "--tool", "memcheck", \
+  "--print-limit", "20", \
+  "/usr/local/bin/llama-server-debug"]
+
+# =============================================================================
 # Stage 4: Convert (model preparation — download, quantize, convert safetensors)
 #
 # Inherits from base (NOT runtime) — independent of the server image so changes
