@@ -116,6 +116,11 @@ services:
       GGML_CUDA_GRAPH_OPT: ${GGML_CUDA_GRAPH_OPT:-1}
       CUDA_SCALE_LAUNCH_QUEUES: ${CUDA_SCALE_LAUNCH_QUEUES:-2x}
 
+      # DEBUG: synchronous kernel launches so the illegal memory access is
+      # attributed to the exact kernel call, not deferred to a later sync.
+      # Remove once root cause is identified.
+      CUDA_LAUNCH_BLOCKING: ${CUDA_LAUNCH_BLOCKING:-0}
+
       # All other configuration (ctx, KV cache, sampling, speculative decoding,
       # DRY, reasoning budget, etc.) lives in scripts/models.ini.
 
