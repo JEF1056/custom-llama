@@ -120,7 +120,7 @@ services:
       # Set to 1 to surface cudaErrorIllegalAddress at the exact offending kernel
       # rather than deferring to the next ggml_backend_cuda_synchronize call.
       # Remove or set to 0 once the crash is identified — adds ~10-40% GPU overhead.
-      GGML_CUDA_SYNC_DEBUG: ${GGML_CUDA_SYNC_DEBUG:-1}
+      # GGML_CUDA_SYNC_DEBUG: ${GGML_CUDA_SYNC_DEBUG:-1}
 
       # All other configuration (ctx, KV cache, sampling, speculative decoding,
       # DRY, reasoning budget, etc.) lives in scripts/models.ini.

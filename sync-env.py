@@ -437,6 +437,14 @@ def main() -> None:
     if not changed and not args.dry_run:
         print("All env files up to date.")
 
+    # ── 1b. webui-config.json — populate API keys from .env ─────────────
+    sync_webui_config(
+        default_path=Path("config/webui-config.default.json"),
+        output_path=Path("config/webui-config.json"),
+        env_path=root_env_path,
+        dry_run=args.dry_run,
+    )
+
     # ── 2. models.ini — compute ctx-checkpoints for each model ──────────────
     ini_changed = sync_models_ini(
         ini_path=Path("config/models.ini"),
@@ -816,6 +824,86 @@ def sync_models_ini(ini_path: Path, dry_run: bool) -> bool:
 
     ini_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
     print(f"  [models]  ✓ Updated {ini_path}")
+    return True
+
+
+def sync_webui_config(
+    default_path: Path,
+    output_path: Path,
+    env_path: Path,
+    dry_run: bool,
+) -> bool:
+    """Generate webui-config.json from webui-config.default.json, populating API keys.
+
+    - Sets top-level apiKey from LLAMA_API_KEY.
+    - Fills the Authorization header inside mcpServers from MCP_API_KEY.
+
+    Returns True if output would change (or did change).
+    """
+    if not default_path.exists():
+        return False
+
+    env = parse_env(env_path) if env_path.exists() else {}
+
+    llama_key = env.get("LLAMA_API_KEY", "")
+    mcp_key = env.get("MCP_API_KEY", "")
+
+    try:
+        config = _json.loads(default_path.read_text(encoding="utf-8"))
+    except (_json.JSONDecodeError, OSError) as e:
+        print(f"  [webui] Warning — could not read {default_path}: {e}")
+        return False
+
+    # ── Top-level apiKey ─────────────────────────────────────────────
+    if llama_key:
+        config["apiKey"] = llama_key
+
+    # ── mcpServers Authorization header ──────────────────────────────
+    mcp_str = config.get("mcpServers", "")
+    if isinstance(mcp_str, str) and mcp_str:
+        try:
+            servers = _json.loads(mcp_str)
+        except _json.JSONDecodeError:
+            pass
+        else:
+            if isinstance(servers, list) and mcp_key:
+                for srv in servers:
+                    if not isinstance(srv, dict):
+                        continue
+                    hdrs_raw = srv.get("headers", "")
+                    if not isinstance(hdrs_raw, str) or not hdrs_raw:
+                        continue
+                    try:
+                        hdrs = _json.loads(hdrs_raw)
+                    except _json.JSONDecodeError:
+                        continue
+                    if not isinstance(hdrs, dict):
+                        continue
+                    hdrs["Authorization"] = f"Bearer {mcp_key}"
+                    srv["headers"] = _json.dumps(hdrs)
+                config["mcpServers"] = _json.dumps(servers)
+
+    new_text = _json.dumps(config, indent=2, ensure_ascii=False) + "\n"
+
+    # Compare with existing output
+    if output_path.exists():
+        try:
+            old_text = output_path.read_text(encoding="utf-8")
+        except OSError:
+            old_text = None
+        if old_text == new_text:
+            return False
+
+    if dry_run:
+        if llama_key:
+            print(f"  [webui] apiKey: {llama_key[:6]}…")
+        if mcp_key:
+            print(f"  [webui] mcpServers auth: Bearer {mcp_key[:6]}…")
+        print(f"  [webui] Would write {output_path}")
+        return True
+
+    output_path.write_text(new_text, encoding="utf-8")
+    print(f"  [webui] ✓ Generated {output_path}")
     return True
 
 

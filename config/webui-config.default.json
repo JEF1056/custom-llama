@@ -1,5 +1,6 @@
 {
   "theme": "system",
+  "apiKey": "",
   "systemMessage": "",
   "pasteLongTextToFileLen": 2500,
   "sendOnEnter": true,
@@ -21,6 +22,8 @@
   "disableAutoScroll": false,
   "alwaysShowSidebarOnDesktop": true,
   "showRawModelNames": false,
+  "showModelQuantization": true,
+  "showModelTags": true,
   "alwaysShowAgenticTurns": false,
   "samplers": "",
   "backend_sampling": false,
@@ -29,9 +32,11 @@
   "preEncodeConversation": false,
   "disableReasoningParsing": false,
   "excludeReasoningFromContext": false,
+  "enableThinking": true,
   "showRawOutputSwitch": false,
-  "custom": "",
+  "customJson": "",
+  "customCss": "",
   "mcpRequestTimeoutSeconds": 300,
   "showSystemMessage": true,
-  "mcpServers": "[{\"id\":\"77e5d655-a386-4f29-83f7-d487a4125f30\",\"enabled\":true,\"url\":\"https://mcp.jessfan.com/\",\"requestTimeoutSeconds\":300}]"
+  "mcpServers": "[{\"id\":\"77e5d655-a386-4f29-83f7-d487a4125f30\",\"enabled\":true,\"url\":\"https://mcp.jessfan.com/\",\"requestTimeoutSeconds\":300,\"headers\":\"{\\\"Authorization\\\":\\\"\\\"}\",\"useProxy\":false}]"
 }
