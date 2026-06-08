@@ -20,7 +20,7 @@ RUN rm -rf /var/lib/apt/lists/* && \
   pkg-config && \
   rm -rf /var/lib/apt/lists/*
 
-RUN git clone --depth 1 --branch llama-exp --recursive \
+RUN git clone --depth 1 --branch llama-next --recursive \
   https://github.com/JEF1056/llama-cpp-turboquant.git /llama.cpp
 
 WORKDIR /llama.cpp
@@ -187,7 +187,7 @@ COPY --link --from=builder /llama.cpp/gguf-py/ /scripts/gguf-py/
 RUN --mount=type=cache,target=/root/.cache/uv \
   uv pip install --system --break-system-packages --no-compile /scripts/gguf-py/ && \
   find /usr/lib/python3 /usr/local/lib/python3* -type d -name __pycache__ \
-    -exec rm -rf {} + 2>/dev/null || true
+  -exec rm -rf {} + 2>/dev/null || true
 
 # Copied last so edits to these scripts never bust any pip cache layer.
 COPY scripts/manage_models.py /scripts/manage_models.py
