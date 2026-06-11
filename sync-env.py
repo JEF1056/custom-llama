@@ -445,13 +445,6 @@ def main() -> None:
         dry_run=args.dry_run,
     )
 
-    # ── 2. models.ini — compute ctx-checkpoints for each model ──────────────
-    ini_changed = sync_models_ini(
-        ini_path=Path("config/models.ini"),
-        dry_run=args.dry_run,
-    )
-    changed |= ini_changed
-
     # ── 3. Resolve context lengths (server probe or INI fallback) ─────────────
     ini = parse_models_ini(Path("config/models.ini"))
 
@@ -515,23 +508,6 @@ def parse_models_ini(path: Path) -> configparser.ConfigParser:
     # configparser requires a section, so we prepend a synthetic [__preamble__].
     cfg.read_string("[__preamble__]\n" + raw)
     return cfg
-
-
-def compute_checkpoints(ini: configparser.ConfigParser) -> dict[str, int]:
-    """Compute ctx-checkpoints for each model section.
-
-    ctx-checkpoints = ceil(ctx-size / checkpoint-every-n-tokens)
-
-    Falls back to global defaults [*] if per-model values are missing.
-    """
-    results: dict[str, int] = {}
-    for section in ini.sections():
-        ctx_size = ini.getint(section, "ctx-size", fallback=None)
-        every_n = ini.getint(section, "checkpoint-every-n-tokens", fallback=None)
-        if ctx_size is not None and every_n and every_n > 0:
-            import math
-            results[section] = math.ceil(ctx_size / every_n)
-    return results
 
 
 def sync_opencode(
@@ -772,59 +748,6 @@ def sync_slot_dirs(ini: configparser.ConfigParser, dry_run: bool) -> None:
             import shutil
             shutil.rmtree(candidate)
             print(f"  [slots]   ✗ Removed:    {candidate} (not referenced by any model)")
-
-
-def sync_models_ini(ini_path: Path, dry_run: bool) -> bool:
-    """Update ctx-checkpoints values in models.ini by computing ceil(ctx-size / checkpoint-every-n-tokens).
-
-    Returns True if changes were made.
-    """
-    if not ini_path.exists():
-        return False
-
-    ini = parse_models_ini(ini_path)
-    computed = compute_checkpoints(ini)
-
-    if not computed:
-        return False
-
-    # Read original lines to preserve structure
-    raw_lines = ini_path.read_text(encoding="utf-8").splitlines()
-
-    # Build a set of sections we need to update
-    sections_to_update = set(computed.keys())
-
-    updated_lines: list[str] = []
-    changed = False
-    for line in raw_lines:
-        # Check if this line is a ctx-checkpoints assignment (or commented) in a section we care about
-        stripped = line.strip()
-        if stripped.startswith(";ctx-checkpoints") or stripped.startswith("ctx-checkpoints"):
-            # Find which section this belongs to by looking back
-            current_section = None
-            for i in range(len(updated_lines) - 1, -1, -1):
-                s = updated_lines[i].strip()
-                if s.startswith("[") and s.endswith("]"):
-                    current_section = s[1:-1]
-                    break
-            if current_section in sections_to_update:
-                new_value = computed[current_section]
-                updated_lines.append(f"ctx-checkpoints           = {new_value}")
-                print(f"  [models]  {current_section}: ctx-checkpoints = {new_value} (ceil({ini.getint(current_section, 'ctx-size', fallback=0)} / {ini.getint(current_section, 'checkpoint-every-n-tokens', fallback=1)}))")
-                changed = True
-                continue
-        updated_lines.append(line)
-
-    if not changed:
-        return False
-
-    if dry_run:
-        print(f"  [models]  Would update {ini_path}")
-        return True
-
-    ini_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
-    print(f"  [models]  ✓ Updated {ini_path}")
-    return True
 
 
 def sync_webui_config(
