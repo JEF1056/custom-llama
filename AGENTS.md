@@ -1,4 +1,8 @@
 ﻿These rules apply to every task unless explicitly overridden. Bias: caution over speed on non-trivial work.
+Use shuttle agent for making changes whenever possible.
+Use thread agent for searching the codebase whenever possible.
+Use spindle agent for external searching whenever possible
+For the above subagents, do not perform their tasks unless they require deep thinking. All the subagents are better at their respective jobs, but you must provide a strong prompt and have reasoned out the tasks first.
 
 ### Rule 1 - Think Before Coding
 State assumptions explicitly. Ask rather than guess.
