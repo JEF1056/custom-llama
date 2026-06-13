@@ -5,7 +5,7 @@
 # =============================================================================
 FROM node:20-slim AS ui-builder
 
-RUN apt-get update && apt-get install -y --no-install-recommends git && \
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && \
   rm -rf /var/lib/apt/lists/*
 
 RUN git clone --depth 1 --branch llama-next \

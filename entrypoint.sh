@@ -36,6 +36,7 @@ WEBUI_PATH=/etc/llama-server/webui
 EXTRA_ARGS=()
 [ "$MODELS_AUTOLOAD" != "on" ] && EXTRA_ARGS+=(--no-models-autoload)
 [ -n "$API_KEY" ]               && EXTRA_ARGS+=(--api-key "$API_KEY")
+# --path overrides the embedded UI \u2014 useful for local development without a rebuild.
 [ -d "$WEBUI_PATH" ]            && EXTRA_ARGS+=(--path "$WEBUI_PATH")
 
 exec llama-server \
@@ -44,5 +45,6 @@ exec llama-server \
     --models-preset "$MODELS_PRESET" \
     --models-max "$MODELS_MAX" \
     --ui-config-file "$UI_CONFIG_FILE" \
+    --ui-mcp-proxy \
     "${EXTRA_ARGS[@]}" \
     "$@"
