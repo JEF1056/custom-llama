@@ -91,6 +91,8 @@ services:
       # Mount entire config dir so models.ini, webui-config.json, and
       # triattention .bin stats files are all accessible at /etc/llama-server/.
       - ./config:/etc/llama-server:ro
+      # Webui assets built from source — overrides the broken embedded HF version.
+      - ./config/webui:/etc/llama-server/webui:ro
 
     # Allow time for slot KV-cache saves to complete on SIGTERM before SIGKILL.
     # slot-flush-interval=120s means the worst-case un-flushed window is 2 min,
@@ -113,14 +115,29 @@ services:
       LLAMA_MODELS_AUTOLOAD: ${LLAMA_MODELS_AUTOLOAD:-on}
 
       # --- CUDA tuning (env vars read directly by ggml-cuda) ---
+      # GGML_CUDA_GRAPH_OPT disabled when SYNC_DEBUG image is deployed to ensure
+      # kernels run directly (not via graph replay) so per-kernel sync checks fire.
+      # Change back to 1 for production.
       GGML_CUDA_GRAPH_OPT: ${GGML_CUDA_GRAPH_OPT:-1}
       CUDA_SCALE_LAUNCH_QUEUES: ${CUDA_SCALE_LAUNCH_QUEUES:-2x}
 
-      # --- Crash localisation: sync after each turbo set_rows + fattn kernel ---
-      # Set to 1 to surface cudaErrorIllegalAddress at the exact offending kernel
-      # rather than deferring to the next ggml_backend_cuda_synchronize call.
-      # Remove or set to 0 once the crash is identified — adds ~10-40% GPU overhead.
-      # GGML_CUDA_SYNC_DEBUG: ${GGML_CUDA_SYNC_DEBUG:-1}
+      # --- Crash localisation ---
+      #
+      # IMPORTANT: CUDA graph replay bypasses individual kernel launch sites, so
+      # per-kernel sync checks (GGML_CUDA_SYNC_DEBUG) and CUDA_LAUNCH_BLOCKING will
+      # NOT correctly attribute the failing kernel unless CUDA graphs are disabled.
+      # When debugging: set GGML_CUDA_GRAPH_OPT=0 to disable graph replay.
+      #
+      # Option A: CUDA_LAUNCH_BLOCKING (no rebuild needed, ~3-10x slower)
+      #   Uncomment below, set GGML_CUDA_GRAPH_OPT=0:
+      #   CUDA_LAUNCH_BLOCKING: 1
+      #   GGML_CUDA_GRAPH_OPT: 0
+      CUDA_LAUNCH_BLOCKING: ${CUDA_LAUNCH_BLOCKING:-0}
+      #
+      # Option B: GGML_CUDA_SYNC_DEBUG build flag (rebuild with CUDA_SYNC_DEBUG=1)
+      #   Checks are compiled in unconditionally — always active in this image.
+      #   Also requires GGML_CUDA_GRAPH_OPT=0 for accurate attribution (set above).
+      # GGML_CUDA_SYNC_DEBUG is a compile-time flag — no env var needed
 
       # All other configuration (ctx, KV cache, sampling, speculative decoding,
       # DRY, reasoning budget, etc.) lives in scripts/models.ini.

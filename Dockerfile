@@ -8,6 +8,10 @@ FROM nvidia/cuda:12.9.0-devel-ubuntu24.04 AS builder
 # Use "native" to auto-detect (requires GPU visible at build time).
 ARG CUDA_ARCHS=86
 
+# Enable synchronous CUDA kernel error checking (VERY slow — debugging only).
+# docker compose build --build-arg CUDA_SYNC_DEBUG=1
+ARG CUDA_SYNC_DEBUG=0
+
 RUN rm -rf /var/lib/apt/lists/* && \
   apt-get update && \
   apt-get install -y --no-install-recommends \
@@ -40,7 +44,9 @@ RUN cmake \
   -DLLAMA_BUILD_EXAMPLES=OFF \
   -DLLAMA_BUILD_TOOLS=ON \
   -DLLAMA_BUILD_TESTS_CXX=OFF \
+  -DLLAMA_BUILD_UI=OFF \
   -DCMAKE_BUILD_TYPE=Release \
+  $([ "${CUDA_SYNC_DEBUG}" = "1" ] && echo "-DCMAKE_CUDA_FLAGS=-DGGML_CUDA_SYNC_DEBUG -DCMAKE_CXX_FLAGS=-DGGML_CUDA_SYNC_DEBUG" || true) \
   -DCMAKE_EXE_LINKER_FLAGS="-Wl,--allow-shlib-undefined" \
   -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--allow-shlib-undefined" \
   . && \

@@ -9,7 +9,7 @@ set -e
 HOST=${LLAMA_HOST:-0.0.0.0}
 PORT=${LLAMA_PORT:-8080}
 API_KEY=${LLAMA_API_KEY:-}
-WEBUI_CONFIG_FILE=/etc/llama-server/webui-config.json
+UI_CONFIG_FILE=/etc/llama-server/webui-config.json
 MODELS_PRESET=/etc/llama-server/models.ini
 MODELS_MAX=${LLAMA_MODELS_MAX:-1}
 MODELS_AUTOLOAD=${LLAMA_MODELS_AUTOLOAD:-on}
@@ -31,12 +31,18 @@ echo "  Preset:            $MODELS_PRESET"
 echo "  Max loaded models: $MODELS_MAX"
 [ -n "$API_KEY" ] && echo "  API key:           (set)"
 
+WEBUI_PATH=/etc/llama-server/webui
+
+EXTRA_ARGS=()
+[ "$MODELS_AUTOLOAD" != "on" ] && EXTRA_ARGS+=(--no-models-autoload)
+[ -n "$API_KEY" ]               && EXTRA_ARGS+=(--api-key "$API_KEY")
+[ -d "$WEBUI_PATH" ]            && EXTRA_ARGS+=(--path "$WEBUI_PATH")
+
 exec llama-server \
     --host "$HOST" \
     --port "$PORT" \
     --models-preset "$MODELS_PRESET" \
     --models-max "$MODELS_MAX" \
-    $([ "$MODELS_AUTOLOAD" != "on" ] && echo "--no-models-autoload") \
-    ${API_KEY:+--api-key "$API_KEY"} \
-    ${WEBUI_CONFIG_FILE:+--webui-config-file "$WEBUI_CONFIG_FILE"} \
+    --ui-config-file "$UI_CONFIG_FILE" \
+    "${EXTRA_ARGS[@]}" \
     "$@"
