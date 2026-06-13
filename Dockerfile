@@ -1,4 +1,21 @@
 # =============================================================================
+# Stage 0: UI Builder (Node 20)
+# Builds the SvelteKit frontend so the CUDA builder can embed it via cmake.
+# Runs in parallel with the CUDA compile — no GPU or CUDA deps needed here.
+# =============================================================================
+FROM node:20-slim AS ui-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends git && \
+  rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch llama-next \
+  https://github.com/JEF1056/llama-cpp-turboquant.git /llama.cpp
+
+WORKDIR /llama.cpp/tools/ui
+
+RUN npm install && npm run build
+
+# =============================================================================
 # Stage 1: Builder (CUDA)
 # =============================================================================
 FROM nvidia/cuda:12.9.0-devel-ubuntu24.04 AS builder
@@ -27,6 +44,10 @@ RUN rm -rf /var/lib/apt/lists/* && \
 RUN git clone --depth 1 --branch llama-next --recursive \
   https://github.com/JEF1056/llama-cpp-turboquant.git /llama.cpp
 
+# Pre-populate the UI dist so cmake's local-build check succeeds and skips
+# the HuggingFace download entirely.
+COPY --from=ui-builder /llama.cpp/build/tools/ui/dist/ /llama.cpp/build/tools/ui/dist/
+
 WORKDIR /llama.cpp
 
 # --allow-shlib-undefined is required because libcuda.so.1 is a host driver
@@ -44,7 +65,6 @@ RUN cmake \
   -DLLAMA_BUILD_EXAMPLES=OFF \
   -DLLAMA_BUILD_TOOLS=ON \
   -DLLAMA_BUILD_TESTS_CXX=OFF \
-  -DLLAMA_BUILD_UI=OFF \
   -DCMAKE_BUILD_TYPE=Release \
   $([ "${CUDA_SYNC_DEBUG}" = "1" ] && echo "-DCMAKE_CUDA_FLAGS=-DGGML_CUDA_SYNC_DEBUG -DCMAKE_CXX_FLAGS=-DGGML_CUDA_SYNC_DEBUG" || true) \
   -DCMAKE_EXE_LINKER_FLAGS="-Wl,--allow-shlib-undefined" \
