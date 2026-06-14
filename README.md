@@ -319,6 +319,47 @@ docker compose run --rm llama-convert convert /models/qwopus3.6-27b-fp16.gguf --
 
 ---
 
+## Performance tuning — config sweep
+
+`scripts/spec_sweep/` is a reproducible, resumable tool that tunes the
+`qwopus3.6-27b` decode path for **throughput (t/s)** at mid (~25k) and long
+(~160k) contexts, across text and code, and decides between maximizing
+single-request context vs running two parallel slots.
+
+```bash
+cd custom-llama                         # run from the repo root
+python -m scripts.spec_sweep run        # full staged sweep (resumable)
+python -m scripts.spec_sweep status     # progress + decisions so far
+python -m scripts.spec_sweep payloads   # (re)build prompt payloads
+python -m scripts.spec_sweep reset      # clear state so the next run starts fresh
+python -m scripts.spec_sweep restore    # restore config/models.ini from backup
+```
+
+**Resuming after a crash or interruption:** just re-run `run`. Every finished
+config and stage decision is persisted to
+`benchmark/results/spec-sweep/state.json` (results stream to `results.csv`), so
+a resumed run skips completed work (`[skip] … already done`) and picks up where
+it left off. A config whose server fails to load is recorded as `tg=0` (loses
+ranking) and the sweep continues rather than aborting.
+
+**Resetting the resume state:** `python -m scripts.spec_sweep reset` deletes
+`state.json` and `results.csv`, so the next `run` starts the whole sweep over.
+It leaves `config/models.ini` untouched — use `restore` to revert the live
+config to the pre-sweep backup taken at the start of the first run.
+
+It edits the spec-decode / context params in `config/models.ini` in place
+(section-aware), force-recreates `llama-server`, and measures steady-state
+decode throughput. Staged-greedy stages: `spec-type` → `spec-draft-p-min` →
+`ngram-mod` params → `spec-draft-backend-sampling` → 160k validation →
+context/parallel (`single196` / `maxctx256` @ 262144 / `parallel2` @ 2×~102K).
+Results stream to `benchmark/results/spec-sweep/` (gitignored) and the winning
+config is left live in `config/models.ini`.
+
+See [docs/spec-decode-sweep.md](docs/spec-decode-sweep.md) for the full
+methodology, tracked metrics, resume/ETA behaviour, and reproducibility notes.
+
+---
+
 ## Docker Compose services
 
 | Service             | Purpose                                             |
