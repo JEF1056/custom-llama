@@ -9,7 +9,11 @@
       "options": {
         "baseURL": "https://chat.jessfan.com/v1",
         "apiKey": "{env:LLAMA_API_KEY}",
-        "includeUsage": true
+        "includeUsage": true,
+        "headers": {
+          "CF-Access-Client-Id": "{env:CF_ACCESS_CLIENT_ID}",
+          "CF-Access-Client-Secret": "{env:CF_ACCESS_CLIENT_SECRET}"
+        }
       },
       "models": {
         "qwen3.6-35b-a3b": {
