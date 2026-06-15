@@ -140,11 +140,12 @@ def create_server() -> FastMCP:
             "state across calls; browser_screenshot for vision; browser_close to free it.\n"
             "- code_run(code): sandboxed Python for math, data, parsing.\n"
             "- time_now: current time / timezone conversion (default PST).\n"
-            "- read_output(handle, offset): fetch/deep_search/code_run/browser_run "
-            "preview long output and return a *_handle. Call read_output with that "
-            "handle (and the *_next_offset) to read the rest in windows — never "
-            "assume a truncated result is complete.\n\n"
-            "Typical chain: advisor → search/fetch → code_run → answer."
+            "- read_output(handle, offset): when fetch/deep_search/code_run/browser_run "
+            "preview long output, they add `<field>_handle`, `<field>_next_offset`, and "
+            "a `<field>_hint` (a ready-to-run read_output call). Follow the hint, or pass "
+            "the handle + next_offset; keep calling with the returned next_offset until "
+            "has_more is false. Never assume a previewed result is complete.\n\n"
+            "Typical chain: advisor → search/fetch (→ read_output if previewed) → code_run → answer."
         ),
     )
     return server

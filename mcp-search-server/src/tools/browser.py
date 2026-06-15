@@ -25,9 +25,6 @@ from src.output_store import output_store
 
 logger = logging.getLogger(__name__)
 
-# Cap on serialized result / captured stdout returned to the model.
-_MAX_OUTPUT_CHARS = 50000
-
 
 async def _ensure_page(session_id: str | None):
     """Return a live page.

@@ -32,7 +32,8 @@ def fetch_handler(server: FastMCP) -> None:
 
         Long pages return a condensed preview plus a `content_handle`; call
         read_output(handle=content_handle) to read the full text in windows.
-        Returns: {url, title, content, content_length, truncated, content_handle?}
+        Returns: {url, title, content, content_length, truncated,
+        content_handle?, content_total_chars?, content_next_offset?, content_hint?}
         """
         try:
             # Start browser if not running
@@ -79,6 +80,8 @@ def fetch_handler(server: FastMCP) -> None:
                 content["truncated"] = True
                 content["content_handle"] = handle
                 content["content_total_chars"] = len(full_text)
+                # Preview is a summary (not a prefix), so the full text reads from 0.
+                content["content_next_offset"] = 0
                 content["content_hint"] = (
                     f"Preview shown ({len(content['content'])} of {len(full_text)} chars). "
                     f'Call read_output(handle="{handle}", offset=0) to read the full page.'

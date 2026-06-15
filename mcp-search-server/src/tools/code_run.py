@@ -42,9 +42,6 @@ _BLOCKED_IMPORTS = {
 # NOTE: timeout is global — concurrent calls share this setting.
 _CODE_EXEC_TIMEOUT = 30
 
-# Max output length
-_MAX_OUTPUT_LENGTH = 50000
-
 
 def _check_import_allowed(module_name: str) -> bool:
     """Check if a module import is allowed in the sandbox."""
