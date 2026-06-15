@@ -103,14 +103,14 @@ def advisor_handler(server: FastMCP) -> None:
     ) -> str:
         """Ask the advisor model for expert guidance on a problem.
 
-        This tool calls your local LLM server ({settings.ADVISOR_MODEL} by default) to get
+        This tool calls your local LLM server (qwopus3.6-27b by default) to get
         expert reasoning on complex problems. Use it when you need deeper analysis
         than your primary model can provide.
 
         Args:
             context: The problem context or background information (as much detail as needed).
             question: The specific question or task to ask the advisor.
-            model: The model to use (overrides config default: {settings.ADVISOR_MODEL}).
+            model: The model to use (overrides config default: qwopus3.6-27b).
 
         Returns:
             The advisor's response with analysis and guidance.

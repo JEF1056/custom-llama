@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     MCP_API_KEY: str = Field(default="", description="MCP server API key")
 
     # Cache settings
-    CACHE_ENABLED: bool = Field(default=True, description="Enable caching")
+    CACHE_ENABLED: bool = Field(default=True, description="Enable caching (not yet implemented)")
     CACHE_TTL: int = Field(default=3600, description="Cache TTL in seconds")
 
     # Redis settings (optional)

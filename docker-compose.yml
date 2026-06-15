@@ -48,7 +48,7 @@ services:
       HF_TOKEN: ${HF_TOKEN:-}
 
       # Throttle download write speed to prevent WSL2 vmmem balloon / BSOD.
-      # Uses curl --limit-rate when set (e.g. CONVERT_DOWNLOAD_RATE=300M).
+      # Uses aria2c --max-download-limit when set (e.g. CONVERT_DOWNLOAD_RATE=300M).
       # Leave unset to download at full speed.
       CONVERT_DOWNLOAD_RATE: ${CONVERT_DOWNLOAD_RATE:-}
 
@@ -124,6 +124,8 @@ services:
       #     this deployment: the multi-stream replay races with the out-of-band
       #     checkpoint copy and causes the 160k illegal-memory-access crash. The
       #     override sets it to "0"; graphs run single-stream and stay stable.
+      # NOTE: main file defaults to 1, but override (docker-compose.override.yml) sets to 0.
+      # See override comments for rationale (multi-stream graph replay race).
       GGML_CUDA_GRAPH_OPT: ${GGML_CUDA_GRAPH_OPT:-1}
       CUDA_SCALE_LAUNCH_QUEUES: ${CUDA_SCALE_LAUNCH_QUEUES:-2x}
 

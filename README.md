@@ -99,10 +99,10 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
 | Component                        | Size                            |
 | -------------------------------- | ------------------------------- |
 | Model (APEX-MTP-I-Compact)       | ~17.3 GB                        |
-| DeltaNet recurrent state     | ~1.5 GB                         |
-| KV cache (turbo4/2, 65K ctx) | ~0.6 GB                         |
-| compute scratch + CUDA       | ~1.5 GB                         |
-| **Total**                    | **~20.9 GB** (~3.1 GB headroom) |
+| DeltaNet recurrent state         | ~1.5 GB                         |
+| KV cache (turbo4/2, 65K ctx)    | ~0.6 GB                         |
+| compute scratch + CUDA          | ~1.5 GB                         |
+| **Total**                        | **~20.9 GB** (~3.1 GB headroom) |
 
 ---
 
@@ -112,27 +112,29 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
               ┌──────────────────────────────────┐
               │         Cloudflare Edge           │
               │  chat.jessfan.com                 │
+              │  mcp.jessfan.com                  │
               └──────────────┬────────────────────┘
                              │ Cloudflare Tunnel (outbound)
                              │ Cloudflare Access (auth required)
               ┌──────────────▼────────────────────┐
               │         Host Machine               │
-              │  cloudflared → llama-server :8080  │
-              └───────────────┬────────────────────┘
-                                │ llama-net (internal)
-                    ┌─────────────────────┐
-                    │ llama-server :8080  │
-                    │  │                   │
-                    │  └─ mcp-search-server :3100
-                    └─────────────────────┘
+              │  cloudflared                       │
+              └──────────────┬────────────────────┘
+                         ┌───┴───┐
+                   llama-net internal
+                         ┌───┴───┐
+              ┌─────────────┐ ┌─────────────────────┐
+              │ llama-server│ │ mcp-search-server   │
+              │ :8080       │ │ :3100               │
+              └─────────────┘ └─────────────────────┘
 ```
 
-> **Note:** `mcp-search-server` provides semantic web search with browser automation via MCP. Accessible at `http://mcp-search-server:3100` on the internal `llama-net` network.
+> **Note:** `mcp-search-server` provides semantic web search with browser automation via MCP. Accessible at `http://mcp-search-server:3100` on the internal `llama-net` network. The cloudflared tunnel also exposes `chat.jessfan.com` (llama-server) and `mcp.jessfan.com` (mcp-search-server) publicly.
 
 | Interface                   | URL / Command                 | Auth                                          |
 | --------------------------- | ----------------------------- | --------------------------------------------- |
 | **Local**                   | `http://localhost:8080/v1`    | None (requires `docker-compose.override.yml`) |
-| **API (Cloudflare Access)** | `https://chat.jessfan.com/v1` | Google OAuth / Email (see below)              |
+| **API (Cloudflare Access)** | `https://chat.jessfan.com/v1` | Google OAuth / Email (see below)             |
 
 ---
 
@@ -146,10 +148,9 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
 4. Select **Docker** as the platform
 5. Copy the generated token (looks like `eyJhIjoi...`)
 6. Paste it into your `.env` file as `CF_TUNNEL_TOKEN`
-7. Add a Public Hostname:
-   - **Subdomain**: `api` (or your preferred subdomain)
-   - **Domain**: `jessfan.com` (your Cloudflare domain)
-   - **Service**: `http://llama-server:8080`
+7. Add two Public Hostnames:
+   - **Subdomain**: `chat` | **Domain**: `jessfan.com` | **Service**: `http://llama-server:8080`
+   - **Subdomain**: `mcp` | **Domain**: `jessfan.com` | **Service**: `http://mcp-search-server:3100`
 8. Save the tunnel
 
 ### Step 2: Set up Cloudflare Access
@@ -157,12 +158,13 @@ Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http
 1. Go to **Zero Trust → Access → Applications**
 2. Click **Add an Application**
 3. Choose **Add a Cloud Access Application**
-4. Enter the same domain you set in the tunnel (e.g., `api.jessfan.com`)
+4. Enter `chat.jessfan.com`
 5. Choose an authentication method:
    - **Google OAuth** — uses Google credentials (recommended)
    - **Email/Password** — users get a one-time code via email
 6. Set **Who can access** to your email or "Anyone with the domain"
 7. Save the application
+8. Repeat steps 1-7 for `mcp.jessfan.com` (separate Access application, same auth method)
 
 ### Step 3: Configure your `.env` file
 
@@ -177,7 +179,7 @@ Edit `.env` and set at minimum:
 CF_TUNNEL_TOKEN=eyJhIjoi...
 
 # Cloudflare Access hostname
-CF_ACCESS_HOSTNAME=api.jessfan.com
+CF_ACCESS_HOSTNAME=chat.jessfan.com
 
 # Google OAuth credentials for Cloudflare Access
 CF_ACCESS_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
@@ -249,7 +251,7 @@ curl http://localhost:8080/health
 # Public API test (requires Cloudflare Access auth)
 curl -H "CF-Access-Client-Id: <id>" \
      -H "CF-Access-Client-Secret: <secret>" \
-     https://api.jessfan.com/v1/chat/completions \
+     https://chat.jessfan.com/v1/chat/completions \
      -H "Content-Type: application/json" \
      -d '{"model": "qwopus3.6-27b", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
@@ -260,7 +262,7 @@ curl -H "CF-Access-Client-Id: <id>" \
 import openai
 
 client = openai.OpenAI(
-    base_url="https://api.jessfan.com/v1",
+    base_url="https://chat.jessfan.com/v1",
     api_key="none",  # Cloudflare Access handles auth
     default_headers={
         "CF-Access-Client-Id": "<your-client-id>",
@@ -365,9 +367,9 @@ methodology, tracked metrics, resume/ETA behaviour, and reproducibility notes.
 | Service             | Purpose                                             |
 | ------------------- | --------------------------------------------------- |
 | `llama-server`      | llama.cpp inference server (port 8080)              |
-| `cloudflared`       | Cloudflare Tunnel — exposes llama-server publicly   |
+| `cloudflared`       | Cloudflare Tunnel — exposes llama-server and mcp-search-server publicly   |
 | `llama-convert`     | Model conversion tool (download, convert, quantize) |
-| `mcp-search-server` | Web search MCP tool (port 3100)                     |
+| `mcp-search-server` | MCP tool server: search, browser, documents, code (port 3100) |
 
 ---
 

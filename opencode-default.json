@@ -7,7 +7,7 @@
       "npm": "@ai-sdk/openai-compatible",
       "name": "llama.cpp Server",
       "options": {
-        "baseURL": "http://localhost:{env:LLAMA_PORT}/v1",
+        "baseURL": "https://chat.jessfan.com/v1",
         "apiKey": "{env:LLAMA_API_KEY}",
         "includeUsage": true
       },
@@ -44,7 +44,7 @@
   "mcp": {
     "search tools": {
       "type": "remote",
-      "url": "http://localhost:{env:MCP_SERVER_PORT}",
+      "url": "https://mcp.jessfan.com",
       "headers": {
         "Authorization": "Bearer {env:MCP_API_KEY}"
       },

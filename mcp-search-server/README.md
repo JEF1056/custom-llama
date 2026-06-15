@@ -55,7 +55,7 @@ Perform a web search and extract full content from top results.
 
 ## Browser Automation Tools
 
-The server provides 10 browser automation tools powered by Playwright for headless browser interaction:
+The server provides 13 browser automation tools powered by Playwright for headless browser interaction:
 
 ### `browser_navigate`
 Navigate to a URL.
@@ -68,14 +68,32 @@ Navigate to a URL.
 **Returns:** JSON string with page title, URL, and status.
 
 ### `browser_screenshot`
-Take a screenshot of the current page.
+Screenshot a URL or session page. Returns MCP ImageContent (base64 PNG) + resource URI.
+
+One-off: provide url=. Session: provide session_id=.
 
 **Parameters:**
+- `url` (string, optional): The URL to screenshot
 - `full_page` (boolean, optional): Whether to capture the full page
-- `path` (string, optional): The file path to save the screenshot. If None, saves to screenshot_dir.
 - `session_id` (string, optional): The session ID to use. If None, uses the default context.
 
 **Returns:** Screenshot as base64 PNG (MCP ImageContent) plus a resource URI for later access.
+
+### `browser_create_session`
+Create a browser session for multi-step interactions.
+
+Call first when performing multiple interactions on the same page. Pass the returned session_id to all subsequent browser tools. For one-off actions, use browser_navigate(url=...) directly.
+
+**Returns:** JSON with connection status and default page info.
+
+### `browser_get_interactables`
+List all interactable elements (links, buttons, inputs) with CSS selectors + labels.
+
+Use BEFORE clicking/filling to find the right selector. Requires session_id; use url= to navigate first.
+
+**Parameters:**
+- `url` (string, optional): The URL to load before getting interactables
+- `session_id` (string, optional): The session ID to use
 
 ### `browser_click`
 Click an element.
@@ -148,6 +166,14 @@ List active browser sessions.
 
 **Returns:** JSON string with list of session IDs and total count.
 
+### `browser_connect`
+Connect to a Chrome browser via CDP (Chrome DevTools Protocol).
+
+The endpoint MUST be supplied by the user. After connecting, all browser tools operate on the user's real Chrome — visible on their screen, with their logins, extensions, and bookmarks intact.
+
+**Parameters:**
+- `endpoint` (string): The CDP endpoint URL (ws://, wss://, http://, or https://)
+
 ## Example Workflow
 
 Here's an example workflow demonstrating how to use the browser automation tools together to interact with a web page:
@@ -199,8 +225,8 @@ The MCP search server should be called in the following scenarios:
 |----------|-------|---------|
 | **Expert Reasoning** | `advisor` | Call this whenever you're stuck, need a second opinion, or face a complex reasoning task. Use it liberally. |
 | **Search Tools** | `search`, `fetch`, `deep_search` | Quick information retrieval via HTTP requests and content extraction. |
-| **Browser Automation** | `browser_navigate`, `browser_screenshot`, `browser_click`, `browser_fill`, `browser_evaluate`, `browser_get_text`, `browser_get_content`, `browser_monitor`, `browser_close`, `browser_list_sessions` | Full browser interaction for JavaScript-heavy pages. |
-| **Data / Files** | `code_run`, `calculator`, `xlsx_create`, `xlsx_read`, `xlsx_edit`, `pptx_create`, `pptx_edit`, `pptx_read`, `pptx_slide_image`, `create_file`, `file_operations`, `http_request`, `time_now` | Computation, file I/O, spreadsheet/presentation generation, HTTP calls, time zones. |
+| **Browser Automation** | `browser_navigate`, `browser_screenshot`, `browser_click`, `browser_fill`, `browser_evaluate`, `browser_get_text`, `browser_get_content`, `browser_monitor`, `browser_close`, `browser_list_sessions`, `browser_create_session`, `browser_get_interactables`, `browser_connect` | Full browser interaction for JavaScript-heavy pages. |
+| **Data / Files** | `code_run`, `calculator`, `xlsx_create`, `xlsx_read`, `xlsx_edit`, `pptx_create`, `pptx_edit`, `pptx_read`, `pptx_slide_image`, `create_file`, `file_read`, `file_list`, `file_delete`, `file_upload`, `http_request`, `time_now` | Computation, file I/O, spreadsheet/presentation generation, HTTP calls, time zones. |
 
 ### Workflow: Search + Reasoning + Browser
 
@@ -336,16 +362,13 @@ Agent workflow:
 ### Quick Start
 
 1. Clone the repository and navigate to the project directory:
-   ```bash
-   cd ..
-   ```
+    ```bash
+    cd ..
+    ```
 
-2. Copy the environment file:
-   ```bash
-   cp mcp-search-server/.env.example mcp-search-server/.env
-   ```
+2. The server reads configuration from environment variables. Set them in the `docker-compose.yml` or your `.env` file.
 
-3. (Optional) Configure your search engine API keys in `mcp-search-server/.env`:
+3. (Optional) Configure your search engine API keys:
    ```bash
    # For Bing Search API
    SEARCH_API_KEY=your_bing_api_key
@@ -362,7 +385,7 @@ Agent workflow:
 
 ### MCP Client Configuration
 
-To connect your MCP client to this server, add the following configuration. The server uses SSE (Server-Sent Events) transport on `/sse` and `/mcp` endpoints:
+To connect your MCP client to this server, add the following configuration. The server uses SSE and Streamable HTTP transports on `/sse` and `/` endpoints:
 
 #### Docker Compose Configuration
 
@@ -400,20 +423,18 @@ To connect your MCP client to this server, add the following configuration. The 
 
 #### SSE Transport
 
-The server uses the SSE (Server-Sent Events) transport protocol. The endpoints are:
-- `GET /sse` - SSE endpoint for client to receive events (returns `text/event-stream`)
-- `POST /mcp` - MCP JSON-RPC message endpoint (accepts `application/json`)
-
-The server requires clients to accept both `application/json` and `text/event-stream` content types.
+The server uses both SSE and Streamable HTTP transport. The endpoints are:
+- `GET /sse` — SSE endpoint for receiving events (returns `text/event-stream`)
+- `POST /messages/` — SSE message endpoint (accepts `application/json`)
+- `POST /` — Streamable HTTP transport endpoint (accepts `application/json`)
 
 #### CORS Configuration
 
-The server supports CORS to allow MCP clients from different origins. Configure the following environment variables:
+The server supports CORS to allow MCP clients from different origins. Configure the following environment variable:
 
 | Environment Variable | Description | Default |
 |---------------------|-------------|---------|
-| `CORS_ALLOW_ALL` | Allow all CORS origins (use `*` for development) | `false` |
-| `CORS_ORIGINS` | Comma-separated list of allowed CORS origins | `http://localhost:8080,http://localhost:3000,http://localhost:2280` |
+| `MCP_CORS_ORIGINS` | Comma-separated list of allowed CORS origins (use `*` for all origins) | `http://localhost:8080,http://localhost:3000,http://localhost:2280` |
 
 **Default CORS Origins for MCP Clients:**
 
@@ -433,15 +454,14 @@ The server supports CORS to allow MCP clients from different origins. Configure 
 | `SEARCH_API_KEY` | API key for search engine (required for Bing/Google) | `` |
 | `GOOGLE_CSE_ID` | Google Custom Search Engine ID (required for Google) | `` |
 | `BROWSER_TIMEOUT` | Browser timeout in seconds | `30` |
-| `SCREENSHOT_DIR` | Directory to save screenshots | `/app/screenshots` |
+| `SCREENSHOT_DIR` | Directory to save screenshots | `/app/mcp-files/screenshots` |
 | `MAX_RESULTS` | Maximum number of search results | `10` |
 | `CACHE_ENABLED` | Enable caching (`true`/`false`) | `true` |
 | `CACHE_TTL` | Cache TTL in seconds | `3600` |
-| `REDIS_HOST` | Redis host (optional, for distributed caching) | `` |
-| `REDIS_PORT` | Redis port | `6379` |
-| `REDIS_PASSWORD` | Redis password | `` |
-| `CORS_ALLOW_ALL` | Allow all CORS origins (development only) | `false` |
-| `CORS_ORIGINS` | Comma-separated list of allowed CORS origins | `http://localhost:8080,http://localhost:3000,http://localhost:2280` |
+| `REDIS_HOST` | Redis host (defined but not currently used) | `` |
+| `REDIS_PORT` | Redis port (defined but not currently used) | `6379` |
+| `REDIS_PASSWORD` | Redis password (defined but not currently used) | `` |
+| `MCP_CORS_ORIGINS` | Comma-separated list of allowed CORS origins | `http://localhost:8080,http://localhost:3000,http://localhost:2280` |
 
 ## Project Structure
 
@@ -449,7 +469,6 @@ The server supports CORS to allow MCP clients from different origins. Configure 
 mcp-search-server/
 ├── Dockerfile              # Multi-stage Docker build
 ├── .dockerignore           # Docker ignore patterns
-├── .env.example            # Example environment variables
 ├── entrypoint.sh           # Container entrypoint script
 ├── requirements.txt        # Python dependencies
 ├── pyproject.toml          # Python project configuration
@@ -474,7 +493,20 @@ mcp-search-server/
 │       ├── browser.py      # Browser automation tools
 │       ├── search.py       # Search tool
 │       ├── fetch.py        # Fetch tool
-│       └── deep_search.py  # Deep search tool
+│       ├── deep_search.py  # Deep search tool
+│       ├── filetool.py     # create_file tool
+│       ├── file_ops.py     # file_read, file_list, file_delete, file_upload tools
+│       ├── http_request.py # http_request tool
+│       ├── calculator.py   # calculator tool
+│       ├── code_run.py     # code_run tool
+│       ├── time_now.py     # time_now tool
+│       ├── xlsx_create.py  # xlsx_create tool
+│       ├── xlsx_edit.py    # xlsx_edit tool
+│       ├── xlsx_read.py    # xlsx_read tool
+│       ├── pptx_create.py  # pptx_create tool
+│       ├── pptx_edit.py    # pptx_edit tool
+│       ├── pptx_read.py    # pptx_read tool
+│       └── pptx_slide_image.py  # pptx_slide_image tool
 └── tests/
     ├── __init__.py
     ├── test_advisor.py     # Advisor tool tests

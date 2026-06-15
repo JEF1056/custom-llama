@@ -37,7 +37,8 @@ _BLOCKED_IMPORTS = {
     "pipes", "sunau", "xdrlib", "aifc", "sndhdr", "wave",
 }
 
-# Timeout for code execution (seconds)
+# Timeout for code execution (seconds).
+# NOTE: timeout is global — concurrent calls share this setting.
 _CODE_EXEC_TIMEOUT = 30
 
 # Max output length
