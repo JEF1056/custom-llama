@@ -113,28 +113,54 @@ services:
       LLAMA_MODELS_AUTOLOAD: ${LLAMA_MODELS_AUTOLOAD:-on}
 
       # --- CUDA tuning (env vars read directly by ggml-cuda) ---
-      # GGML_CUDA_GRAPH_OPT disabled when SYNC_DEBUG image is deployed to ensure
-      # kernels run directly (not via graph replay) so per-kernel sync checks fire.
-      # Change back to 1 for production.
+      # NOTE: two DIFFERENT graph knobs exist, do not confuse them:
+      #   GGML_CUDA_DISABLE_GRAPHS — presence-only (getenv()!=nullptr). Setting it
+      #     to ANY value (even "0") turns CUDA graph capture/replay OFF entirely.
+      #     This is the real on/off switch (see below).
+      #   GGML_CUDA_GRAPH_OPT — atoi(env)==1 enables an extra multi-stream
+      #     concurrency OPTIMIZATION pass on top of graphs (forks the captured
+      #     graph across secondary CUDA streams). It does NOT enable/disable graph
+      #     replay; it is a no-op when graphs are already disabled. MUST be 0 for
+      #     this deployment: the multi-stream replay races with the out-of-band
+      #     checkpoint copy and causes the 160k illegal-memory-access crash. The
+      #     override sets it to "0"; graphs run single-stream and stay stable.
       GGML_CUDA_GRAPH_OPT: ${GGML_CUDA_GRAPH_OPT:-1}
       CUDA_SCALE_LAUNCH_QUEUES: ${CUDA_SCALE_LAUNCH_QUEUES:-2x}
+
+      # --- CUDA graphs on/off (qwopus 160k crash mitigation) ---
+      #
+      # Long-context spec-decode mutates the KV cache out-of-band (TriAttention
+      # physical compaction AND on-device checkpoint writes) while a CUDA graph is
+      # replayed, producing a deferred illegal memory access. BOTH triggers are
+      # now mitigated, so graphs are kept ENABLED:
+      #   - compaction: fixed in-source (ggml_backend_cuda_graph_clear after each
+      #     compaction, 686e3d44c).
+      #   - checkpoint write: caused by the multi-stream graph concurrency pass
+      #     racing the out-of-band copy; mitigated by GGML_CUDA_GRAPH_OPT=0
+      #     (single-stream graphs) set in the override. VALIDATED at 160k.
+      #
+      # FOOTGUN: this knob is presence-only, and the map form always emits the
+      # key, so a host value can NOT re-enable graphs (even =0 keeps them OFF).
+      # It is left COMMENTED so graphs stay ON. To force graphs OFF (fallback),
+      # uncomment the line below (in this file or the override).
+      # GGML_CUDA_DISABLE_GRAPHS: ${GGML_CUDA_DISABLE_GRAPHS:-1}
 
       # --- Crash localisation ---
       #
       # IMPORTANT: CUDA graph replay bypasses individual kernel launch sites, so
       # per-kernel sync checks (GGML_CUDA_SYNC_DEBUG) and CUDA_LAUNCH_BLOCKING will
       # NOT correctly attribute the failing kernel unless CUDA graphs are disabled.
-      # When debugging: set GGML_CUDA_GRAPH_OPT=0 to disable graph replay.
+      # When debugging, ensure GGML_CUDA_DISABLE_GRAPHS is set (it is, above).
       #
       # Option A: CUDA_LAUNCH_BLOCKING (no rebuild needed, ~3-10x slower)
-      #   Uncomment below, set GGML_CUDA_GRAPH_OPT=0:
+      #   Uncomment below (graphs must already be disabled via the knob above):
       #   CUDA_LAUNCH_BLOCKING: 1
-      #   GGML_CUDA_GRAPH_OPT: 0
       CUDA_LAUNCH_BLOCKING: ${CUDA_LAUNCH_BLOCKING:-0}
       #
       # Option B: GGML_CUDA_SYNC_DEBUG build flag (rebuild with CUDA_SYNC_DEBUG=1)
       #   Checks are compiled in unconditionally — always active in this image.
-      #   Also requires GGML_CUDA_GRAPH_OPT=0 for accurate attribution (set above).
+      #   Also requires graphs disabled (GGML_CUDA_DISABLE_GRAPHS, above) for
+      #   accurate attribution.
       # GGML_CUDA_SYNC_DEBUG is a compile-time flag — no env var needed
 
       # All other configuration (ctx, KV cache, sampling, speculative decoding,

@@ -263,10 +263,14 @@ def _measure_parallel(payload_path: Path, concurrency: int) -> dict:
     per-stream tg list — the metric that matters for multi-slot serving.
     """
     results: list[dict] = [None] * concurrency  # type: ignore
+    errors: list[BaseException | None] = [None] * concurrency
     threads = []
 
     def worker(i: int):
-        results[i] = _stream_one(payload_path)
+        try:
+            results[i] = _stream_one(payload_path)
+        except BaseException as e:  # noqa: BLE001 -- surfaced from main thread below
+            errors[i] = e
 
     for i in range(concurrency):
         t = threading.Thread(target=worker, args=(i,))
@@ -274,6 +278,16 @@ def _measure_parallel(payload_path: Path, concurrency: int) -> dict:
         threads.append(t)
     for t in threads:
         t.join()
+
+    failed = [e for e in errors if e is not None]
+    if failed:
+        # A worker thread's exception is otherwise swallowed (it would leave a
+        # None in results and crash later with a cryptic TypeError, losing all
+        # sweep progress). Re-raise as RuntimeError so run_config's handler
+        # records this config as non-viable (tg=0) and the sweep continues.
+        raise RuntimeError(
+            f"{len(failed)}/{concurrency} parallel streams failed: {failed[0]!r}"
+        ) from failed[0]
 
     tgs = [r["tg"] for r in results]
     return {
