@@ -139,6 +139,7 @@ The MCP search server should be called in the following scenarios:
 | **Search Tools** | `search`, `fetch`, `deep_search` | Quick information retrieval via HTTP requests and content extraction. |
 | **Browser Automation** | `browser_run`, `browser_screenshot`, `browser_close` | Programmatic Playwright control for JavaScript-heavy pages. |
 | **Data / Compute** | `code_run`, `time_now` | Sandboxed Python computation and time/timezone conversion. |
+| **Output Paging** | `read_output` | Read the remainder of a large result that `fetch` / `deep_search` / `code_run` / `browser_run` only previewed. Those tools return a `*_handle` plus `*_next_offset`; pass them to `read_output` to read the full content in windows (like reading a file by line range). |
 
 ### Workflow: Search + Reasoning + Browser
 
@@ -396,6 +397,7 @@ mcp-search-server/
 │       ├── fetch.py        # Fetch tool
 │       ├── deep_search.py  # Deep search tool
 │       ├── code_run.py     # code_run tool
+│       ├── read_output.py  # read_output (large-output pagination)
 │       └── time_now.py     # time_now tool
 └── tests/
     ├── __init__.py

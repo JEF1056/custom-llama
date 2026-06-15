@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     FETCH_TOKEN_BUDGET: int = Field(default=4000, description="Token budget for fetch tool content")
     CODE_BLOCK_MAX_CHARS: int = Field(default=2000, description="Max characters per code block in fetch tool output")
 
+    # Output store / pagination settings (read_output tool)
+    OUTPUT_STORE_TTL: int = Field(default=1800, description="Seconds to retain large tool outputs for paginated reads via read_output")
+    OUTPUT_STORE_MAX_ENTRIES: int = Field(default=128, description="Max stored large outputs before LRU eviction")
+    OUTPUT_PREVIEW_CHARS: int = Field(default=4000, description="Default inline preview size before an output is paginated")
+    READ_OUTPUT_CHUNK_CHARS: int = Field(default=16000, description="Default characters returned per read_output call")
+
     # File output settings
     FILE_OUTPUT_DIR: str = Field(default="/app/mcp-files", description="Directory for files created by create_file tool")
     FILE_BASE_URL: str = Field(default="https://mcp.jessfan.com", description="Base URL for downloading files from the MCP server")

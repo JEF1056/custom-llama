@@ -22,6 +22,7 @@ from src.tools.browser import browser_handler
 from src.tools.code_run import code_run_handler
 from src.tools.deep_search import deep_search_handler
 from src.tools.fetch import fetch_handler
+from src.tools.read_output import read_output_handler
 from src.tools.search import search_handler
 from src.tools.time_now import time_now_handler
 
@@ -138,7 +139,11 @@ def create_server() -> FastMCP:
             "Playwright Python (page/context in scope). Use a session_id to keep "
             "state across calls; browser_screenshot for vision; browser_close to free it.\n"
             "- code_run(code): sandboxed Python for math, data, parsing.\n"
-            "- time_now: current time / timezone conversion (default PST).\n\n"
+            "- time_now: current time / timezone conversion (default PST).\n"
+            "- read_output(handle, offset): fetch/deep_search/code_run/browser_run "
+            "preview long output and return a *_handle. Call read_output with that "
+            "handle (and the *_next_offset) to read the rest in windows — never "
+            "assume a truncated result is complete.\n\n"
             "Typical chain: advisor → search/fetch → code_run → answer."
         ),
     )
@@ -158,6 +163,7 @@ def register_tools(server: FastMCP) -> None:
     browser_handler(server)
     code_run_handler(server)
     time_now_handler(server)
+    read_output_handler(server)
 
 
 def register_resources(server: FastMCP) -> None:

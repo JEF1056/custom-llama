@@ -9,6 +9,7 @@ from mcp.server import FastMCP
 from src.browser.automation import browser_manager
 from src.config import settings
 from src.extractor.content import ContentExtractor
+from src.output_store import output_store
 from src.search.engines import get_search_engine
 from src.search.models import SearchResponse, SearchResult
 
@@ -25,7 +26,9 @@ def deep_search_handler(server: FastMCP) -> None:
         Slower than search() but returns full text — use when snippets aren't enough.
         max_results: controls search pool; content extracted from top 3 only.
         For interactive browsing, use browser_run(code, session_id).
-        Returns: {results: [{title, url, snippet, content, content_length}]}
+        Each result is previewed; oversized content exposes a `content_handle` —
+        call read_output(handle=...) to read the rest.
+        Returns: {results: [...], deep_results: [{title, url, snippet, content, content_length, content_handle?}]}
         """
         engine = get_search_engine()
         search_results = await engine.search(query, max_results)
@@ -49,9 +52,16 @@ def deep_search_handler(server: FastMCP) -> None:
                 html = await browser_manager.get_content(page)
 
                 extractor = ContentExtractor()
-                content = extractor.extract(html)
-                enriched["content"] = content.get("content", "")[:2000]  # Limit content length
-                enriched["content_length"] = len(content.get("content", ""))
+                content = extractor.extract(html, truncate="never")
+                full_text = content.get("content", "")
+                enriched["content_length"] = len(full_text)
+                output_store.attach(
+                    enriched,
+                    "content",
+                    full_text,
+                    source=f"deep_search: {result.get('url', '')}",
+                    inline_chars=2000,
+                )
 
                 await page.close()
             except Exception as e:

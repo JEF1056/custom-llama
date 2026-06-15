@@ -11,6 +11,7 @@ from typing import Any
 from mcp.server import FastMCP
 
 from src.config import settings
+from src.output_store import output_store
 
 logger = logging.getLogger(__name__)
 
@@ -211,19 +212,12 @@ def _run_code_sandbox(code: str) -> dict[str, Any]:
             "exit_code": 1,
         }
 
-    # Truncate output if too large
-    stdout = result.get("stdout", "")
-    stderr = result.get("stderr", "")
-    if len(stdout) > _MAX_OUTPUT_LENGTH:
-        stdout = stdout[:_MAX_OUTPUT_LENGTH] + "\n[output truncated]"
-    if len(stderr) > _MAX_OUTPUT_LENGTH:
-        stderr = stderr[:_MAX_OUTPUT_LENGTH] + "\n[output truncated]"
-
+    # Return full stdout/stderr; the handler paginates oversized output via read_output.
     return {
         "status": "success",
         "exit_code": 0,
-        "stdout": stdout,
-        "stderr": stderr,
+        "stdout": result.get("stdout", ""),
+        "stderr": result.get("stderr", ""),
         "result": result.get("result"),
     }
 
@@ -243,7 +237,9 @@ def code_run_handler(server: FastMCP) -> None:
         Blocked: os, sys, subprocess, shutil, socket, http, urllib, requests,
         threading, multiprocessing, signal, mmap.
         Use print() to return values; last expression result is also captured.
-        Returns: {status, stdout, stderr, result}
+        Large stdout/stderr is previewed with a `stdout_handle` / `stderr_handle`;
+        call read_output(handle=...) to read the rest.
+        Returns: {status, stdout, stderr, result, stdout_handle?, stderr_handle?}
         """
         global _CODE_EXEC_TIMEOUT
         if timeout:
@@ -251,6 +247,12 @@ def code_run_handler(server: FastMCP) -> None:
 
         try:
             result = _run_code_sandbox(code)
+            if result.get("status") == "success":
+                response: dict[str, Any] = {"status": "success", "exit_code": result.get("exit_code", 0)}
+                output_store.attach(response, "stdout", result.get("stdout", "") or "", source="code_run stdout")
+                output_store.attach(response, "stderr", result.get("stderr", "") or "", source="code_run stderr")
+                response["result"] = result.get("result")
+                return json.dumps(response, indent=2, ensure_ascii=False)
             return json.dumps(result, indent=2, ensure_ascii=False)
         except Exception as e:
             logger.error("Code run error: %s", str(e))

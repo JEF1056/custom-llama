@@ -21,6 +21,7 @@ from mcp.types import ImageContent, TextContent
 
 from src.browser.automation import get_browser_manager as _get_browser_manager
 from src.config import settings
+from src.output_store import output_store
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,8 @@ def browser_handler(server: FastMCP) -> None:
         SECURITY: code runs in-process (full Python/host access), gated behind the
         server's API key. Intended for trusted local use.
 
+        Large stdout/string results are previewed with a `stdout_handle` /
+        `result_handle`; call read_output(handle=...) to read the rest.
         Returns: {status, result, stdout, url, title, interactables, session_id}
         """
         page = None
@@ -153,22 +156,26 @@ def browser_handler(server: FastMCP) -> None:
             except Exception:
                 result_repr = str(result)
 
-            stdout = buf.getvalue()[:_MAX_OUTPUT_CHARS]
+            stdout_full = buf.getvalue()
             try:
                 url, title = page.url, await page.title()
             except Exception:
                 url, title = None, None
             summary = await _interactables_summary(page)
 
-            return json.dumps({
+            response = {
                 "status": "success",
                 "result": result_repr,
-                "stdout": stdout,
                 "url": url,
                 "title": title,
                 "interactables": summary,
                 "session_id": sid,
-            }, indent=2, default=str)[:_MAX_OUTPUT_CHARS]
+            }
+            # Paginate oversized stdout / string results via read_output.
+            output_store.attach(response, "stdout", stdout_full, source="browser_run stdout")
+            if isinstance(result_repr, str) and len(result_repr) > settings.OUTPUT_PREVIEW_CHARS:
+                output_store.attach(response, "result", result_repr, source="browser_run result")
+            return json.dumps(response, indent=2, default=str)
         except Exception as e:
             logger.error("browser_run error: %s", str(e))
             return json.dumps({"status": "error", "error": str(e), "session_id": sid})
