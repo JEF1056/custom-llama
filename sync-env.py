@@ -14,23 +14,16 @@ Root .env behaviour:
 opencode.json is generated from opencode-default.json by substituting:
   {env:VAR}    → value from root .env
   {ini:SEC.KEY} → value from config/models.ini
-  "{ctx:MODEL}" → model context length (live from server if reachable, else
-                  ctx-size from models.ini, else fit-ctx floor, else 200000),
-                  emitted as bare integer (used only in the no-server fallback)
+  "{ctx:MODEL}" → model context length (ctx-size from models.ini, else fit-ctx
+                  floor, else 200000), emitted as bare integer
 
-When the server is reachable (--server-url), the provider "models" block in
-opencode.json is built dynamically from GET /v1/models: the set of model IDs
-comes from the server, n_ctx is probed via load/unload for each model, and
-rich per-model config (modalities, reasoning, tool_call) is merged from the
-template's existing entries by ID.  When the server is unreachable the static
-template is used as-is with {ctx:...} substitution from models.ini.
+The provider "models" block in opencode.json comes from the static template,
+with {ctx:...} substitution from models.ini.
 
 Usage:
     python sync-env.py                              # sync root .env
     python sync-env.py --dry-run                    # preview changes without writing
     python sync-env.py --regenerate                 # force-regenerate token variables
-    python sync-env.py --server-url http://host:8080  # override server URL
-    python sync-env.py --no-server                  # skip server probe entirely
 """
 import argparse
 import configparser
@@ -38,8 +31,6 @@ import json as _json
 import re
 import secrets
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 # ── Secret variables (never overwritten after initial write in root .env) ──────
@@ -222,148 +213,18 @@ def sync_target(
     return True
 
 
-# ── Server context-length discovery ───────────────────────────────────────────
-
-def _http_json(url: str, method: str = "GET", body: dict | None = None,
-               api_key: str = "", timeout: float = 10.0) -> dict | list | None:
-    """Minimal HTTP helper — returns parsed JSON or None on error."""
-    data = _json.dumps(body).encode() if body else None
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return _json.loads(resp.read().decode())
-    except Exception:
-        return None
-
-
-def _server_reachable(base_url: str, api_key: str) -> bool:
-    result = _http_json(f"{base_url}/health", timeout=3.0, api_key=api_key)
-    return result is not None
-
-
-def _v1_models_ctx(base_url: str, api_key: str, model_names: list[str]) -> dict[str, int]:
-    """Read n_ctx for loaded models from GET /v1/models (non-destructive).
-
-    Returns a dict of {name: n_ctx} only for models that are currently loaded
-    and have n_ctx in their meta field.
-    """
-    results: dict[str, int] = {}
-    data = _http_json(f"{base_url}/v1/models", api_key=api_key)
-    if not isinstance(data, dict):
-        return results
-    for m in data.get("data", []):
-        name = m.get("id", "")
-        if name not in model_names:
-            continue
-        meta = m.get("meta", {})
-        n_ctx = meta.get("n_ctx")
-        if isinstance(n_ctx, int) and n_ctx > 0:
-            results[name] = n_ctx
-    return results
-
-
-def fetch_model_context_lengths(
-    base_url: str,
-    api_key: str,
-    model_names: list[str],
-) -> dict[str, int]:
-    """Collect n_ctx for every model, using load/unload to cycle through them.
-
-    Strategy:
-      1. GET /v1/models — pick up n_ctx for any already-loaded models (free).
-      2. For each remaining model: unload the current model, load the target,
-         re-read /v1/models for n_ctx, then restore the original model at the end.
-
-    The server only supports one loaded model at a time, so we serialise:
-    unload → load → read → (next) → restore original.
-
-    Models that fail to load are skipped; resolve_context_lengths() fills them
-    in from INI values.
-    """
-    results: dict[str, int] = {}
-    base_url = base_url.rstrip("/")
-
-    # ── Step 1: read already-loaded models (non-destructive) ──────────────────
-    already = _v1_models_ctx(base_url, api_key, model_names)
-    for name, n_ctx in already.items():
-        results[name] = n_ctx
-        print(f"  [ctx]     ✓ '{name}' n_ctx = {n_ctx:,} (already loaded)")
-
-    remaining = [n for n in model_names if n not in results]
-    if not remaining:
-        return results
-
-    # ── Step 2: find currently-loaded model so we can restore it afterward ────
-    data = _http_json(f"{base_url}/v1/models", api_key=api_key)
-    loaded_names: list[str] = []
-    if isinstance(data, dict):
-        for m in data.get("data", []):
-            meta = m.get("meta", {})
-            status = meta.get("status", m.get("status", {}).get("value", ""))
-            if status in ("loaded", "ready", "running"):
-                loaded_names.append(m.get("id", ""))
-
-    # ── Step 3: unload current model(s), then cycle through remaining ─────────
-    for loaded in loaded_names:
-        print(f"  [ctx]     Unloading '{loaded}' to free slot …")
-        _http_json(
-            f"{base_url}/models/{loaded}/unload",
-            method="POST", body={}, api_key=api_key, timeout=30.0,
-        )
-
-    for name in remaining:
-        print(f"  [ctx]     Loading '{name}' …", end="", flush=True)
-        load_resp = _http_json(
-            f"{base_url}/models/{name}/load",
-            method="POST", body={}, api_key=api_key, timeout=120.0,
-        )
-        if load_resp is None:
-            print(" ✗ load failed — skipping")
-            continue
-
-        ctx_now = _v1_models_ctx(base_url, api_key, [name])
-        n_ctx = ctx_now.get(name)
-
-        _http_json(
-            f"{base_url}/models/{name}/unload",
-            method="POST", body={}, api_key=api_key, timeout=30.0,
-        )
-
-        if isinstance(n_ctx, int) and n_ctx > 0:
-            results[name] = n_ctx
-            print(f" ✓ n_ctx = {n_ctx:,}")
-        else:
-            print(" ⊘ n_ctx not in /v1/models — will use INI fallback")
-
-    # ── Step 4: restore originally-loaded models ──────────────────────────────
-    for loaded in loaded_names:
-        print(f"  [ctx]     Restoring '{loaded}' …", end="", flush=True)
-        restore = _http_json(
-            f"{base_url}/models/{loaded}/load",
-            method="POST", body={}, api_key=api_key, timeout=120.0,
-        )
-        print(" ✓" if restore is not None else " ✗ restore failed")
-
-    return results
-
-
 # ── Context length resolution ──────────────────────────────────────────────────
 
 def resolve_context_lengths(
     ini: configparser.ConfigParser,
     model_names: list[str],
-    server_ctx: dict[str, int],
 ) -> dict[str, int]:
     """Return {model: context_length} for each model name.
 
     Priority:
-      1. Live value from server (server_ctx)
-      2. ctx-size from model's INI section (if set explicitly)
-      3. fit-ctx from [*] global defaults (the minimum fit floor)
-      4. 200000 as hard fallback
+      1. ctx-size from model's INI section (if set explicitly)
+      2. fit-ctx from [*] global defaults (the minimum fit floor)
+      3. 200000 as hard fallback
     """
     # fit-ctx from [*] (may be commented out; fallback to 200000)
     fit_ctx_floor = 200_000
@@ -375,10 +236,6 @@ def resolve_context_lengths(
 
     results: dict[str, int] = {}
     for name in model_names:
-        if name in server_ctx:
-            results[name] = server_ctx[name]
-            continue
-
         # Try explicit ctx-size in the model section
         if ini.has_option(name, "ctx-size"):
             try:
@@ -405,8 +262,6 @@ def main() -> None:
     parser.add_argument("--regenerate",   action="store_true", help="Force-regenerate auto-generated tokens")
     parser.add_argument("--default-file", default=".env.default", help="Path to the root .env.default")
     parser.add_argument("--env-file",     default=".env",         help="Path to the root .env output")
-    parser.add_argument("--server-url",   default="",            help="llama-server base URL (default: read from .env LLAMA_PORT)")
-    parser.add_argument("--no-server",    action="store_true",    help="Skip server probe; use INI fallbacks for context lengths")
     parser.add_argument("--clear-kv-cache", action="store_true", help="Delete all saved KV cache slot files from models/slots/")
     args = parser.parse_args()
 
@@ -445,7 +300,7 @@ def main() -> None:
         dry_run=args.dry_run,
     )
 
-    # ── 3. Resolve context lengths (server probe or INI fallback) ─────────────
+    # ── 3. Resolve context lengths (from models.ini) ──────────────────────────
     ini = parse_models_ini(Path("config/models.ini"))
 
     # ── 2b. Slot save-path directories ────────────────────────────────────────
@@ -461,30 +316,7 @@ def main() -> None:
         if s not in ("__preamble__", "*")
     ]
 
-    server_ctx: dict[str, int] = {}
-    if not args.no_server:
-        # Determine server URL
-        env_vals = parse_env(root_env_path) if root_env_path.exists() else {}
-        if args.server_url:
-            base_url = args.server_url.rstrip("/")
-        else:
-            port = env_vals.get("LLAMA_PORT", "8080")
-            base_url = f"http://localhost:{port}"
-
-        api_key = env_vals.get("LLAMA_API_KEY", "")
-
-        print(f"\n  [ctx]     Probing server at {base_url} …")
-        if _server_reachable(base_url, api_key):
-            server_ctx = fetch_model_context_lengths(base_url, api_key, model_names)
-        else:
-            print(f"  [ctx]     Server not reachable — using INI fallbacks")
-    else:
-        print("\n  [ctx]     --no-server: using INI fallbacks for context lengths")
-
-    ctx_lengths = resolve_context_lengths(ini, model_names, server_ctx)
-
-    # server_model_ids: IDs discovered from /v1/models (None when server skipped/unreachable)
-    server_model_ids: list[str] | None = list(server_ctx.keys()) if server_ctx else None
+    ctx_lengths = resolve_context_lengths(ini, model_names)
 
     # ── 4. opencode.json ──────────────────────────────────────────────────────
     sync_opencode(
@@ -494,7 +326,6 @@ def main() -> None:
         dry_run=args.dry_run,
         models_ini_path=Path("config/models.ini"),
         ctx_lengths=ctx_lengths,
-        server_model_ids=server_model_ids,
     )
 
 
@@ -517,7 +348,6 @@ def sync_opencode(
     dry_run: bool,
     models_ini_path: Path | None = None,
     ctx_lengths: dict[str, int] | None = None,
-    server_model_ids: list[str] | None = None,
 ) -> None:
     """Substitute placeholders in template → output.
 
@@ -525,14 +355,9 @@ def sync_opencode(
     "{ini:SEC.KEY}"   → numeric value from models_ini_path (surrounding quotes stripped,
                         bare integer emitted so JSON stays valid)
     "{ctx:MODEL}"     → resolved context length for MODEL (bare integer, no quotes)
-                        (used only when server_model_ids is None / server unreachable)
 
-    When server_model_ids is provided, the provider "models" block is rebuilt
-    dynamically: one entry per model ID returned by the server.  Rich per-model
-    config (modalities, reasoning, tool_call, output limit) is taken from the
-    template's existing model entries by ID; unknown IDs get a generic fallback.
-    n_ctx for each model comes from ctx_lengths.  The template's static model
-    entries are used as the no-server fallback (with {ctx:...} substitution).
+    The provider "models" block is taken from the static template, with
+    {ctx:...} substitution from models.ini.
     """
     if not template.exists():
         return
@@ -578,58 +403,6 @@ def sync_opencode(
     result = re.sub(r"\{env:([^}]+)\}", env_replacer, text)
     result = re.sub(r'"\{ini:([^}]+)\}"', ini_replacer, result)
     result = re.sub(r'"\{ctx:([^}]+)\}"', ctx_replacer, result)
-
-    # ── Dynamic models block from server ──────────────────────────────────────
-    if server_model_ids:
-        try:
-            doc = _json.loads(result)
-        except _json.JSONDecodeError as e:
-            print(f"  [opencode] Warning — could not parse template as JSON ({e}); skipping dynamic models")
-        else:
-            # Find the first provider that has a "models" dict (the llama.cpp provider)
-            provider_updated = False
-            for prov_key, prov_val in doc.get("provider", {}).items():
-                if not isinstance(prov_val.get("models"), dict):
-                    continue
-
-                template_models: dict = prov_val["models"]
-
-                # Generic fallback for IDs not in the template
-                _generic: dict = {
-                    "limit": {"context": 200000, "output": 32000},
-                    "modalities": {"input": ["text"], "output": ["text"]},
-                    "reasoning": False,
-                    "tool_call": True,
-                }
-
-                new_models: dict = {}
-                for model_id in server_model_ids:
-                    entry = dict(template_models.get(model_id, _generic))
-                    # Always set name to model_id if missing
-                    entry.setdefault("name", model_id)
-                    # Inject live n_ctx (deep-copy limit so we don't mutate template)
-                    if model_id in ctx:
-                        limit = dict(entry.get("limit", {}))
-                        limit["context"] = ctx[model_id]
-                        entry["limit"] = limit
-                    new_models[model_id] = entry
-
-                prov_val["models"] = new_models
-                provider_updated = True
-
-                # Validate top-level default model is in the new list
-                default_model_full = doc.get("model", "")
-                default_model_id = default_model_full.split("/", 1)[-1] if "/" in default_model_full else default_model_full
-                if default_model_id and default_model_id not in new_models:
-                    print(f"  [opencode] Warning — default model '{default_model_full}' not in server model list")
-
-                print(f"  [opencode] Built models block from /v1/models: {', '.join(server_model_ids)}")
-                break  # only process the first matching provider
-
-            if not provider_updated:
-                print("  [opencode] Warning — no provider with a 'models' dict found; using template as-is")
-
-            result = _json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
 
     if dry_run:
         print(f"  [opencode] Would write {output}")
