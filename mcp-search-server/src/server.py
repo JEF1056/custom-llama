@@ -17,24 +17,13 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from src.config import settings
+from src.tools.advisor import advisor_handler
 from src.tools.browser import browser_handler
-from src.tools.calculator import calculator_handler
 from src.tools.code_run import code_run_handler
 from src.tools.deep_search import deep_search_handler
 from src.tools.fetch import fetch_handler
-from src.tools.file_ops import file_operations_handler
-from src.tools.filetool import create_file_handler
-from src.tools.http_request import http_request_handler
-from src.tools.pptx_create import pptx_create_handler
-from src.tools.pptx_edit import pptx_edit_handler
-from src.tools.pptx_read import pptx_read_handler
-from src.tools.pptx_slide_image import pptx_slide_image_handler
-from src.tools.advisor import advisor_handler
 from src.tools.search import search_handler
 from src.tools.time_now import time_now_handler
-from src.tools.xlsx_create import xlsx_create_handler
-from src.tools.xlsx_edit import xlsx_edit_handler
-from src.tools.xlsx_read import xlsx_read_handler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -134,27 +123,23 @@ def create_server() -> FastMCP:
         streamable_http_path="/",
         stateless_http=True,
         instructions=(
-            "Web search, browser automation, HTTP, code execution, files, math, time, "
-            "Office documents, and an advisor model for expert reasoning.\n\n"
-            "Use when: agent needs live web data, URL fetching, API calls, Python computation, "
-            "file I/O, math, timezone conversion, spreadsheet/presentation generation, "
-            "or expert reasoning from the local LLM.\n\n"
-            "ADVISOR TOOL — USE FREQUENTLY: The advisor tool calls the local LLM (qwopus3.6-27b) "
-            "for expert reasoning. Call it liberally — whenever you're stuck, need a second "
-            "opinion, facing a complex multi-step problem, or unsure about your approach. "
-            "Pass detailed context and a clear question. This is your most important tool "
-            "for reasoning. Use it at the start of complex tasks and whenever you hit a dead end.\n\n"
-            "For complex reasoning tasks, use the advisor tool to call the local LLM (qwopus3.6-27b) "
-            "for expert analysis. Pass context and question clearly.\n\n"
-            "Prefer browser_* for JS-heavy pages; http_request for REST APIs.\n\n"
-            "Documents (xlsx/pptx): build iteratively — create minimal → read to verify → "
-            "edit incrementally. Use pptx_slide_image to visually verify slides.\n\n"
-            "Common chains:\n"
-            "- advisor(context, question) → search/fetch → code_run → create_file/xlsx_create\n"
-            "- advisor(context, question) → http_request → code_run → xlsx_create → xlsx_read\n"
-            "- pptx_create → pptx_edit → pptx_slide_image\n"
-            "- calculator (symbolic) or code_run (numeric) for math\n"
-            "- advisor(context, question) for expert reasoning at any point"
+            "Tools: web search, browser automation, page fetch, Python execution, time, "
+            "and an advisor LLM for reasoning.\n\n"
+            "USE TOOLS PROACTIVELY. Do not answer from memory when a tool can verify. "
+            "Search/fetch before stating any fact that may be outdated. Run code instead "
+            "of doing math in your head. Ask the advisor when reasoning gets hard. "
+            "Chain tools freely; a wrong guess costs more than a tool call.\n\n"
+            "Tool guide:\n"
+            "- advisor(context, question): local reasoning LLM. Call early on complex tasks "
+            "and whenever stuck or unsure.\n"
+            "- search(query): fast titles+snippets. fetch(url): full page text. "
+            "deep_search(query): search + extract top results in one call.\n"
+            "- browser_run(code, session_id): drive a real browser with async "
+            "Playwright Python (page/context in scope). Use a session_id to keep "
+            "state across calls; browser_screenshot for vision; browser_close to free it.\n"
+            "- code_run(code): sandboxed Python for math, data, parsing.\n"
+            "- time_now: current time / timezone conversion (default PST).\n\n"
+            "Typical chain: advisor → search/fetch → code_run → answer."
         ),
     )
     return server
@@ -171,26 +156,15 @@ def register_tools(server: FastMCP) -> None:
     fetch_handler(server)
     deep_search_handler(server)
     browser_handler(server)
-    create_file_handler(server)
-    http_request_handler(server)
     code_run_handler(server)
-    file_operations_handler(server)
     time_now_handler(server)
-    calculator_handler(server)
-    xlsx_create_handler(server)
-    xlsx_read_handler(server)
-    xlsx_edit_handler(server)
-    pptx_create_handler(server)
-    pptx_read_handler(server)
-    pptx_edit_handler(server)
-    pptx_slide_image_handler(server)
 
 
 def register_resources(server: FastMCP) -> None:
     """Register MCP Resources and ResourceTemplates.
 
-    Registers a resource template for reading files created by the create_file
-    tool or screenshots saved by browser_screenshot / browser_monitor.
+    Registers a resource template for reading files in the output directory
+    (e.g. screenshots saved by browser_screenshot).
     The LLM can read these via the resources/read RPC call.
     """
 
@@ -254,8 +228,8 @@ def _list_files_metadata() -> list[dict]:
 async def serve_file(request: Request) -> Response:
     """Serve a file from the output directory.
 
-    Exposes files created by MCP tools (create_file, xlsx_create, pptx_create, etc.)
-    as downloadable resources via the FILE_BASE_URL.
+    Exposes files produced by MCP tools (e.g. browser_screenshot) as
+    downloadable resources via the FILE_BASE_URL.
     """
     filename = request.path_params["filename"]
     file_path = Path(settings.FILE_OUTPUT_DIR) / filename

@@ -18,11 +18,9 @@ def _build_messages(context: str, question: str) -> list[dict[str, Any]]:
         {
             "role": "system",
             "content": (
-                "You are an expert advisor with deep reasoning capabilities. "
-                "Your role is to analyze the user's context and question carefully, "
-                "then provide thorough, well-reasoned guidance. "
-                "Be precise, thorough, and helpful. If the context is insufficient, "
-                "state what additional information would help."
+                "You are an expert advisor. Reason carefully through the context and "
+                "question, then give precise, actionable guidance. If context is "
+                "insufficient, state exactly what is missing."
             ),
         },
         {
@@ -101,19 +99,15 @@ def advisor_handler(server: FastMCP) -> None:
         question: str,
         model: str | None = None,
     ) -> str:
-        """Ask the advisor model for expert guidance on a problem.
+        """Ask the advisor LLM for expert reasoning. Use early and often.
 
-        This tool calls your local LLM server (qwopus3.6-27b by default) to get
-        expert reasoning on complex problems. Use it when you need deeper analysis
-        than your primary model can provide.
+        Calls a strong local model for deeper analysis than your own. Reach for it
+        when stuck, planning a multi-step task, or unsure of an approach.
 
-        Args:
-            context: The problem context or background information (as much detail as needed).
-            question: The specific question or task to ask the advisor.
-            model: The model to use (overrides config default: qwopus3.6-27b).
-
-        Returns:
-            The advisor's response with analysis and guidance.
+        context: all relevant background (be generous).
+        question: the specific question or task.
+        model: optional override of the default model.
+        Returns: {status, model, response}
         """
         try:
             result = await call_advisor(context, question, model)

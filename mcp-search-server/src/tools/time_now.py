@@ -1,150 +1,101 @@
-"""Time and date tool for MCP server."""
+"""Current time/date tool for MCP server."""
 
 import json
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-from typing import Any
 
 from mcp.server import FastMCP
 
 logger = logging.getLogger(__name__)
 
-# Common timezone aliases
+# Default timezone when the caller doesn't specify one.
+_DEFAULT_TZ = "America/Los_Angeles"  # Pacific (PST/PDT)
+
+# Common timezone aliases → IANA names. DST is handled automatically.
 _TIMEZONE_ALIASES = {
     "utc": "UTC",
     "gmt": "UTC",
-    "est": "America/New_York",
-    "edt": "America/New_York",
-    "cst": "America/Chicago",
-    "cdt": "America/Chicago",
-    "mst": "America/Denver",
-    "mdt": "America/Denver",
     "pst": "America/Los_Angeles",
     "pdt": "America/Los_Angeles",
-    "gmt": "UTC",
+    "pt": "America/Los_Angeles",
+    "mst": "America/Denver",
+    "mdt": "America/Denver",
+    "mt": "America/Denver",
+    "cst": "America/Chicago",
+    "cdt": "America/Chicago",
+    "ct": "America/Chicago",
+    "est": "America/New_York",
+    "edt": "America/New_York",
+    "et": "America/New_York",
     "cet": "Europe/Berlin",
     "cest": "Europe/Berlin",
+    "bst": "Europe/London",
     "ist": "Asia/Kolkata",
-    "cst_china": "Asia/Shanghai",
     "jst": "Asia/Tokyo",
     "kst": "Asia/Seoul",
     "aest": "Australia/Sydney",
     "aedt": "Australia/Sydney",
-    "npt": "Asia/Kathmandu",
-    "idt": "Asia/Jerusalem",
 }
 
 
 def _resolve_timezone(tz_name: str) -> ZoneInfo:
-    """Resolve a timezone name to a ZoneInfo object."""
-    # Try direct lookup
+    """Resolve an IANA name or common alias to a ZoneInfo object.
+
+    Aliases are checked first: civil abbreviations like EST/PST should map to the
+    DST-aware regional zone (e.g. America/New_York), NOT the fixed-offset IANA
+    zones of the same name (ZoneInfo("EST") is a permanent -0500 with no DST).
+    """
+    alias = _TIMEZONE_ALIASES.get(tz_name.strip().lower())
+    if alias:
+        return ZoneInfo(alias)
+
     try:
         return ZoneInfo(tz_name)
     except Exception:
-        pass
-
-    # Try alias lookup
-    lower = tz_name.lower()
-    if lower in _TIMEZONE_ALIASES:
-        try:
-            return ZoneInfo(_TIMEZONE_ALIASES[lower])
-        except Exception:
-            pass
-
-    raise ValueError(f"Unknown timezone: {tz_name}")
+        raise ValueError(
+            f"Unknown timezone: {tz_name!r}. Use an IANA name (e.g. America/New_York) "
+            "or an alias (PST, EST, UTC, JST)."
+        )
 
 
 def time_now_handler(server: FastMCP) -> None:
     """Register the time_now tool."""
 
     @server.tool()
-    async def time_now(
-        timezone_name: str = "UTC",
-        format: str | None = None,
-        convert_from_timezone: str | None = None,
-        convert_from_time: str | None = None,
-    ) -> str:
-        """Get current time or convert between timezones.
+    async def time_now(timezone_name: str = _DEFAULT_TZ) -> str:
+        """Get the current date and time in a timezone (default: PST/Pacific).
 
-        timezone_name: IANA name (America/New_York) or alias (EST, PST, JST). Default: UTC.
-        format: strftime string; omit for ISO format.
-        Conversion mode: set convert_from_timezone + convert_from_time together.
+        timezone_name: IANA name (America/New_York) or alias (PST, EST, UTC, JST).
+        Returns a detailed breakdown: human-readable string, date, 24h/12h time,
+        day of week, day of year, week number, ISO 8601, timezone abbreviation,
+        UTC offset, and unix timestamp.
         """
         try:
-            target_tz = _resolve_timezone(timezone_name)
-
-            # Conversion mode
-            if convert_from_timezone and convert_from_time:
-                source_tz = _resolve_timezone(convert_from_timezone)
-                # Parse the source time
-                if format:
-                    dt = datetime.strptime(convert_from_time, format)
-                else:
-                    # Try ISO format first, then common formats
-                    for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"]:
-                        try:
-                            dt = datetime.strptime(convert_from_time, fmt)
-                            break
-                        except ValueError:
-                            continue
-                    else:
-                        return json.dumps({
-                            "status": "error",
-                            "error": f"Could not parse time: {convert_from_time}. Use ISO format or specify format parameter.",
-                        }, indent=2)
-
-                # Localize to source timezone
-                dt = dt.replace(tzinfo=source_tz)
-                # Convert to target timezone
-                dt_converted = dt.astimezone(target_tz)
-
-                result = {
-                    "status": "success",
-                    "operation": "conversion",
-                    "source_time": convert_from_time,
-                    "source_timezone": convert_from_timezone,
-                    "converted_time": dt_converted.isoformat(),
-                    "target_timezone": timezone_name,
-                }
-                if format:
-                    result["formatted"] = dt_converted.strftime(format)
-
-                return json.dumps(result, indent=2)
-
-            # Default mode: current time
-            now = datetime.now(timezone.utc).astimezone(target_tz)
-
-            if format:
-                formatted = now.strftime(format)
-            else:
-                formatted = now.isoformat()
-
-            result = {
-                "status": "success",
-                "operation": "current_time",
-                "iso_format": now.isoformat(),
-                "formatted": formatted,
-                "timezone": timezone_name,
-                "utc_offset": str(now.utcoffset()),
-                "date": now.strftime("%Y-%m-%d"),
-                "time": now.strftime("%H:%M:%S"),
-                "day_of_week": now.strftime("%A"),
-                "unix_timestamp": now.timestamp(),
-            }
-
-            return json.dumps(result, indent=2)
-
-        except ValueError as e:
+            tz = _resolve_timezone(timezone_name)
+            now = datetime.now(timezone.utc).astimezone(tz)
             return json.dumps({
-                "status": "error",
-                "error": str(e),
+                "status": "success",
+                "timezone": timezone_name,
+                "datetime": now.strftime("%A, %B %d, %Y at %I:%M:%S %p %Z"),
+                "date": now.strftime("%Y-%m-%d"),
+                "time_24h": now.strftime("%H:%M:%S"),
+                "time_12h": now.strftime("%I:%M:%S %p").lstrip("0"),
+                "day_of_week": now.strftime("%A"),
+                "month": now.strftime("%B"),
+                "day": now.day,
+                "year": now.year,
+                "day_of_year": int(now.strftime("%j")),
+                "week_of_year": int(now.strftime("%V")),
+                "iso": now.isoformat(),
+                "tz_abbreviation": now.strftime("%Z"),
+                "utc_offset": now.strftime("%z"),
+                "unix_timestamp": int(now.timestamp()),
             }, indent=2)
+        except ValueError as e:
+            return json.dumps({"status": "error", "error": str(e)}, indent=2)
         except Exception as e:
             logger.error("Time now error: %s", str(e))
-            return json.dumps({
-                "status": "error",
-                "error": str(e),
-            }, indent=2)
+            return json.dumps({"status": "error", "error": str(e)}, indent=2)
 
     logger.info("Registered time_now tool")

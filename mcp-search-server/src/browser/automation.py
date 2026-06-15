@@ -309,8 +309,12 @@ class BrowserManager:
             self._cleanup_task = None
         logger.info("Browser stopped")
 
-    async def create_session(self) -> str:
+    async def create_session(self, session_id: str | None = None) -> str:
         """Create a new browser session.
+
+        Args:
+            session_id: Optional explicit id for the session. If None, a uuid is
+                generated. Lets callers reuse a stable, human-chosen name.
 
         Returns:
             The session ID.
@@ -318,7 +322,7 @@ class BrowserManager:
         if not self.is_running:
             await self.start()
 
-        session = BrowserSession()
+        session = BrowserSession() if session_id is None else BrowserSession(session_id=session_id)
         session.context = await self._create_hardened_context()
         await session.context.set_extra_http_headers({
             "Accept-Language": "en-US,en;q=0.9",

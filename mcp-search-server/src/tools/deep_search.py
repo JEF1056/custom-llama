@@ -24,7 +24,7 @@ def deep_search_handler(server: FastMCP) -> None:
 
         Slower than search() but returns full text — use when snippets aren't enough.
         max_results: controls search pool; content extracted from top 3 only.
-        For interactive browsing, use browser_create_session() + browser tools.
+        For interactive browsing, use browser_run(code, session_id).
         Returns: {results: [{title, url, snippet, content, content_length}]}
         """
         engine = get_search_engine()

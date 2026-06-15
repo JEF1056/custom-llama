@@ -1,10 +1,20 @@
-"""Browser automation tools for MCP server."""
+"""Browser automation tools for MCP server.
+
+Consolidated, programmatic interface over Playwright. Instead of many narrow
+wrappers (click/fill/get_text/...), the LLM drives the page directly with
+async Playwright Python via ``browser_run``. Two helpers remain because they
+can't be expressed as a code return value: ``browser_screenshot`` (returns an
+MCP image for vision) and ``browser_close`` (session cleanup).
+"""
 
 import asyncio
 import base64
+import contextlib
+import io
 import json
 import logging
-import os
+import re
+import textwrap
 
 from mcp.server import FastMCP
 from mcp.types import ImageContent, TextContent
@@ -14,144 +24,158 @@ from src.config import settings
 
 logger = logging.getLogger(__name__)
 
-
-def _get_page_for_session(session_id: str):
-    """Get the last page from a session, or None if the session has no pages."""
-    session = _get_browser_manager()._sessions.get(session_id)
-    if session and session.pages:
-        return session.pages[-1]
-    return None
+# Cap on serialized result / captured stdout returned to the model.
+_MAX_OUTPUT_CHARS = 50000
 
 
-async def _ensure_page(session_id: str):
-    """Get existing page from session or create a new one and store it."""
-    page = _get_page_for_session(session_id)
-    if page is not None:
-        _get_browser_manager()._touch_session(session_id)
-        return page
-    # Create a new page in the session's context
-    session = _get_browser_manager()._sessions.get(session_id)
-    if not session:
-        raise RuntimeError(f"Session {session_id} not found. Create one with browser_create_session first.")
+async def _ensure_page(session_id: str | None):
+    """Return a live page.
+
+    session_id=None  -> ephemeral one-off page in a transient session (caller closes it).
+    session_id="x"   -> persistent named session, created on first use and reused after.
+    """
+    mgr = _get_browser_manager()
+    if not mgr.is_running:
+        await mgr.start()
+
+    if session_id is None:
+        # Transient session for a single call; closed by the caller.
+        sid = await mgr.create_session()
+        session = mgr._sessions[sid]
+        page = await session.context.new_page()
+        session.pages.append(page)
+        return page, sid
+
+    session = mgr._sessions.get(session_id)
+    if session is None:
+        await mgr.create_session(session_id=session_id)
+        session = mgr._sessions[session_id]
+    else:
+        mgr._touch_session(session_id)
+
+    if session.pages:
+        return session.pages[-1], session_id
     page = await session.context.new_page()
     session.pages.append(page)
-    return page
+    return page, session_id
 
 
 async def _interactables_summary(page) -> str:
-    """Extract and format a summary of interactable elements on the page."""
+    """Compact list of visible clickable/fillable elements with selectors."""
     try:
         elements = await _get_browser_manager().get_interactables(page)
-        visible = [e for e in elements if e.get("visible")]
-        if not visible:
-            return ""
-        lines = [
-            f"\n=== Interactable elements "
-            f"({len(visible)} visible / {len(elements)} total) ==="
-        ]
-        for el in visible[:40]:
-            tag = el.get("tag", "")
-            etype = el.get("type", "")
-            parts = [el.get("text", ""), el.get("name", ""),
-                     el.get("placeholder", "")]
-            text = (next((p for p in parts if p), f"<{tag}>"))[:80]
-            sel = el.get("selector", "")
-            line = f"  [{el['index']}] {etype} {tag}: "
-            line += f"\"{text}\" → selector: {sel}"
-            lines.append(line)
-        if len(visible) > 40:
-            lines.append(f"  ... and {len(visible) - 40} more visible elements")
-        return "\n".join(lines)
     except Exception:
         return ""
+    visible = [e for e in elements if e.get("visible")]
+    if not visible:
+        return ""
+    lines = [f"Interactables ({len(visible)} visible / {len(elements)} total):"]
+    for el in visible[:40]:
+        tag = el.get("tag", "")
+        etype = el.get("type", "")
+        label = next((p for p in (el.get("text", ""), el.get("name", ""),
+                                  el.get("placeholder", "")) if p), f"<{tag}>")[:80]
+        lines.append(f"  [{el['index']}] {etype} {tag}: \"{label}\" -> {el.get('selector', '')}")
+    if len(visible) > 40:
+        lines.append(f"  ... and {len(visible) - 40} more")
+    return "\n".join(lines)
 
 
 def browser_handler(server: FastMCP) -> None:
-    """Register browser automation tools."""
+    """Register the consolidated browser automation tools."""
 
     @server.tool()
-    async def browser_create_session() -> str:
-        """Create a browser session for multi-step interactions.
-
-        Call first when performing multiple actions on the same page.
-        Pass the returned session_id to all subsequent browser tools.
-        For one-off actions, use browser_screenshot(url=...) directly.
-        """
-        try:
-            if not _get_browser_manager().is_running:
-                await _get_browser_manager().start()
-
-            session_id = await _get_browser_manager().create_session()
-            result = {
-                "status": "success",
-                "session_id": session_id,
-                "message": "Browser session created",
-            }
-            return json.dumps(result, indent=2)
-        except Exception as e:
-            logger.error("Browser create_session error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)})
-
-    @server.tool()
-    async def browser_navigate(
-        url: str,
-        wait_until: str | None = None,
+    async def browser_run(
+        code: str,
         session_id: str | None = None,
+        timeout: int | None = None,
     ) -> str:
-        """Navigate to a URL.
+        """Drive a real browser by running async Playwright Python.
 
-        Load a page before further actions (click, fill, screenshot). Provide
-        session_id to persist the page; without it, the page closes immediately.
-        wait_until options: load | domcontentloaded (default) | networkidle | commit.
-        Returns: {status, url, title, session_id, interactables_summary}
+        This is the primary browser tool: write Playwright code instead of
+        calling many small wrappers. The code body runs inside an async function
+        with these names already in scope:
+          - page    : Playwright Page (await page.goto(url), page.click(sel), ...)
+          - context : the BrowserContext (await context.new_page(), cookies, ...)
+          - interactables() : async helper -> list of clickable/fillable elements
+                              [{index, tag, type, text, name, selector, visible}]
+          - mgr     : the BrowserManager (mgr.get_content(page), mgr.screenshot(page))
+        Use `return <value>` to send data back; print() output is also captured.
+
+        Sessions: pass a stable session_id (any string, e.g. "main") to keep the
+        page/cookies alive across calls. Omit it for a one-off page that is closed
+        after the call. Use browser_screenshot for visual checks, browser_close to
+        free a session.
+
+        Example:
+            await page.goto("https://example.com")
+            await page.fill("input[name='q']", "playwright")
+            await page.click("button[type='submit']")
+            await page.wait_for_load_state("networkidle")
+            return await page.title()
+
+        SECURITY: code runs in-process (full Python/host access), gated behind the
+        server's API key. Intended for trusted local use.
+
+        Returns: {status, result, stdout, url, title, interactables, session_id}
         """
+        page = None
+        sid = session_id
+        one_off = session_id is None
         try:
-            # Start browser if not running
-            if not _get_browser_manager().is_running:
-                await _get_browser_manager().start()
+            page, sid = await _ensure_page(session_id)
+            mgr = _get_browser_manager()
 
-            if session_id:
-                # Use session-based page tracking
-                page = await _ensure_page(session_id)
-                await page.goto(
-                    url,
-                    timeout=settings.BROWSER_TIMEOUT * 1000,
-                    wait_until=wait_until or "domcontentloaded",
-                )
-            else:
-                # One-off navigation — create page, navigate, close
-                context = await _get_browser_manager().get_session(None)
-                if not context:
-                    raise RuntimeError("Browser not running")
-                page = await context.new_page()
-                await page.goto(
-                    url,
-                    timeout=settings.BROWSER_TIMEOUT * 1000,
-                    wait_until=wait_until or "domcontentloaded",
+            async def interactables():
+                return await mgr.get_interactables(page)
+
+            wrapper = (
+                "async def __browser_main(page, context, mgr, interactables):\n"
+                + textwrap.indent(code or "pass", "    ")
+            )
+            exec_globals = {"asyncio": asyncio, "json": json, "re": re}
+            ns: dict = {}
+            exec(compile(wrapper, "<browser_run>", "exec"), exec_globals, ns)
+
+            buf = io.StringIO()
+            eff_timeout = timeout or max(settings.BROWSER_TIMEOUT * 2, 60)
+            with contextlib.redirect_stdout(buf):
+                result = await asyncio.wait_for(
+                    ns["__browser_main"](page, page.context, mgr, interactables),
+                    timeout=eff_timeout,
                 )
 
-            # Get page info
-            title = await page.title()
-            current_url = page.url
+            try:
+                if isinstance(result, (str, int, float, bool, type(None))):
+                    result_repr = result
+                else:
+                    result_repr = json.loads(json.dumps(result, default=str))
+            except Exception:
+                result_repr = str(result)
 
-            # Extract interactable elements for the LLM
+            stdout = buf.getvalue()[:_MAX_OUTPUT_CHARS]
+            try:
+                url, title = page.url, await page.title()
+            except Exception:
+                url, title = None, None
             summary = await _interactables_summary(page)
 
-            # Close page only for one-off (no session_id)
-            if not session_id:
-                await page.close()
-
-            result = {
+            return json.dumps({
                 "status": "success",
-                "url": current_url,
+                "result": result_repr,
+                "stdout": stdout,
+                "url": url,
                 "title": title,
-                "session_id": session_id or "none",
-                "interactables_summary": summary,
-            }
-            return json.dumps(result, indent=2)
+                "interactables": summary,
+                "session_id": sid,
+            }, indent=2, default=str)[:_MAX_OUTPUT_CHARS]
         except Exception as e:
-            logger.error("Browser navigate error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)})
+            logger.error("browser_run error: %s", str(e))
+            return json.dumps({"status": "error", "error": str(e), "session_id": sid})
+        finally:
+            if one_off and page is not None:
+                with contextlib.suppress(Exception):
+                    await _get_browser_manager().close_session(sid)
 
     @server.tool()
     async def browser_screenshot(
@@ -159,485 +183,18 @@ def browser_handler(server: FastMCP) -> None:
         full_page: bool = False,
         session_id: str | None = None,
     ):
-        """Screenshot a URL or session page. Returns MCP ImageContent (base64 PNG) + resource URI.
+        """Capture a screenshot and return it as an MCP image (for vision).
 
-        One-off: provide url=. Session: provide session_id=.
+        url: optional page to load first. session_id: screenshot a persistent
+        session's current page (created by browser_run). Omit both to shoot the
+        one-off page after a url load.
+        Returns: MCP ImageContent (base64 PNG) + a file:// resource URI.
         """
+        page = None
+        one_off = session_id is None
+        sid = session_id
         try:
-            # Start browser if not running
-            if not _get_browser_manager().is_running:
-                await _get_browser_manager().start()
-
-            if session_id:
-                # Use session-based page tracking
-                page = await _ensure_page(session_id)
-                if url:
-                    await page.goto(
-                        url,
-                        timeout=settings.BROWSER_TIMEOUT * 1000,
-                        wait_until="domcontentloaded",
-                    )
-            else:
-                # One-off screenshot
-                context = await _get_browser_manager().get_session(None)
-                if not context:
-                    raise RuntimeError("Browser not running")
-                page = await context.new_page()
-                if url:
-                    await page.goto(
-                        url,
-                        timeout=settings.BROWSER_TIMEOUT * 1000,
-                        wait_until="domcontentloaded",
-                    )
-
-            # Take screenshot - returns (bytes, file_path)
-            screenshot_bytes, screenshot_path = await _get_browser_manager().screenshot(
-                page,
-                full_page=full_page,
-                session_id=session_id,
-            )
-
-            # Extract interactable elements for the LLM
-            summary = await _interactables_summary(page)
-
-            # Clean up page only for one-off (no session_id)
-            if not session_id:
-                await page.close()
-
-            # Build resource URI
-            resource_uri = f"file://{screenshot_path}"
-
-            # Return as MCP ImageContent (base64 PNG)
-            image_b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
-            image = ImageContent(
-                type="image",
-                data=image_b64,
-                mimeType="image/png",
-            )
-
-            info_text = (
-                f"Screenshot captured successfully.\n"
-                f"  Resource URI: {resource_uri}\n"
-                f"  Session: {session_id or 'none'}\n"
-                f"  Full page: {full_page}\n"
-                f"\n"
-                f"The screenshot is embedded above as an MCP image. "
-                f"You can also access it later via the resource URI."
-            )
-            if summary:
-                info_text += summary
-
-            return [image, TextContent(type="text", text=info_text)]
-        except Exception as e:
-            logger.error("Browser screenshot error: %s", str(e))
-            return [TextContent(type="text", text=f"Error: {str(e)}")]
-
-    @server.tool()
-    async def browser_click(
-        selector: str,
-        url: str | None = None,
-        timeout: int | None = None,
-        wait_until: str | None = None,
-        session_id: str | None = None,
-    ) -> str:
-        """Click an element by CSS selector. Requires session_id; use url= to navigate first.
-
-        TIP: Call browser_get_interactables first to find the right selector.
-        selector examples: "button#submit", "a[href='/login']", "input[name='q']"
-        wait_until: navigation trigger after click (load | domcontentloaded | networkidle).
-        Returns: {status, message, session_id, interactables_summary}
-        """
-        try:
-            # Start browser if not running
-            if not _get_browser_manager().is_running:
-                await _get_browser_manager().start()
-
-            if session_id:
-                page = await _ensure_page(session_id)
-                if url:
-                    await page.goto(
-                        url,
-                        timeout=settings.BROWSER_TIMEOUT * 1000,
-                        wait_until="domcontentloaded",
-                    )
-            else:
-                context = await _get_browser_manager().get_session(None)
-                if not context:
-                    return json.dumps({"status": "error", "error": "Browser not running"})
-                page = await context.new_page()
-                if url:
-                    await page.goto(
-                        url,
-                        timeout=settings.BROWSER_TIMEOUT * 1000,
-                        wait_until="domcontentloaded",
-                    )
-
-            # Click the element
-            await _get_browser_manager().click(page, selector)
-
-            # Wait for navigation if specified
-            if wait_until:
-                await page.wait_for_load_state(wait_until)
-
-            # Extract interactable elements for the LLM
-            summary = await _interactables_summary(page)
-
-            # Clean up page only for one-off
-            if not session_id:
-                await page.close()
-
-            result = {
-                "status": "success",
-                "message": f"Clicked element: {selector}",
-                "session_id": session_id or "none",
-                "interactables_summary": summary,
-            }
-            return json.dumps(result, indent=2)
-        except Exception as e:
-            logger.error("Browser click error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)})
-
-    @server.tool()
-    async def browser_fill(
-        selector: str,
-        value: str,
-        url: str | None = None,
-        session_id: str | None = None,
-    ) -> str:
-        """Fill an input field by CSS selector. Requires session_id; use url= to navigate first.
-
-        TIP: Call browser_get_interactables first to find the right selector.
-        selector examples: "input[name='email']", "#search-box", "textarea.comment"
-        Returns: {status, message, session_id, interactables_summary}
-        """
-        try:
-            # Start browser if not running
-            if not _get_browser_manager().is_running:
-                await _get_browser_manager().start()
-
-            if session_id:
-                page = await _ensure_page(session_id)
-                if url:
-                    await page.goto(
-                        url,
-                        timeout=settings.BROWSER_TIMEOUT * 1000,
-                        wait_until="domcontentloaded",
-                    )
-            else:
-                context = await _get_browser_manager().get_session(None)
-                if not context:
-                    return json.dumps({"status": "error", "error": "Browser not running"})
-                page = await context.new_page()
-                if url:
-                    await page.goto(
-                        url,
-                        timeout=settings.BROWSER_TIMEOUT * 1000,
-                        wait_until="domcontentloaded",
-                    )
-
-            # Fill the input
-            await _get_browser_manager().fill(page, selector, value)
-
-            # Extract interactable elements for the LLM
-            summary = await _interactables_summary(page)
-
-            # Clean up page only for one-off
-            if not session_id:
-                await page.close()
-
-            result = {
-                "status": "success",
-                "message": f"Filled element: {selector} with {value}",
-                "session_id": session_id or "none",
-                "interactables_summary": summary,
-            }
-            return json.dumps(result, indent=2)
-        except Exception as e:
-            logger.error("Browser fill error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)})
-
-    @server.tool()
-    async def browser_evaluate(
-        script: str,
-        url: str | None = None,
-        session_id: str | None = None,
-    ) -> str:
-        """Execute JavaScript on the current page. Requires session_id; use url= to navigate first.
-
-        script: JS expression or statement (e.g. "document.title" or "window.scrollTo(0,999)").
-        Returns: {status, result, session_id}
-        """
-        try:
-            # Start browser if not running
-            if not _get_browser_manager().is_running:
-                await _get_browser_manager().start()
-
-            if session_id:
-                page = await _ensure_page(session_id)
-                if url:
-                    await page.goto(
-                        url,
-                        timeout=settings.BROWSER_TIMEOUT * 1000,
-                        wait_until="domcontentloaded",
-                    )
-            else:
-                context = await _get_browser_manager().get_session(None)
-                if not context:
-                    return json.dumps({"status": "error", "error": "Browser not running"})
-                page = await context.new_page()
-                if url:
-                    await page.goto(
-                        url,
-                        timeout=settings.BROWSER_TIMEOUT * 1000,
-                        wait_until="domcontentloaded",
-                    )
-
-            # Execute JavaScript
-            result = await _get_browser_manager().evaluate(page, script)
-
-            # Clean up page only for one-off
-            if not session_id:
-                await page.close()
-
-            return json.dumps({
-                "status": "success",
-                "result": result,
-                "session_id": session_id or "none",
-            }, indent=2)
-        except Exception as e:
-            logger.error("Browser evaluate error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)})
-
-    @server.tool()
-    async def browser_get_text(
-        selector: str,
-        url: str | None = None,
-        session_id: str | None = None,
-    ) -> str:
-        """Get text content of an element by CSS selector. Requires session_id; use url= to navigate first.
-
-        Returns: {status, text, session_id}
-        """
-        try:
-            # Start browser if not running
-            if not _get_browser_manager().is_running:
-                await _get_browser_manager().start()
-
-            if session_id:
-                page = await _ensure_page(session_id)
-                if url:
-                    await page.goto(
-                        url,
-                        timeout=settings.BROWSER_TIMEOUT * 1000,
-                        wait_until="domcontentloaded",
-                    )
-            else:
-                context = await _get_browser_manager().get_session(None)
-                if not context:
-                    return json.dumps({"status": "error", "error": "Browser not running"})
-                page = await context.new_page()
-                if url:
-                    await page.goto(
-                        url,
-                        timeout=settings.BROWSER_TIMEOUT * 1000,
-                        wait_until="domcontentloaded",
-                    )
-
-            # Get text
-            text = await _get_browser_manager().get_text(page, selector)
-
-            # Clean up page only for one-off
-            if not session_id:
-                await page.close()
-
-            return json.dumps({
-                "status": "success",
-                "text": text,
-                "session_id": session_id or "none",
-            }, indent=2)
-        except Exception as e:
-            logger.error("Browser get_text error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)})
-
-    @server.tool()
-    async def browser_get_interactables(
-        url: str | None = None,
-        session_id: str | None = None,
-    ) -> str:
-        """List all interactable elements (links, buttons, inputs) with CSS selectors + labels.
-
-        Use BEFORE clicking/filling to find the right selector.
-        Requires session_id; use url= to navigate first.
-        Returns: {status, total, visible_count, hidden_count, elements, summary, session_id}
-        """
-        try:
-            # Start browser if not running
-            if not _get_browser_manager().is_running:
-                await _get_browser_manager().start()
-
-            if session_id:
-                page = await _ensure_page(session_id)
-                if url:
-                    await page.goto(
-                        url,
-                        timeout=settings.BROWSER_TIMEOUT * 1000,
-                        wait_until="domcontentloaded",
-                    )
-            else:
-                context = await _get_browser_manager().get_session(None)
-                if not context:
-                    return json.dumps({"status": "error", "error": "Browser not running"})
-                page = await context.new_page()
-                if url:
-                    await page.goto(
-                        url,
-                        timeout=settings.BROWSER_TIMEOUT * 1000,
-                        wait_until="domcontentloaded",
-                    )
-
-            # Get interactable elements
-            elements = await _get_browser_manager().get_interactables(page)
-
-            # Clean up page only for one-off
-            if not session_id:
-                await page.close()
-
-            # Build a readable summary
-            visible = [e for e in elements if e.get("visible")]
-            hidden = [e for e in elements if not e.get("visible")]
-
-            lines = [
-                f"Found {len(elements)} interactable elements "
-                f"({len(visible)} visible, {len(hidden)} hidden):\n",
-            ]
-
-            if visible:
-                lines.append("=== VISIBLE ELEMENTS ===")
-                for el in visible:
-                    tag = el.get("tag", "")
-                    etype = el.get("type", "")
-                    text = el.get("text", "")[:80]
-                    sel = el.get("selector", "")
-                    name = el.get("name", "")
-                    placeholder = el.get("placeholder", "")
-                    label = text or name or placeholder or f"<{tag}>"
-                    lines.append(f"  [{el['index']}] {etype} {tag}: \"{label}\"")
-                    lines.append(f"      selector: {sel}")
-                lines.append("")
-
-            if hidden:
-                lines.append("=== HIDDEN ELEMENTS ===")
-                for el in hidden:
-                    tag = el.get("tag", "")
-                    etype = el.get("type", "")
-                    text = el.get("text", "")[:80]
-                    sel = el.get("selector", "")
-                    name = el.get("name", "")
-                    placeholder = el.get("placeholder", "")
-                    label = text or name or placeholder or f"<{tag}>"
-                    lines.append(f"  [{el['index']}] {etype} {tag}: \"{label}\"")
-                    lines.append(f"      selector: {sel}")
-
-            result = {
-                "status": "success",
-                "total": len(elements),
-                "visible_count": len(visible),
-                "hidden_count": len(hidden),
-                "elements": elements,
-                "summary": "\n".join(lines),
-                "session_id": session_id or "none",
-            }
-            return json.dumps(result, indent=2)
-        except Exception as e:
-            logger.error("Browser get_interactables error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)})
-
-    @server.tool()
-    async def browser_get_content(
-        url: str | None = None,
-        session_id: str | None = None,
-    ) -> str:
-        """Get full page text content. Requires session_id; use url= to navigate first.
-
-        For one-off extraction, use fetch() instead (no session needed).
-        Returns: {status, content, content_length, session_id}
-        """
-        try:
-            # Start browser if not running
-            if not _get_browser_manager().is_running:
-                await _get_browser_manager().start()
-
-            if session_id:
-                page = await _ensure_page(session_id)
-                if url:
-                    await page.goto(
-                        url,
-                        timeout=settings.BROWSER_TIMEOUT * 1000,
-                        wait_until="domcontentloaded",
-                    )
-            else:
-                context = await _get_browser_manager().get_session(None)
-                if not context:
-                    return json.dumps({"status": "error", "error": "Browser not running"})
-                page = await context.new_page()
-                if url:
-                    await page.goto(
-                        url,
-                        timeout=settings.BROWSER_TIMEOUT * 1000,
-                        wait_until="domcontentloaded",
-                    )
-
-            # Get content
-            content = await _get_browser_manager().get_content(page)
-
-            # Clean up page only for one-off
-            if not session_id:
-                await page.close()
-
-            return json.dumps({
-                "status": "success",
-                "content": content,
-                "content_length": len(content),
-                "session_id": session_id or "none",
-            }, indent=2)
-        except Exception as e:
-            logger.error("Browser get_content error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)})
-
-    @server.tool()
-    async def browser_monitor(
-        url: str | None = None,
-        interval: int = 5,
-        duration: int = 30,
-        path: str | None = None,
-        session_id: str | None = None,
-    ) -> str:
-        """Capture periodic screenshots. Requires session_id; use url= to navigate first.
-
-        Returns file:// resource URIs for each screenshot.
-        interval: seconds between shots (default 5). duration: total seconds (default 30).
-        """
-        try:
-            # Start browser if not running
-            if not _get_browser_manager().is_running:
-                await _get_browser_manager().start()
-
-            # Use provided path or default screenshot directory
-            output_dir = path or _get_browser_manager().screenshot_dir
-            os.makedirs(output_dir, exist_ok=True)
-
-            # Calculate number of screenshots
-            num_screenshots = duration // interval
-
-            if session_id:
-                page = await _ensure_page(session_id)
-            else:
-                context = await _get_browser_manager().get_session(None)
-                if not context:
-                    return json.dumps({"status": "error", "error": "Browser not running"})
-                page = await context.new_page()
-
-            # Navigate if URL provided
+            page, sid = await _ensure_page(session_id)
             if url:
                 await page.goto(
                     url,
@@ -645,72 +202,45 @@ def browser_handler(server: FastMCP) -> None:
                     wait_until="domcontentloaded",
                 )
 
-            screenshot_uris = []
+            screenshot_bytes, screenshot_path = await _get_browser_manager().screenshot(
+                page, full_page=full_page, session_id=session_id,
+            )
+            summary = await _interactables_summary(page)
 
-            for i in range(num_screenshots):
-                screenshot_bytes = await page.screenshot(full_page=False)
-                screenshot_path = os.path.join(
-                    output_dir, f"monitor_{session_id or 'oneoff'}_{i}.png"
-                )
-                with open(screenshot_path, "wb") as f:
-                    f.write(screenshot_bytes)
-                resource_uri = f"file://{screenshot_path}"
-                screenshot_uris.append(resource_uri)
-                logger.info("Monitor screenshot %d saved to %s", i + 1, screenshot_path)
-
-                if i < num_screenshots - 1:
-                    await asyncio.sleep(interval)
-
-            # Clean up page only for one-off
-            if not session_id:
-                await page.close()
-
-            result = {
-                "status": "success",
-                "message": f"Captured {len(screenshot_uris)} screenshots",
-                "screenshot_uris": screenshot_uris,
-                "session_id": session_id or "none",
-            }
-            return json.dumps(result, indent=2)
+            image = ImageContent(
+                type="image",
+                data=base64.b64encode(screenshot_bytes).decode("utf-8"),
+                mimeType="image/png",
+            )
+            info = (
+                f"Screenshot saved: file://{screenshot_path}\n"
+                f"Session: {sid or 'one-off'}  Full page: {full_page}"
+            )
+            if summary:
+                info += "\n" + summary
+            return [image, TextContent(type="text", text=info)]
         except Exception as e:
-            logger.error("Browser monitor error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)})
+            logger.error("browser_screenshot error: %s", str(e))
+            return [TextContent(type="text", text=f"Error: {str(e)}")]
+        finally:
+            if one_off and page is not None:
+                with contextlib.suppress(Exception):
+                    await _get_browser_manager().close_session(sid)
 
     @server.tool()
-    async def browser_close(
-        session_id: str | None = None,
-    ) -> str:
-        """Close a browser session. session_id=None closes the default context."""
+    async def browser_close(session_id: str) -> str:
+        """Close a browser session and free its pages/cookies.
+
+        Pass the session_id you used with browser_run.
+        """
         try:
-            success = await _get_browser_manager().close_session(session_id)
-            if success:
-                result = {
-                    "status": "success",
-                    "message": f"Session {session_id or 'default'} closed",
-                }
-            else:
-                result = {
-                    "status": "error",
-                    "error": f"Session {session_id or 'default'} not found",
-                }
-            return json.dumps(result, indent=2)
+            ok = await _get_browser_manager().close_session(session_id)
+            return json.dumps({
+                "status": "success" if ok else "error",
+                "message": f"Session {session_id} {'closed' if ok else 'not found'}",
+            })
         except Exception as e:
-            logger.error("Browser close error: %s", str(e))
+            logger.error("browser_close error: %s", str(e))
             return json.dumps({"status": "error", "error": str(e)})
 
-    @server.tool()
-    async def browser_list_sessions() -> str:
-        """List active browser sessions."""
-        try:
-            sessions = _get_browser_manager().active_sessions
-            result = {
-                "status": "success",
-                "sessions": sessions,
-                "total": len(sessions),
-            }
-            return json.dumps(result, indent=2)
-        except Exception as e:
-            logger.error("Browser list_sessions error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)})
-
-    logger.info("Registered browser automation tools")
+    logger.info("Registered browser automation tools (browser_run, browser_screenshot, browser_close)")

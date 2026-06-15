@@ -55,156 +55,68 @@ Perform a web search and extract full content from top results.
 
 ## Browser Automation Tools
 
-The server provides 13 browser automation tools powered by Playwright for headless browser interaction:
+Browser control is **programmatic**: instead of many narrow wrappers, the model
+drives a Playwright browser directly by writing async Python. Three tools:
 
-### `browser_navigate`
-Navigate to a URL.
+### `browser_run`
+Run async Playwright Python against a live page. This is the primary browser tool.
+
+The code body executes inside an async function with these names in scope:
+- `page` — Playwright `Page` (`await page.goto(url)`, `page.click(sel)`, `page.fill(sel, val)`, …)
+- `context` — the `BrowserContext` (new pages, cookies, …)
+- `interactables()` — async helper returning clickable/fillable elements with selectors
+- `mgr` — the `BrowserManager` (`mgr.get_content(page)`, `mgr.screenshot(page)`)
+
+Use `return <value>` to send data back; `print()` output is also captured.
 
 **Parameters:**
-- `url` (string): The URL to navigate to
-- `wait_until` (string, optional): When to consider navigation completed (`load`, `domcontentloaded`, `networkidle`, `commit`)
-- `session_id` (string, optional): The session ID to use. If None, uses the default context.
+- `code` (string): async Playwright Python to execute.
+- `session_id` (string, optional): stable name (e.g. `"main"`) to keep the page/cookies alive across calls. Omit for a one-off page closed after the call.
+- `timeout` (integer, optional): seconds; defaults to `2 × BROWSER_TIMEOUT` (min 60).
 
-**Returns:** JSON string with page title, URL, and status.
+**Returns:** JSON `{status, result, stdout, url, title, interactables, session_id}`.
+
+> **Security:** `browser_run` executes Python **in-process** (full host/Python
+> access), gated behind the server API key. Intended for trusted local use.
 
 ### `browser_screenshot`
-Screenshot a URL or session page. Returns MCP ImageContent (base64 PNG) + resource URI.
-
-One-off: provide url=. Session: provide session_id=.
-
-**Parameters:**
-- `url` (string, optional): The URL to screenshot
-- `full_page` (boolean, optional): Whether to capture the full page
-- `session_id` (string, optional): The session ID to use. If None, uses the default context.
-
-**Returns:** Screenshot as base64 PNG (MCP ImageContent) plus a resource URI for later access.
-
-### `browser_create_session`
-Create a browser session for multi-step interactions.
-
-Call first when performing multiple interactions on the same page. Pass the returned session_id to all subsequent browser tools. For one-off actions, use browser_navigate(url=...) directly.
-
-**Returns:** JSON with connection status and default page info.
-
-### `browser_get_interactables`
-List all interactable elements (links, buttons, inputs) with CSS selectors + labels.
-
-Use BEFORE clicking/filling to find the right selector. Requires session_id; use url= to navigate first.
+Capture a screenshot and return it as an MCP image (for vision). A code return
+value can't carry an image, so this stays a dedicated tool.
 
 **Parameters:**
-- `url` (string, optional): The URL to load before getting interactables
-- `session_id` (string, optional): The session ID to use
+- `url` (string, optional): page to load first.
+- `full_page` (boolean, optional): capture the full scrollable page.
+- `session_id` (string, optional): screenshot a persistent session's current page.
 
-### `browser_click`
-Click an element.
-
-**Parameters:**
-- `selector` (string): The CSS selector for the element
-- `timeout` (integer, optional): Timeout in seconds. Defaults to BROWSER_TIMEOUT.
-- `wait_until` (string, optional): When to consider navigation completed after click
-- `session_id` (string, optional): The session ID to use. If None, uses the default context.
-
-**Returns:** JSON string with success/failure status.
-
-### `browser_fill`
-Fill an input field.
-
-**Parameters:**
-- `selector` (string): The CSS selector for the input
-- `value` (string): The value to fill
-- `session_id` (string, optional): The session ID to use. If None, uses the default context.
-
-**Returns:** JSON string with success/failure status.
-
-### `browser_evaluate`
-Execute JavaScript on the page.
-
-**Parameters:**
-- `script` (string): The JavaScript code to execute
-- `session_id` (string, optional): The session ID to use. If None, uses the default context.
-
-**Returns:** JSON string with the result of the JavaScript execution.
-
-### `browser_get_text`
-Get text content of an element.
-
-**Parameters:**
-- `selector` (string): The CSS selector for the element
-- `session_id` (string, optional): The session ID to use. If None, uses the default context.
-
-**Returns:** JSON string with the text content.
-
-### `browser_get_content`
-Get the page content (text extraction).
-
-**Parameters:**
-- `session_id` (string, optional): The session ID to use. If None, uses the default context.
-
-**Returns:** JSON string with page text content and content length.
-
-### `browser_monitor`
-Periodic screenshot monitoring. Captures screenshots at regular intervals for a specified duration.
-
-**Parameters:**
-- `interval` (integer, optional): Seconds between screenshots (default: 5)
-- `duration` (integer, optional): Total seconds to monitor (default: 30)
-- `path` (string, optional): Output directory for screenshots. If None, uses screenshot_dir.
-- `session_id` (string, optional): The session ID to use. If None, uses the default context.
-
-**Returns:** JSON string with list of screenshot resource URIs.
+**Returns:** MCP `ImageContent` (base64 PNG) + a `file://` resource URI.
 
 ### `browser_close`
-Close the browser session.
+Close a browser session and free its pages/cookies.
 
 **Parameters:**
-- `session_id` (string, optional): The session ID to close. If None, closes the default context.
-
-**Returns:** JSON string with success/failure status.
-
-### `browser_list_sessions`
-List active browser sessions.
-
-**Returns:** JSON string with list of session IDs and total count.
-
-### `browser_connect`
-Connect to a Chrome browser via CDP (Chrome DevTools Protocol).
-
-The endpoint MUST be supplied by the user. After connecting, all browser tools operate on the user's real Chrome — visible on their screen, with their logins, extensions, and bookmarks intact.
-
-**Parameters:**
-- `endpoint` (string): The CDP endpoint URL (ws://, wss://, http://, or https://)
+- `session_id` (string): the session id used with `browser_run`.
 
 ## Example Workflow
 
-Here's an example workflow demonstrating how to use the browser automation tools together to interact with a web page:
+```python
+# 1. Multi-step interaction in a persistent session via browser_run:
+browser_run(session_id="main", code='''
+    await page.goto("https://example.com")
+    await page.fill("input#search", "playwright")
+    await page.click("button[type='submit']")
+    await page.wait_for_load_state("networkidle")
+    return {
+        "title": await page.title(),
+        "heading": await page.inner_text("h1"),
+        "links": await page.eval_on_selector_all("a", "els => els.map(e => e.href)"),
+    }
+''')
 
-```
-1. Navigate to a URL:
-   browser_navigate(url="https://example.com")
+# 2. Visual check:
+browser_screenshot(session_id="main")
 
-2. Take a screenshot to verify the page loaded:
-   browser_screenshot()
-
-3. Get the page content:
-   browser_get_content()
-
-4. Click a link:
-   browser_click(selector="a.example-link")
-
-5. Fill a form:
-   browser_fill(selector="input#search", value="search term")
-
-6. Execute JavaScript to extract data:
-   browser_evaluate(script="document.querySelector('.data').textContent")
-
-7. Get specific element text:
-   browser_get_text(selector="h1")
-
-8. Monitor page changes (captures screenshots every 5 seconds for 30 seconds):
-   browser_monitor(interval=5, duration=30)
-
-9. Close the browser session:
-   browser_close()
+# 3. Clean up:
+browser_close(session_id="main")
 ```
 
 ## Usage Pattern
@@ -225,8 +137,8 @@ The MCP search server should be called in the following scenarios:
 |----------|-------|---------|
 | **Expert Reasoning** | `advisor` | Call this whenever you're stuck, need a second opinion, or face a complex reasoning task. Use it liberally. |
 | **Search Tools** | `search`, `fetch`, `deep_search` | Quick information retrieval via HTTP requests and content extraction. |
-| **Browser Automation** | `browser_navigate`, `browser_screenshot`, `browser_click`, `browser_fill`, `browser_evaluate`, `browser_get_text`, `browser_get_content`, `browser_monitor`, `browser_close`, `browser_list_sessions`, `browser_create_session`, `browser_get_interactables`, `browser_connect` | Full browser interaction for JavaScript-heavy pages. |
-| **Data / Files** | `code_run`, `calculator`, `xlsx_create`, `xlsx_read`, `xlsx_edit`, `pptx_create`, `pptx_edit`, `pptx_read`, `pptx_slide_image`, `create_file`, `file_read`, `file_list`, `file_delete`, `file_upload`, `http_request`, `time_now` | Computation, file I/O, spreadsheet/presentation generation, HTTP calls, time zones. |
+| **Browser Automation** | `browser_run`, `browser_screenshot`, `browser_close` | Programmatic Playwright control for JavaScript-heavy pages. |
+| **Data / Compute** | `code_run`, `time_now` | Sandboxed Python computation and time/timezone conversion. |
 
 ### Workflow: Search + Reasoning + Browser
 
@@ -244,9 +156,7 @@ The MCP search server should be called in the following scenarios:
 
 4. Execute
    ├── Browser tools for JS-heavy pages
-   ├── code_run for computation
-   ├── file operations for output
-   └── http_request for API calls
+   └── code_run for computation
 
 5. Verify and iterate
    └── Use advisor() again if results seem off or you need a different approach
@@ -263,7 +173,7 @@ Agent workflow:
 1. Call search(query="quantum computing breakthroughs 2026", max_results=5)
 2. Review search results for relevant articles
 3. Call fetch(url="https://example.com/quantum-breakthrough") for promising articles
-4. If the page requires JavaScript rendering, use browser_navigate + browser_get_content
+4. If the page requires JavaScript rendering, use browser_run to render + extract
 5. Compile findings from all sources
 ```
 
@@ -275,11 +185,12 @@ User provides: https://example.com/product
 
 Agent workflow:
 1. Call fetch(url="https://example.com/product")
-2. If fetch returns empty or incomplete content (JS-heavy page):
-   a. Call browser_navigate(url="https://example.com/product")
-   b. Call browser_screenshot() to verify page loaded
-   c. Call browser_get_content() to extract text
-   d. Call browser_get_text(selector="h1") to get the main heading
+2. If fetch returns empty or incomplete content (JS-heavy page), use browser_run:
+   browser_run(code='''
+       await page.goto("https://example.com/product")
+       return {"heading": await page.inner_text("h1"),
+               "body": await mgr.get_content(page)}
+   ''')
 3. Analyze and summarize the content
 ```
 
@@ -290,11 +201,14 @@ User: "Search for 'Python 3.13 release notes' and click on the first result"
 
 Agent workflow:
 1. Call search(query="Python 3.13 release notes", max_results=3)
-2. Identify the first relevant URL from results
-3. Call browser_navigate(url="https://docs.python.org/3/whatsnew/3.13.html")
-4. Call browser_screenshot() to verify the page loaded
-5. Call browser_click(selector="a.release-link") to click on a link
-6. Call browser_get_content() to extract the new page content
+2. Drive the page with browser_run (persistent session):
+   browser_run(session_id="main", code='''
+       await page.goto("https://docs.python.org/3/whatsnew/3.13.html")
+       await page.click("a.release-link")
+       await page.wait_for_load_state("networkidle")
+       return await mgr.get_content(page)
+   ''')
+3. browser_screenshot(session_id="main") to verify visually if needed
 ```
 
 #### Scenario 4: Form Interaction
@@ -303,11 +217,13 @@ Agent workflow:
 User: "Go to https://example.com/search and search for 'AI trends'"
 
 Agent workflow:
-1. Call browser_navigate(url="https://example.com/search")
-2. Call browser_screenshot() to verify the page loaded
-3. Call browser_fill(selector="input.search-box", value="AI trends")
-4. Call browser_click(selector="button.search-button")
-5. Call browser_get_content() to extract search results
+1. browser_run(code='''
+       await page.goto("https://example.com/search")
+       await page.fill("input.search-box", "AI trends")
+       await page.click("button.search-button")
+       await page.wait_for_load_state("networkidle")
+       return await mgr.get_content(page)
+   ''')
 ```
 
 #### Scenario 5: Stuck Agent Recovery
@@ -317,28 +233,12 @@ User: "I need to know the current weather in Tokyo"
 
 Agent workflow:
 1. Call search(query="current weather Tokyo", max_results=3)
-2. If search results don't provide detailed weather info:
-   a. Call fetch(url="https://weather.com/tokyo")
-   b. If fetch fails (JS-heavy page):
-      - Call browser_navigate(url="https://weather.com/tokyo")
-      - Call browser_get_content() to extract weather data
+2. If results are thin, fetch a weather page; if JS-heavy, fall back to browser_run
+   to render and extract the live values
 3. Compile and present the weather information
 ```
 
-#### Scenario 6: Multi-Step Research with Monitoring
-
-```
-User: "Monitor this stock price page for the next minute and tell me if it changes"
-
-Agent workflow:
-1. Call browser_navigate(url="https://example.com/stock/ABC")
-2. Call browser_screenshot() to verify the page loaded
-3. Call browser_get_text(selector=".stock-price") to get initial price
-4. Call browser_monitor(interval=10, duration=60) to capture changes
-5. Compare the captured screenshots/text to identify price changes
-```
-
-#### Scenario 7: Deep Search with Fallback
+#### Scenario 6: Deep Search with Fallback
 
 ```
 User: "Find me documentation about React Server Components"
@@ -346,10 +246,11 @@ User: "Find me documentation about React Server Components"
 Agent workflow:
 1. Call deep_search(query="React Server Components documentation", max_results=5)
 2. Review extracted content from top results
-3. If content is incomplete (e.g., requires JavaScript rendering):
-   a. Call browser_navigate(url="https://react.dev/reference/rsc/server-components")
-   b. Call browser_evaluate(script="JSON.stringify(document.querySelector('.content').innerHTML)")
-   c. Extract and present the full documentation
+3. If content is incomplete (requires JavaScript rendering):
+   browser_run(code='''
+       await page.goto("https://react.dev/reference/rsc/server-components")
+       return await page.inner_text(".content")
+   ''')
 ```
 
 ## Setup
@@ -494,19 +395,8 @@ mcp-search-server/
 │       ├── search.py       # Search tool
 │       ├── fetch.py        # Fetch tool
 │       ├── deep_search.py  # Deep search tool
-│       ├── filetool.py     # create_file tool
-│       ├── file_ops.py     # file_read, file_list, file_delete, file_upload tools
-│       ├── http_request.py # http_request tool
-│       ├── calculator.py   # calculator tool
 │       ├── code_run.py     # code_run tool
-│       ├── time_now.py     # time_now tool
-│       ├── xlsx_create.py  # xlsx_create tool
-│       ├── xlsx_edit.py    # xlsx_edit tool
-│       ├── xlsx_read.py    # xlsx_read tool
-│       ├── pptx_create.py  # pptx_create tool
-│       ├── pptx_edit.py    # pptx_edit tool
-│       ├── pptx_read.py    # pptx_read tool
-│       └── pptx_slide_image.py  # pptx_slide_image tool
+│       └── time_now.py     # time_now tool
 └── tests/
     ├── __init__.py
     ├── test_advisor.py     # Advisor tool tests

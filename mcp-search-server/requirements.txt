@@ -29,13 +29,11 @@ redis>=5.0.0
 # Configuration
 python-dotenv>=1.0.0
 
-# Math and computation
+# Timezone database (slim base images lack system zoneinfo; needed by time_now)
+tzdata>=2024.1
+
+# Math and computation (code_run sandbox)
 sympy>=1.12.0
 numpy>=1.24.0
 pandas>=2.0.0
 matplotlib>=3.7.0
-
-# Document I/O
-openpyxl>=3.1.0
-python-pptx>=0.6.23
-Pillow>=10.0.0
