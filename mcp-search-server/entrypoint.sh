@@ -17,14 +17,22 @@ echo "  Host: ${MCP_SERVER_HOST:-0.0.0.0}:${MCP_SERVER_PORT:-3100}"
 echo "  Search: ${SEARCH_ENGINE:-duckduckgo} (max ${MAX_RESULTS:-10})"
 echo "  Cache: ${CACHE_ENABLED:-true} (TTL ${CACHE_TTL:-3600}s)"
 
-# Run Chromium headful under a virtual display when available — a real (non-
-# headless) browser is substantially harder to fingerprint as a bot. Falls back
-# to headless if Xvfb is missing (e.g. local dev) so the server still starts.
-if command -v xvfb-run >/dev/null 2>&1; then
+# Run Chrome headful under a virtual display when available — a real (non-
+# headless) browser is substantially harder to fingerprint as a bot. We start
+# Xvfb ourselves and exec the server directly rather than using `xvfb-run`,
+# which deadlocks as PID 1 when its child's stdout is the container log pipe.
+# Falls back to headless if Xvfb is missing (e.g. local dev) so the server
+# still starts.
+if command -v Xvfb >/dev/null 2>&1; then
     export BROWSER_HEADLESS="${BROWSER_HEADLESS:-false}"
-    echo "  Browser: headful via Xvfb (BROWSER_HEADLESS=${BROWSER_HEADLESS})"
-    exec xvfb-run -a --server-args="-screen 0 1920x1080x24 -ac +extension GLX +render -noreset" \
-        python -m src.server
+    export DISPLAY="${DISPLAY:-:99}"
+    echo "  Browser: headful via Xvfb on ${DISPLAY} (BROWSER_HEADLESS=${BROWSER_HEADLESS})"
+    # -ac disables X access control so Chrome can connect without xauth.
+    Xvfb "${DISPLAY}" -screen 0 1920x1080x24 -ac +extension GLX +render -noreset -nolisten tcp &
+    # Wait briefly for the X socket so Chrome's first launch finds the display.
+    sock="/tmp/.X11-unix/X${DISPLAY#:}"
+    for _ in $(seq 1 50); do [ -e "$sock" ] && break; sleep 0.1; done
+    exec python -m src.server
 else
     export BROWSER_HEADLESS="${BROWSER_HEADLESS:-true}"
     echo "  Browser: headless (Xvfb unavailable, BROWSER_HEADLESS=${BROWSER_HEADLESS})"

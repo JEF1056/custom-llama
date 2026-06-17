@@ -35,7 +35,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates xvfb && \
+    apt-get install -y --no-install-recommends curl ca-certificates xvfb xauth && \
     patchright install --with-deps chrome && \
     patchright install --with-deps chromium && \
     chmod -R o+rX /opt/playwright
