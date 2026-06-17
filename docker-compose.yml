@@ -89,8 +89,8 @@ services:
           cpus: "16.0"
           memory: 14G
         reservations:
-          cpus: "10"
-          memory: 10G
+          cpus: "8"
+          memory: 4G
 
     # No host port mapping — accessible only via Cloudflare Tunnel.
 
@@ -222,6 +222,14 @@ services:
     depends_on:
       - llama-server
       - mcp-search-server
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.5"
+          memory: 256M
 
   # ---------------------------------------------------------------------------
   # MCP Search Server — semantic web search with browser automation
