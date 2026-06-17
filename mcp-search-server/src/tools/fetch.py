@@ -1,6 +1,5 @@
 """Fetch tool for MCP server."""
 
-import json
 import logging
 
 from mcp.server import FastMCP
@@ -32,8 +31,8 @@ def fetch_handler(server: FastMCP) -> None:
 
         Long pages return a condensed preview plus a `content_handle`; call
         read_output(handle=content_handle) to read the full text in windows.
-        Returns: {url, title, content, content_length, truncated,
-        content_handle?, content_total_chars?, content_next_offset?, content_hint?}
+        Returns: markdown — title, URL, the extracted content, and (when the page
+        was truncated) a footer with the read_output handle to fetch the rest.
         """
         try:
             # Start browser if not running
@@ -72,26 +71,27 @@ def fetch_handler(server: FastMCP) -> None:
             # Clean up page
             await page.close()
 
-            content["content_length"] = len(full_text)
+            title = content.get("title") or "(untitled)"
+            preview = content.get("content", "")
+            total_chars = len(full_text)
+
+            heading = f"[{title}]({url})" if url else title
+            parts = [f"# {heading}", "", f"_Source: {url}_", "", preview]
+
             # If the inline preview is shorter than the full text, expose a handle
             # so the model can read the remainder via read_output.
-            if len(content["content"]) < len(full_text):
+            if len(preview) < total_chars:
                 handle = output_store.store(full_text, source=f"fetch: {url}")
-                content["truncated"] = True
-                content["content_handle"] = handle
-                content["content_total_chars"] = len(full_text)
-                # Preview is a summary (not a prefix), so the full text reads from 0.
-                content["content_next_offset"] = 0
-                content["content_hint"] = (
-                    f"Preview shown ({len(content['content'])} of {len(full_text)} chars). "
-                    f'Call read_output(handle="{handle}", offset=0) to read the full page.'
+                parts.append("")
+                parts.append("---")
+                parts.append(
+                    f"_Preview shown ({len(preview)} of {total_chars} chars). "
+                    f'Call read_output(handle="{handle}", offset=0) to read the full page._'
                 )
-            else:
-                content["truncated"] = False
 
-            return json.dumps(content, indent=2)
+            return "\n".join(parts).rstrip()
         except Exception as e:
             logger.error("Fetch error: %s", str(e))
-            return f"Error fetching URL: {str(e)}"
+            return f"**Error fetching URL:** {str(e)}"
 
     logger.info("Registered fetch tool")

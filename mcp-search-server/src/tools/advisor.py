@@ -1,6 +1,5 @@
 """Advisor tool — calls the local LLM for expert reasoning on complex problems."""
 
-import json
 import logging
 from typing import Any
 
@@ -97,7 +96,6 @@ def advisor_handler(server: FastMCP) -> None:
     async def advisor(
         context: str,
         question: str,
-        model: str | None = None,
     ) -> str:
         """Ask the advisor LLM for expert reasoning. Use early and often.
 
@@ -106,21 +104,13 @@ def advisor_handler(server: FastMCP) -> None:
 
         context: all relevant background (be generous).
         question: the specific question or task.
-        model: optional override of the default model.
-        Returns: {status, model, response}
+        Returns: markdown — the advisor's response under a header naming the model.
         """
         try:
-            result = await call_advisor(context, question, model)
-            return json.dumps({
-                "status": "success",
-                "model": model or settings.ADVISOR_MODEL,
-                "response": result,
-            }, indent=2, ensure_ascii=False)
+            result = await call_advisor(context, question)
+            return f"**Advisor ({settings.ADVISOR_MODEL}):**\n\n{result}"
         except Exception as e:
             logger.error("Advisor error: %s", str(e))
-            return json.dumps({
-                "status": "error",
-                "error": str(e),
-            }, indent=2)
+            return f"**Advisor error:** {str(e)}"
 
     logger.info("Registered advisor tool")

@@ -1,6 +1,5 @@
 """read_output tool: paginate through large outputs from other tools."""
 
-import json
 import logging
 
 from mcp.server import FastMCP
@@ -29,11 +28,31 @@ def read_output_handler(server: FastMCP) -> None:
                 result (or, on subsequent calls, the `next_offset` this tool
                 returns) to continue where you left off.
         limit:  characters to return (defaults to config, ~16000).
-        Keep calling with the returned `next_offset` until `has_more` is false.
-        Handles expire after ~30 min; if expired, re-run the original tool.
-        Returns: {status, content, offset, returned_chars, total_chars, has_more, next_offset}
+        Keep calling with the returned `next_offset` until the footer says the end
+        is reached. Handles expire after ~30 min; if expired, re-run the original tool.
+        Returns: markdown — the content window followed by a footer with the byte
+        range read, total size, and the next read_output call (or "end of output").
         """
         result = output_store.read(handle, offset=offset, limit=limit or settings.READ_OUTPUT_CHUNK_CHARS)
-        return json.dumps(result, indent=2, ensure_ascii=False)
+
+        if result.get("status") != "success":
+            return f"**Error:** {result.get('error', 'unknown error')}"
+
+        content = result.get("content", "")
+        start = result.get("offset", 0)
+        returned = result.get("returned_chars", 0)
+        total = result.get("total_chars", 0)
+        end = start + returned
+
+        if result.get("has_more"):
+            next_offset = result.get("next_offset")
+            footer = (
+                f"_Read chars {start}–{end} of {total}. "
+                f'Continue: read_output(handle="{handle}", offset={next_offset})._'
+            )
+        else:
+            footer = f"_Read chars {start}–{end} of {total}. End of output._"
+
+        return f"{content}\n\n---\n{footer}"
 
     logger.info("Registered read_output tool")

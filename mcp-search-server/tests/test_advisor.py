@@ -250,7 +250,7 @@ async def test_call_advisor_uses_override_model():
 
 
 def test_advisor_handler_success():
-    """Test that advisor_handler returns success JSON on successful call."""
+    """Test that advisor_handler returns markdown with the response on success."""
     mock_response = {
         "choices": [{"message": {"content": "Advisor response"}}]
     }
@@ -277,14 +277,12 @@ def test_advisor_handler_success():
             return result
 
         result = _run(_test())
-    parsed = json.loads(result)
-    assert parsed["status"] == "success"
-    assert parsed["model"] == "test-model"
-    assert parsed["response"] == "Advisor response"
+    assert result.startswith("**Advisor (test-model):**")
+    assert "Advisor response" in result
 
 
 def test_advisor_handler_error():
-    """Test that advisor_handler returns error JSON on failure."""
+    """Test that advisor_handler returns a markdown error line on failure."""
     import httpx
 
     mock_response_obj = AsyncMock()
@@ -309,9 +307,8 @@ def test_advisor_handler_error():
             return result
 
         result = _run(_test())
-    parsed = json.loads(result)
-    assert parsed["status"] == "error"
-    assert "Connection failed" in parsed["error"]
+    assert result.startswith("**Advisor error:**")
+    assert "Connection failed" in result
 
 
 def test_advisor_handler_uses_config_default_model():
@@ -339,8 +336,7 @@ def test_advisor_handler_uses_config_default_model():
             return result
 
         result = _run(_test())
-    parsed = json.loads(result)
-    assert parsed["model"] == settings.ADVISOR_MODEL
+    assert result.startswith(f"**Advisor ({settings.ADVISOR_MODEL}):**")
 
 
 # --- Config integration ---

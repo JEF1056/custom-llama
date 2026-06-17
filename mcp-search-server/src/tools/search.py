@@ -1,14 +1,11 @@
 """Search tool for MCP server."""
 
-import json
 import logging
-from datetime import datetime
 
 from mcp.server import FastMCP
 
 from src.config import settings
 from src.search.engines import get_search_engine
-from src.search.models import SearchResponse, SearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -22,29 +19,30 @@ def search_handler(server: FastMCP) -> None:
 
         max_results: defaults to config value (typically 10).
         Follow up with fetch(url) to get full content, or browser_screenshot(url) for a visual.
-        Returns: [{title, url, snippet, engine, timestamp}]
+        Returns: markdown — a numbered list of results (title, URL, snippet).
         """
         engine = get_search_engine()
         results = await engine.search(query, max_results)
 
-        # Convert to SearchResult objects with engine and timestamp
-        search_results = [
-            SearchResult(
-                url=r.get("url", ""),
-                title=r.get("title", ""),
-                snippet=r.get("snippet", ""),
-                engine=settings.SEARCH_ENGINE,
-                timestamp=datetime.utcnow(),
-            )
-            for r in results
+        if not results:
+            return f'# Search: "{query}"\n\n_No results from {settings.SEARCH_ENGINE}._'
+
+        lines = [
+            f'# Search: "{query}"',
+            "",
+            f"_{len(results)} result(s) from {settings.SEARCH_ENGINE}_",
+            "",
         ]
+        for i, r in enumerate(results, 1):
+            title = r.get("title", "") or "(untitled)"
+            url = r.get("url", "")
+            snippet = r.get("snippet", "")
+            heading = f"[{title}]({url})" if url else title
+            lines.append(f"{i}. **{heading}**")
+            if snippet:
+                lines.append(f"   {snippet}")
+            lines.append("")
 
-        response = SearchResponse(
-            query=query,
-            results=search_results,
-            total=len(search_results),
-        )
-
-        return response.model_dump_json(indent=2)
+        return "\n".join(lines).rstrip()
 
     logger.info("Registered search tool")

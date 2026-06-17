@@ -1,8 +1,6 @@
 """Deep search tool for MCP server."""
 
-import json
 import logging
-from datetime import datetime
 
 from mcp.server import FastMCP
 
@@ -11,7 +9,6 @@ from src.config import settings
 from src.extractor.content import ContentExtractor
 from src.output_store import output_store
 from src.search.engines import get_search_engine
-from src.search.models import SearchResponse, SearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -26,73 +23,77 @@ def deep_search_handler(server: FastMCP) -> None:
         Slower than search() but returns full text — use when snippets aren't enough.
         max_results: controls search pool; content extracted from top 3 only.
         For interactive browsing, use browser_run(code, session_id).
-        Each result is previewed; oversized content exposes a `content_handle` —
-        call read_output(handle=...) to read the rest.
-        Returns: {results: [...], deep_results: [{title, url, snippet, content, content_length, content_handle?}]}
+        Each result is previewed; oversized content exposes a read_output handle in
+        its footer so you can read the rest.
+        Returns: markdown — the top results with their extracted content, followed by
+        the remaining search hits as a link list.
         """
         engine = get_search_engine()
         search_results = await engine.search(query, max_results)
+
+        if not search_results:
+            return f'# Deep search: "{query}"\n\n_No results from {settings.SEARCH_ENGINE}._'
 
         # Start browser if not running
         if not browser_manager.is_running:
             await browser_manager.start()
 
+        sections: list[str] = [f'# Deep search: "{query}"', ""]
+
         # Extract content from top results
-        enriched_results: list[dict] = []
-        for i, result in enumerate(search_results[:3]):  # Limit to top 3 for deep extraction
-            enriched = {
-                "title": result.get("title", ""),
-                "url": result.get("url", ""),
-                "snippet": result.get("snippet", ""),
-            }
+        top = search_results[:3]  # Limit to top 3 for deep extraction
+        sections.append("## Top results (full content)")
+        sections.append("")
+        for i, result in enumerate(top, 1):
+            title = result.get("title", "") or "(untitled)"
+            url = result.get("url", "")
+            heading = f"[{title}]({url})" if url else title
+            sections.append(f"### {i}. {heading}")
+            if url:
+                sections.append(f"_Source: {url}_")
+            sections.append("")
 
             # Try to extract content from the URL
             try:
-                page = await browser_manager.goto(result.get("url", ""))
+                page = await browser_manager.goto(url)
                 html = await browser_manager.get_content(page)
 
                 extractor = ContentExtractor()
                 content = extractor.extract(html, truncate="never")
                 full_text = content.get("content", "")
-                enriched["content_length"] = len(full_text)
+                await page.close()
+
+                holder: dict = {}
                 output_store.attach(
-                    enriched,
+                    holder,
                     "content",
                     full_text,
-                    source=f"deep_search: {result.get('url', '')}",
+                    source=f"deep_search: {url}",
                     inline_chars=2000,
                 )
-
-                await page.close()
+                sections.append(holder.get("content", "") or "_(no content extracted)_")
+                if "content_hint" in holder:
+                    sections.append("")
+                    sections.append(f"_{holder['content_hint']}_")
             except Exception as e:
-                logger.error("Deep search content extraction error for %s: %s", result.get("url", ""), str(e))
-                enriched["content"] = ""
-                enriched["content_length"] = 0
+                logger.error("Deep search content extraction error for %s: %s", url, str(e))
+                sections.append("_(failed to extract content)_")
+            sections.append("")
 
-            enriched_results.append(enriched)
+        # Remaining hits as a compact link list
+        rest = search_results[3:]
+        if rest:
+            sections.append("## Other results")
+            sections.append("")
+            for result in rest:
+                title = result.get("title", "") or "(untitled)"
+                url = result.get("url", "")
+                snippet = result.get("snippet", "")
+                heading = f"[{title}]({url})" if url else title
+                sections.append(f"- **{heading}**")
+                if snippet:
+                    sections.append(f"  {snippet}")
 
-        # Convert search results to SearchResult objects
-        search_result_objects = [
-            SearchResult(
-                url=r.get("url", ""),
-                title=r.get("title", ""),
-                snippet=r.get("snippet", ""),
-                engine=settings.SEARCH_ENGINE,
-                timestamp=datetime.utcnow(),
-            )
-            for r in search_results
-        ]
-
-        response = SearchResponse(
-            query=query,
-            results=search_result_objects,
-            total=len(search_results),
-        )
-
-        # Add deep search results
-        response_dict = response.model_dump(mode="json")
-        response_dict["deep_results"] = enriched_results
-
-        return json.dumps(response_dict, indent=2)
+        return "\n".join(sections).rstrip()
 
     logger.info("Registered deep_search tool")

@@ -115,9 +115,10 @@ def browser_handler(server: FastMCP) -> None:
         SECURITY: code runs in-process (full Python/host access), gated behind the
         server's API key. Intended for trusted local use.
 
-        Large stdout/string results are previewed with a `stdout_handle` /
-        `result_handle`; call read_output(handle=...) to read the rest.
-        Returns: {status, result, stdout, url, title, interactables, session_id}
+        Large stdout/string results are previewed with a read_output handle shown
+        in their section; call read_output(handle=...) to read the rest.
+        Returns: markdown — status/session line, page title+URL, the returned result,
+        stdout (code block), and a list of visible interactable elements.
         """
         page = None
         sid = session_id
@@ -160,22 +161,49 @@ def browser_handler(server: FastMCP) -> None:
                 url, title = None, None
             summary = await _interactables_summary(page)
 
-            response = {
-                "status": "success",
-                "result": result_repr,
-                "url": url,
-                "title": title,
-                "interactables": summary,
-                "session_id": sid,
-            }
             # Paginate oversized stdout / string results via read_output.
-            output_store.attach(response, "stdout", stdout_full, source="browser_run stdout")
-            if isinstance(result_repr, str) and len(result_repr) > settings.OUTPUT_PREVIEW_CHARS:
-                output_store.attach(response, "result", result_repr, source="browser_run result")
-            return json.dumps(response, indent=2, default=str)
+            holder: dict = {}
+            output_store.attach(holder, "stdout", stdout_full, source="browser_run stdout")
+            result_is_text = isinstance(result_repr, str)
+            if result_is_text and len(result_repr) > settings.OUTPUT_PREVIEW_CHARS:
+                output_store.attach(holder, "result", result_repr, source="browser_run result")
+
+            parts = [f"**Status:** success · Session: {sid}"]
+            if title or url:
+                page_line = f"**Page:** {title or '(untitled)'}"
+                if url:
+                    page_line += f" — [{url}]({url})"
+                parts.append(page_line)
+
+            if result_repr is not None:
+                parts.append("")
+                if result_is_text:
+                    if "result" in holder:
+                        parts += ["**Result (preview):**", "```text", holder["result"], "```"]
+                        if "result_hint" in holder:
+                            parts.append(f"_{holder['result_hint']}_")
+                    elif "\n" in result_repr:
+                        parts += ["**Result:**", "```text", result_repr, "```"]
+                    else:
+                        parts.append(f"**Result:** {result_repr}")
+                elif isinstance(result_repr, (int, float, bool)):
+                    parts.append(f"**Result:** `{result_repr}`")
+                else:
+                    parts += ["**Result:**", "```json", json.dumps(result_repr, indent=2, default=str), "```"]
+
+            stdout_preview = holder.get("stdout", "")
+            if stdout_preview:
+                parts += ["", "**stdout:**", "```text", stdout_preview, "```"]
+                if "stdout_hint" in holder:
+                    parts.append(f"_{holder['stdout_hint']}_")
+
+            if summary:
+                parts += ["", "**Interactables:**", "```text", summary, "```"]
+
+            return "\n".join(parts)
         except Exception as e:
             logger.error("browser_run error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e), "session_id": sid})
+            return f"**Status:** error · Session: {sid}\n\n{str(e)}"
         finally:
             if one_off and page is not None:
                 with contextlib.suppress(Exception):

@@ -234,9 +234,10 @@ def code_run_handler(server: FastMCP) -> None:
         Blocked: os, sys, subprocess, shutil, socket, http, urllib, requests,
         threading, multiprocessing, signal, mmap.
         Use print() to return values; last expression result is also captured.
-        Large stdout/stderr is previewed with a `stdout_handle` / `stderr_handle`;
-        call read_output(handle=...) to read the rest.
-        Returns: {status, stdout, stderr, result, stdout_handle?, stderr_handle?}
+        Large stdout/stderr is previewed with a read_output handle shown in its
+        section; call read_output(handle=...) to read the rest.
+        Returns: markdown — status line, stdout/stderr as code blocks (omitted when
+        empty), and the final expression result.
         """
         global _CODE_EXEC_TIMEOUT
         if timeout:
@@ -244,18 +245,38 @@ def code_run_handler(server: FastMCP) -> None:
 
         try:
             result = _run_code_sandbox(code)
-            if result.get("status") == "success":
-                response: dict[str, Any] = {"status": "success", "exit_code": result.get("exit_code", 0)}
-                output_store.attach(response, "stdout", result.get("stdout", "") or "", source="code_run stdout")
-                output_store.attach(response, "stderr", result.get("stderr", "") or "", source="code_run stderr")
-                response["result"] = result.get("result")
-                return json.dumps(response, indent=2, ensure_ascii=False)
-            return json.dumps(result, indent=2, ensure_ascii=False)
+            if result.get("status") != "success":
+                return (
+                    f"**Status:** error\n\n"
+                    f"{result.get('error', 'unknown error')}"
+                    + (f" (exit code {result['exit_code']})" if "exit_code" in result else "")
+                )
+
+            holder: dict[str, Any] = {}
+            output_store.attach(holder, "stdout", result.get("stdout", "") or "", source="code_run stdout")
+            output_store.attach(holder, "stderr", result.get("stderr", "") or "", source="code_run stderr")
+
+            parts = [f"**Status:** success · exit {result.get('exit_code', 0)}"]
+
+            stdout = holder.get("stdout", "")
+            if stdout:
+                parts += ["", "**stdout:**", "```text", stdout, "```"]
+                if "stdout_hint" in holder:
+                    parts.append(f"_{holder['stdout_hint']}_")
+
+            stderr = holder.get("stderr", "")
+            if stderr:
+                parts += ["", "**stderr:**", "```text", stderr, "```"]
+                if "stderr_hint" in holder:
+                    parts.append(f"_{holder['stderr_hint']}_")
+
+            res = result.get("result")
+            if res is not None:
+                parts += ["", f"**result:** `{res}`"]
+
+            return "\n".join(parts)
         except Exception as e:
             logger.error("Code run error: %s", str(e))
-            return json.dumps({
-                "status": "error",
-                "error": str(e),
-            }, indent=2)
+            return f"**Status:** error\n\n{str(e)}"
 
     logger.info("Registered code_run tool")

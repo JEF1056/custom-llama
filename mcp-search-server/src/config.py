@@ -58,7 +58,7 @@ class Settings(BaseSettings):
 
     # Advisor (local LLM) settings
     ADVISOR_BASE_URL: str = Field(
-        default="http://localhost:8080/v1",
+        default="http://llama-server:8080/v1",
         description="Base URL for the local LLM server (OpenAI-compatible API)",
     )
     ADVISOR_MODEL: str = Field(

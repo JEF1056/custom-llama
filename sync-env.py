@@ -190,6 +190,12 @@ def sync_target(
     merged = merge(source_defaults, current, effective_secrets)
     merged.update(generated)
 
+    # Derived: the advisor calls the (auth-gated) llama-server, so when
+    # ADVISOR_API_KEY is left blank, default it to LLAMA_API_KEY. Without this the
+    # advisor tool gets a 401 whenever LLAMA_API_KEY is set.
+    if "ADVISOR_API_KEY" in merged and not merged["ADVISOR_API_KEY"] and merged.get("LLAMA_API_KEY"):
+        merged["ADVISOR_API_KEY"] = merged["LLAMA_API_KEY"]
+
     added     = [k for k in merged if k not in current]
     updated   = [k for k in merged if k in current and k not in effective_secrets and merged[k] != current[k]]
     removed   = [k for k in current if k not in merged]
