@@ -83,6 +83,16 @@ services:
         CUDA_ARCHS: ${CUDA_ARCHS:-86}
     image: llama-server:latest
     container_name: llama-server
+    deploy:
+      resources:
+        limits:
+          cpus: "16.0"
+          memory: 14G
+        reservations:
+          cpus: "10"
+          memory: 10G
+
+    restart: unless-stopped
 
     # No host port mapping — accessible only via Cloudflare Tunnel.
 
@@ -109,6 +119,9 @@ services:
       LLAMA_HOST: ${LLAMA_HOST:-0.0.0.0}
       LLAMA_PORT: ${LLAMA_PORT:-8080}
       LLAMA_API_KEY: ${LLAMA_API_KEY:-}
+      MCP_API_KEY: ${MCP_API_KEY:-}
+      CF_ACCESS_CLIENT_ID: ${CF_ACCESS_CLIENT_ID:-}
+      CF_ACCESS_CLIENT_SECRET: ${CF_ACCESS_CLIENT_SECRET:-}
       LLAMA_MODELS_MAX: ${LLAMA_MODELS_MAX:-1}
       LLAMA_MODELS_AUTOLOAD: ${LLAMA_MODELS_AUTOLOAD:-on}
 
