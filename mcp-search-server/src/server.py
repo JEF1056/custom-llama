@@ -136,6 +136,17 @@ def create_server() -> FastMCP:
             "Search/fetch before stating any fact that may be outdated. Run code instead "
             "of doing math in your head. Ask the advisor when reasoning gets hard. "
             "Chain tools freely; a wrong guess costs more than a tool call.\n\n"
+            "Which tool when:\n"
+            "- Need a fact / find sources -> search (titles+snippets).\n"
+            "- Read one known page -> fetch.\n"
+            "- Research a topic across sources -> deep_search (search + extract top 3).\n"
+            "- Click/type/login/scrape a JS-rendered or interactive site -> browser_run.\n"
+            "- See a page visually (layout, chart, confirm an action) -> browser_screenshot.\n"
+            "- Check which browser sessions are open -> browser_sessions.\n"
+            "- Math / parse / transform data (no web) -> code_run.\n"
+            "- Hard reasoning or design decision -> advisor.\n"
+            "- Current time / timezone -> time_now.\n"
+            "- Continue a previewed long result -> read_output.\n\n"
             "Tool guide:\n"
             "- advisor(context, question): local reasoning LLM. Call early on complex tasks "
             "and whenever stuck or unsure.\n"
@@ -145,10 +156,22 @@ def create_server() -> FastMCP:
             "Playwright Python (page/context/mgr/interactables() in scope; await "
             "everything, `return` data, `print` is captured). Use mgr.get_content(page) "
             "to extract a rendered page and interactables() to discover selectors. "
-            "Use a session_id to keep state across calls; browser_screenshot for vision; "
+            "On an unfamiliar page DON'T blind-guess selectors: make the first call a "
+            "cheap recon (goto + return content/interactables — every response lists "
+            "the page's interactables) then act with known selectors next call. "
+            "Use a session_id to keep state across calls (keep it short to save "
+            "tokens but unique per task — a 2-4 char topic hint + a digit, e.g. "
+            "\"wm1\"; reuse that exact id on follow-ups). Run independent browser "
+            "jobs in PARALLEL by emitting several browser_run calls in one turn, "
+            "each with its own session_id; browser_screenshot for vision; "
             "browser_close to free it. On error it returns the page URL/title, a "
             "traceback with the failing line, a hint, and the interactables — read "
-            "them to fix the step and retry.\n"
+            "them to fix the step and retry. When you need VISUAL context (page "
+            "layout, rendered state, an image/chart, confirming an action worked, or "
+            "seeing what's blocking you) take a browser_screenshot (same session_id) "
+            "instead of guessing from text.\n"
+            "- browser_sessions(): list open browser sessions (ids + current url) "
+            "when unsure which session_id to reuse.\n"
             "- code_run(code): sandboxed Python for math, data, parsing.\n"
             "- time_now: current time / timezone conversion (default PST).\n"
             "- read_output(handle, offset): when fetch/deep_search/code_run/browser_run "
@@ -446,6 +469,12 @@ def create_app(server: FastMCP) -> Starlette:
         allow_origins=_cors_origins,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Stateful Streamable HTTP returns the session id (and negotiated protocol
+        # version) as RESPONSE headers. A cross-origin browser client (the WebUI on
+        # chat.jessfan.com calling mcp.jessfan.com) can only read these via JS if
+        # they are listed here; otherwise the client can't echo mcp-session-id on
+        # follow-up requests and the server rejects them with "Missing session ID".
+        expose_headers=["mcp-session-id", "mcp-protocol-version"],
     )
     return app
 
