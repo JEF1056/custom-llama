@@ -122,7 +122,13 @@ def create_server() -> FastMCP:
         host=settings.MCP_SERVER_HOST,
         port=settings.MCP_SERVER_PORT,
         streamable_http_path="/",
-        stateless_http=True,
+        # Stateful (session-backed) Streamable HTTP. Stateless mode cannot stream
+        # server->client progress notifications back during a tool call, so the
+        # UI never receives ctx.report_progress() updates. A persistent session
+        # keeps the per-request SSE response stream open long enough to deliver
+        # them. Safe here: a single server replica, and the UI auto-reconnects on
+        # session expiry (e.g. after a restart).
+        stateless_http=False,
         instructions=(
             "Tools: web search, browser automation, page fetch, Python execution, time, "
             "and an advisor LLM for reasoning.\n\n"
@@ -136,8 +142,13 @@ def create_server() -> FastMCP:
             "- search(query): fast titles+snippets. fetch(url): full page text. "
             "deep_search(query): search + extract top results in one call.\n"
             "- browser_run(code, session_id): drive a real browser with async "
-            "Playwright Python (page/context in scope). Use a session_id to keep "
-            "state across calls; browser_screenshot for vision; browser_close to free it.\n"
+            "Playwright Python (page/context/mgr/interactables() in scope; await "
+            "everything, `return` data, `print` is captured). Use mgr.get_content(page) "
+            "to extract a rendered page and interactables() to discover selectors. "
+            "Use a session_id to keep state across calls; browser_screenshot for vision; "
+            "browser_close to free it. On error it returns the page URL/title, a "
+            "traceback with the failing line, a hint, and the interactables — read "
+            "them to fix the step and retry.\n"
             "- code_run(code): sandboxed Python for math, data, parsing.\n"
             "- time_now: current time / timezone conversion (default PST).\n"
             "- read_output(handle, offset): when fetch/deep_search/code_run/browser_run "

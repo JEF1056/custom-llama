@@ -64,7 +64,9 @@ def time_now_handler(server: FastMCP) -> None:
     """Register the time_now tool."""
 
     @server.tool()
-    async def time_now(timezone_name: str = _DEFAULT_TZ) -> str:
+    async def time_now(
+        timezone_name: str = _DEFAULT_TZ, ctx: Context | None = None
+    ) -> str:
         """Get the current date and time in a timezone (default: PST/Pacific).
 
         timezone_name: IANA name (America/New_York) or alias (PST, EST, UTC, JST).
@@ -73,8 +75,12 @@ def time_now_handler(server: FastMCP) -> None:
         UTC offset, and unix timestamp.
         """
         try:
+            if ctx:
+                await ctx.report_progress(0, 1, "Resolving timezone\u2026")
             tz = _resolve_timezone(timezone_name)
             now = datetime.now(timezone.utc).astimezone(tz)
+            if ctx:
+                await ctx.report_progress(1, 1, "Done")
             return json.dumps({
                 "status": "success",
                 "timezone": timezone_name,
