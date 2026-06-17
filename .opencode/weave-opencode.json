@@ -75,7 +75,7 @@
     }
   },
   "background": {
-    "defaultConcurr/neency": 2,
+    "defaultConcurrency": 2,
     "providerConcurrency": {
       "llama.cpp": 1
     }

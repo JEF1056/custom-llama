@@ -92,8 +92,6 @@ services:
           cpus: "10"
           memory: 10G
 
-    restart: unless-stopped
-
     # No host port mapping — accessible only via Cloudflare Tunnel.
 
     volumes:
