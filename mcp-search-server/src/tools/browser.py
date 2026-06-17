@@ -32,6 +32,67 @@ from src.output_store import output_store
 logger = logging.getLogger(__name__)
 
 
+# Unit Separator — won't appear in a model-chosen session_id, so it safely
+# delimits the per-caller namespace from the caller's own id.
+_NS_DELIM = "\x1f"
+
+
+def _client_ns(ctx: Context | None) -> str | None:
+    """Return a stable token identifying the calling connection, or None.
+
+    Two unrelated agents talking to this server concurrently may both pick the
+    same session_id (e.g. "wm1"); without isolation they would share one browser
+    context and clobber each other. We key each caller's sessions under a token
+    derived from their transport connection. Preference order:
+      1. the stateful StreamableHTTP ``mcp-session-id`` (a per-connection UUID,
+         never reused) read from the request headers,
+      2. the client-declared ``client_id`` from the request meta,
+      3. the identity of the live ServerSession object (stable while connected).
+    Returns None when no caller identity is available (e.g. stdio / single
+    tenant), in which case ids are used as-is (legacy behaviour).
+    """
+    if ctx is None:
+        return None
+    try:
+        rc = ctx.request_context
+    except Exception:
+        return None
+    req = getattr(rc, "request", None)
+    if req is not None:
+        with contextlib.suppress(Exception):
+            header_sid = req.headers.get("mcp-session-id")
+            if header_sid:
+                return header_sid
+    with contextlib.suppress(Exception):
+        if ctx.client_id:
+            return str(ctx.client_id)
+    with contextlib.suppress(Exception):
+        return f"obj{id(rc.session)}"
+    return None
+
+
+def _scope_id(ctx: Context | None, session_id: str | None) -> str | None:
+    """Map a caller-facing session_id to a globally-unique internal key."""
+    if session_id is None:
+        return None
+    ns = _client_ns(ctx)
+    return f"{ns}{_NS_DELIM}{session_id}" if ns else session_id
+
+
+def _unscope_id(ctx: Context | None, internal_id: str) -> str | None:
+    """Inverse of :func:`_scope_id` for THIS caller.
+
+    Returns the caller-facing id if ``internal_id`` belongs to this connection,
+    else None (so a caller never sees another connection's sessions).
+    """
+    ns = _client_ns(ctx)
+    if not ns:
+        # No namespace available: only legacy, un-delimited ids are "ours".
+        return None if _NS_DELIM in internal_id else internal_id
+    prefix = f"{ns}{_NS_DELIM}"
+    return internal_id[len(prefix):] if internal_id.startswith(prefix) else None
+
+
 async def _ensure_page(session_id: str | None):
     """Return a live page.
 
@@ -416,7 +477,10 @@ def browser_handler(server: FastMCP) -> None:
         you can see where you were and fix the selector/step and retry.
         """
         page = None
-        sid = session_id
+        # display_sid is what the model sees (its own id); internal_sid is the
+        # globally-unique key we store under, namespaced per calling connection.
+        display_sid = session_id
+        internal_sid = _scope_id(ctx, session_id)
         one_off = session_id is None
         buf = io.StringIO()
         try:
@@ -432,7 +496,10 @@ def browser_handler(server: FastMCP) -> None:
 
             if ctx:
                 await ctx.report_progress(0, total, "Preparing browser page\u2026")
-            page, sid = await _ensure_page(session_id)
+            page, internal_sid = await _ensure_page(internal_sid)
+            if display_sid is None:
+                # One-off: surface the transient id so the report is self-consistent.
+                display_sid = internal_sid
             mgr = _get_browser_manager()
 
             async def interactables():
@@ -492,7 +559,7 @@ def browser_handler(server: FastMCP) -> None:
                 await ctx.report_progress(total, total, "Done")
             return _render_run_report(
                 status="success",
-                sid=sid,
+                sid=display_sid,
                 title=title,
                 url=url,
                 body_parts=body_parts,
@@ -519,7 +586,7 @@ def browser_handler(server: FastMCP) -> None:
             output_store.attach(holder, "stdout", buf.getvalue(), source="browser_run stdout")
             return _render_run_report(
                 status="error",
-                sid=sid,
+                sid=display_sid,
                 title=title,
                 url=url,
                 body_parts=[],
@@ -532,7 +599,7 @@ def browser_handler(server: FastMCP) -> None:
         finally:
             if one_off and page is not None:
                 with contextlib.suppress(Exception):
-                    await _get_browser_manager().close_session(sid)
+                    await _get_browser_manager().close_session(internal_sid)
 
     @server.tool()
     async def browser_screenshot(
@@ -559,11 +626,14 @@ def browser_handler(server: FastMCP) -> None:
         """
         page = None
         one_off = session_id is None
-        sid = session_id
+        display_sid = session_id
+        internal_sid = _scope_id(ctx, session_id)
         try:
             if ctx:
                 await ctx.report_progress(0, 2, "Preparing page\u2026")
-            page, sid = await _ensure_page(session_id)
+            page, internal_sid = await _ensure_page(internal_sid)
+            if display_sid is None:
+                display_sid = internal_sid
             if url:
                 await page.goto(
                     url,
@@ -574,7 +644,7 @@ def browser_handler(server: FastMCP) -> None:
             if ctx:
                 await ctx.report_progress(1, 2, "Capturing screenshot\u2026")
             screenshot_bytes, screenshot_path = await _get_browser_manager().screenshot(
-                page, full_page=full_page, session_id=session_id,
+                page, full_page=full_page, session_id=display_sid,
             )
             summary = await _interactables_summary(page)
 
@@ -585,7 +655,7 @@ def browser_handler(server: FastMCP) -> None:
             )
             info = (
                 f"Screenshot saved: file://{screenshot_path}\n"
-                f"Session: {sid or 'one-off'}  Full page: {full_page}"
+                f"Session: {display_sid or 'one-off'}  Full page: {full_page}"
             )
             if summary:
                 info += "\n" + summary
@@ -598,7 +668,7 @@ def browser_handler(server: FastMCP) -> None:
         finally:
             if one_off and page is not None:
                 with contextlib.suppress(Exception):
-                    await _get_browser_manager().close_session(sid)
+                    await _get_browser_manager().close_session(internal_sid)
 
     @server.tool()
     async def browser_sessions(ctx: Context | None = None) -> str:
@@ -612,7 +682,12 @@ def browser_handler(server: FastMCP) -> None:
             mgr = _get_browser_manager()
             now = time.time()
             sessions = []
-            for sid, session in mgr._sessions.items():
+            for internal_sid, session in mgr._sessions.items():
+                # Only surface sessions that belong to THIS caller; map the
+                # internal namespaced key back to the id the caller chose.
+                own_id = _unscope_id(ctx, internal_sid)
+                if own_id is None:
+                    continue
                 page = session.pages[-1] if session.pages else None
                 url = None
                 title = None
@@ -622,7 +697,7 @@ def browser_handler(server: FastMCP) -> None:
                     with contextlib.suppress(Exception):
                         title = await page.title()
                 sessions.append({
-                    "session_id": sid,
+                    "session_id": own_id,
                     "current_url": url,
                     "current_title": title,
                     "pages": len(session.pages),
@@ -649,7 +724,7 @@ def browser_handler(server: FastMCP) -> None:
         try:
             if ctx:
                 await ctx.report_progress(0, 1, f"Closing session {session_id}\u2026")
-            ok = await _get_browser_manager().close_session(session_id)
+            ok = await _get_browser_manager().close_session(_scope_id(ctx, session_id))
             if ctx:
                 await ctx.report_progress(1, 1, "Done")
             return json.dumps({
