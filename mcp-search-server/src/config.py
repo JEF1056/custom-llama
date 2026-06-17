@@ -25,6 +25,11 @@ class Settings(BaseSettings):
 
     # Browser settings
     BROWSER_TIMEOUT: int = Field(default=30, description="Browser timeout in seconds")
+    BROWSER_HEADLESS: bool = Field(
+        default=True,
+        description="Run Chromium headless. Set false (with a virtual display like Xvfb) "
+        "for the strongest anti-bot evasion — headful browsers are far harder to fingerprint.",
+    )
     SCREENSHOT_DIR: str = Field(default="/app/mcp-files/screenshots", description="Directory to save screenshots")
     SESSION_IDLE_TIMEOUT: int = Field(default=600, description="Seconds of inactivity before browser session auto-closes")
 

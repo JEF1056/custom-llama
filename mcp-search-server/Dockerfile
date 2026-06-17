@@ -26,15 +26,18 @@ WORKDIR /app
 # Copy installed Python packages from builder
 COPY --link --from=builder /install /usr/local
 
-# Install Playwright browser + all its system deps in one shot.
-# --with-deps handles the exact apt packages Chromium needs — no manual list.
+# Install the real Google Chrome browser + all its system deps in one shot.
+# patchright drives genuine Google Chrome (channel="chrome"), which is far
+# harder to fingerprint than bundled Chromium / Chrome-for-Testing. xvfb lets
+# Chrome run headful (the strongest anti-detection posture) on a headless host.
 # Browsers go to /opt/playwright (owned root:root, world-readable).
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates && \
-    playwright install --with-deps chromium && \
+    apt-get install -y --no-install-recommends curl ca-certificates xvfb && \
+    patchright install --with-deps chrome && \
+    patchright install --with-deps chromium && \
     chmod -R o+rX /opt/playwright
 
 # Create non-root user and pre-create all writable dirs with correct ownership.

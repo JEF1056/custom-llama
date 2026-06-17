@@ -1,4 +1,34 @@
-"""Browser automation using Playwright with session management."""
+"""Browser automation with session management.
+
+Anti-detection strategy (state of the art, 2026):
+
+The strongest defence against modern anti-bot systems (Cloudflare, DataDome,
+Akamai, Kasada, Fingerprint.com) is NOT to inject a fake fingerprint — JS
+overrides are themselves detectable (``__pwInitScripts`` leak, main-world
+execution, ``Object.defineProperty`` own-property tells, Proxy traps). Instead
+we run a *genuine* Google Chrome whose fingerprint is real and internally
+consistent, driven by a CDP-patched automation driver that closes the protocol
+leaks vanilla Playwright exposes.
+
+Layers, in order of importance:
+  1. **patchright** (drop-in patched Playwright): closes the ``Runtime.enable``
+     CDP leak — the #1 signal used by Cloudflare/DataDome — and runs all
+     ``evaluate`` calls in an isolated world (no ``mainWorldExecution`` /
+     ``__pwInitScripts`` leak), patches ``Console.enable`` and the
+     command-flag tells, and supports closed shadow roots.
+  2. **Real Google Chrome** via ``channel="chrome"`` — not bundled Chromium /
+     Chrome-for-Testing, which advertise a "HeadlessChrome"/Chromium brand that
+     is an instant red flag in ``navigator.userAgentData``.
+  3. **Headful under Xvfb** (``BROWSER_HEADLESS=false``) — a real windowed
+     browser has genuine ``window.outer*`` dimensions, GPU, and a normal event
+     loop; headless is trivially fingerprinted.
+  4. **No fingerprint injection** — no custom user-agent, no spoofed headers,
+     no ``add_init_script``, no stealth plugin. The real Chrome identity is the
+     best identity, and it stays consistent with the host's IP/timezone.
+  5. **Trusted input only** — navigation/click/fill use the real CDP input
+     pipeline (``isTrusted === true``); we never dispatch synthetic JS events,
+     which carry ``isTrusted === false`` and are flagged by behavioural checks.
+"""
 
 import asyncio
 import logging
@@ -9,173 +39,26 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from playwright.async_api import async_playwright, Browser, BrowserContext, Page
-from playwright_stealth import Stealth
+# patchright is a drop-in, CDP-patched replacement for Playwright. Importing it
+# under the same names keeps the rest of the module identical to Playwright.
+from patchright.async_api import async_playwright, Browser, BrowserContext, Page
 
 from src.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Common timezones for fingerprint randomization
-TIMEZONES = [
-    "America/New_York",
-    "America/Los_Angeles",
-    "America/Chicago",
-    "America/Denver",
-    "Europe/London",
-    "Europe/Berlin",
-    "Europe/Paris",
-    "Asia/Tokyo",
-    "Asia/Shanghai",
-    "Australia/Sydney",
+# Chromium flags. Deliberately minimal: patchright already strips the
+# automation tells (removes --enable-automation, adds the right
+# AutomationControlled handling), so we only add what a containerised Chrome
+# genuinely needs plus a real desktop window size for headful mode. We do NOT
+# pass fingerprint-affecting or "stealth" flags (e.g. --disable-web-security,
+# --disable-gpu) — those break real behaviour and are themselves detectable.
+LAUNCH_ARGS = [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--window-size=1920,1080",
 ]
-
-# Common locales for fingerprint randomization
-LOCALES = ["en-US", "en-GB", "en-CA", "de-DE", "fr-FR", "ja-JP", "zh-CN", "es-ES"]
-
-# Common user agents for rotation
-USER_AGENTS = [
-    # Chrome — Windows
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-    # Chrome — macOS
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-    # Chrome — Linux
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-    # Edge — Windows
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0",
-    # Edge — macOS
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
-    # Firefox — macOS (Gecko)
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0",
-    # Firefox — Windows (Gecko)
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:135.0) Gecko/20100101 Firefox/135.0",
-    # Firefox — Linux (Gecko)
-    "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0",
-]
-
-# JavaScript hardening script injected via add_init_script on every context.
-# Covers: navigator hardening, permissions spoofing, chrome.runtime shell,
-# __proto__ removal, getBoundingClientRect noise, and canvas/WebGL spoofing.
-HARDENING_SCRIPT = """
-Object.freeze;
-
-// ── Navigator hardening ──────────────────────────────────────────────
-// Remove webdriver flag that headless browsers expose
-delete Object.getPrototypeOf(navigator).webdriver;
-
-// PhantomJS / Nightmare fingerprints
-if (window.callPhantom) { delete window.callPhantom; }
-if (window._nightmare) { delete window._nightmare; }
-
-// ── Permissions hardening ────────────────────────────────────────────
-// Spoof Permissions API to always return granted for notifications
-const _origQuery = navigator.permissions && navigator.permissions.query;
-if (navigator.permissions) {
-    navigator.permissions.query = function (descriptor) {
-        if (descriptor && descriptor.name === "notifications") {
-            return Promise.resolve({
-                name: "notifications",
-                state: "granted",
-                onchange: null,
-                addEventListener: Function.prototype,
-                removeEventListener: Function.prototype,
-                dispatchEvent: Function.prototype,
-            });
-        }
-        return _origQuery ? _origQuery.call(navigator.permissions, descriptor) : Promise.reject(new Error("Not supported"));
-    };
-}
-
-// ── Chrome runtime spoofing ──────────────────────────────────────────
-// Inject a realistic chrome.runtime shell (non-functional stub)
-if (!window.chrome) {
-    window.chrome = {};
-}
-window.chrome.runtime = {
-    id: "aapnipglbcbfoncpnmpnpenhpkbpkfgi",
-    connect: function () { return { onMessage: { addListener: Function.prototype }, send: Function.prototype, disconnect: Function.prototype }; },
-    sendMessage: function (/* message, callback */) { /* no-op */ },
-    onMessage: {
-        addListener: Function.prototype,
-        removeListener: Function.prototype,
-        hasListener: Function.prototype,
-        hasListeners: function () { return false; },
-    },
-    getURL: function (path) { return "chrome-extension://" + window.chrome.runtime.id + "/" + path; },
-    getManifest: function () {
-        return {
-            name: "Chrome Extension",
-            version: "1.0",
-            manifest_version: 3,
-            permissions: ["storage"],
-        };
-    },
-    getBackgroundPage: function (cb) { /* no-op */ },
-    getPlatformInfo: function (cb) { if (cb) cb({ os: "win" }); },
-};
-
-// ── __proto__ removal ────────────────────────────────────────────────
-// Some detectors check for __proto__ on navigator
-delete navigator.__proto__;
-
-// ── getBoundingClientRect noise ──────────────────────────────────────
-// Add ±0.5px random noise to coordinates
-coreFunc = Element.prototype.getBoundingClientRect;
-Element.prototype.getBoundingClientRect = function () {
-    const original = coreFunc.call(this);
-    const noise = () => (Math.random() - 0.5) * 1.0;
-    return {
-        x: original.x + noise(),
-        y: original.y + noise(),
-        width: original.width,
-        height: original.height,
-        top: original.top + noise(),
-        right: original.right + noise(),
-        bottom: original.bottom + noise(),
-        left: original.left + noise(),
-    };
-};
-
-// ── Canvas spoofing ──────────────────────────────────────────────────
-// Add 1–5 pixels of noise to getImageData output
-const _origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
-CanvasRenderingContext2D.prototype.getImageData = function (sx, sy, sw, sh) {
-    const imageData = _origGetImageData.call(this, sx, sy, sw, sh);
-    const data = imageData.data;
-    const noiseLevel = Math.floor(Math.random() * 5) + 1; // 1-5
-    for (let i = 0; i < data.length; i += 4) {
-        if (Math.random() > 0.9) {
-            const noise = (Math.random() - 0.5) * noiseLevel;
-            data[i] = Math.min(255, Math.max(0, data[i] + noise));
-            data[i + 1] = Math.min(255, Math.max(0, data[i + 1] + noise));
-            data[i + 2] = Math.min(255, Math.max(0, data[i + 2] + noise));
-        }
-    }
-    return imageData;
-};
-
-// ── WebGL spoofing ───────────────────────────────────────────────────
-// Add 1–5 pixels of noise to readPixels output
-const _origReadPixels = WebGLRenderingContext.prototype.readPixels;
-WebGLRenderingContext.prototype.readPixels = function (x, y, w, h, format, type, pixels, offset) {
-    _origReadPixels.call(this, x, y, w, h, format, type, pixels, offset);
-    if (pixels && pixels.length) {
-        const noiseLevel = Math.floor(Math.random() * 5) + 1;
-        for (let i = 0; i < pixels.length; i++) {
-            if (Math.random() > 0.9) {
-                const noise = (Math.random() - 0.5) * noiseLevel;
-                pixels[i] = Math.min(255, Math.max(0, pixels[i] + noise));
-            }
-        }
-    }
-};
-"""
 
 
 @dataclass
@@ -228,60 +111,57 @@ class BrowserManager:
         os.makedirs(self._screenshot_dir, exist_ok=True)
 
     async def start(self) -> None:
-        """Start the browser with anti-detection settings."""
+        """Launch a real Google Chrome via the CDP-patched patchright driver.
+
+        Uses ``channel="chrome"`` so the browser is genuine Google Chrome (not
+        bundled Chromium / Chrome-for-Testing, which expose a Chromium brand
+        that flags automation). Falls back to bundled Chromium if a system
+        Chrome is unavailable so the server still starts in minimal envs.
+        """
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--disable-web-security",
-                "--disable-features=IsolateOrigins,site-per-process",
-            ],
-        )
+        launch_kwargs: dict[str, Any] = {
+            "headless": settings.BROWSER_HEADLESS,
+            "args": LAUNCH_ARGS,
+        }
+        try:
+            self._browser = await self._playwright.chromium.launch(
+                channel="chrome", **launch_kwargs
+            )
+            channel = "chrome"
+        except Exception:
+            logger.warning(
+                "Google Chrome (channel=chrome) unavailable; falling back to bundled Chromium. "
+                "Install real Chrome for the strongest anti-detection."
+            )
+            self._browser = await self._playwright.chromium.launch(**launch_kwargs)
+            channel = "chromium"
         # Create default context
         self._default_context = await self._create_hardened_context()
-        await self._default_context.set_extra_http_headers({
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        })
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
-        logger.info("Browser started")
+        logger.info(
+            "Browser started (channel=%s, headless=%s)",
+            channel,
+            settings.BROWSER_HEADLESS,
+        )
 
     async def _create_hardened_context(self) -> BrowserContext:
-        """Create a new browser context with randomized fingerprint properties.
+        """Create a browser context that presents a genuine Chrome fingerprint.
 
-        Randomizes viewport dimensions, timezone, and locale to avoid
-        fingerprint-based detection.
+        Deliberately injects nothing: no spoofed user-agent, locale, timezone,
+        headers, init script, or stealth shim. patchright + real Chrome already
+        present a consistent, IP-coherent identity, and any JS override would
+        only add a detectable inconsistency. ``no_viewport=True`` makes the
+        context use the real OS window size (1920x1080 here) instead of the
+        emulated default viewport that fingerprinters flag.
 
         Returns:
-            A new BrowserContext with randomized properties and stealth applied.
+            A new BrowserContext backed by the real browser fingerprint.
         """
-        viewport = {
-            "width": random.randint(120, 192) * 10,
-            "height": random.randint(70, 108) * 10,
-        }
-        timezone = random.choice(TIMEZONES)
-        locale = random.choice(LOCALES)
-
         context = await self._browser.new_context(
-            viewport=viewport,
-            user_agent=random.choice(USER_AGENTS),
+            no_viewport=True,
             ignore_https_errors=True,
-            timezone_id=timezone,
-            locale=locale,
         )
-        await Stealth().apply_stealth_async(context)
-        await context.add_init_script(HARDENING_SCRIPT)
-        logger.info(
-            "Hardened context: viewport=%sx%s, tz=%s, locale=%s",
-            viewport["width"],
-            viewport["height"],
-            timezone,
-            locale,
-        )
+        logger.info("Created context (real Chrome fingerprint, no_viewport)")
         return context
 
     async def stop(self) -> None:
@@ -324,10 +204,6 @@ class BrowserManager:
 
         session = BrowserSession() if session_id is None else BrowserSession(session_id=session_id)
         session.context = await self._create_hardened_context()
-        await session.context.set_extra_http_headers({
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif",
-        })
         self._sessions[session.session_id] = session
         logger.info("Created new session: %s", session.session_id)
         return session.session_id
@@ -433,6 +309,17 @@ class BrowserManager:
             timeout=(timeout or settings.BROWSER_TIMEOUT) * 1000,
             wait_until=wait_until,
         )
+        # A couple of real (trusted) mouse moves — synthetic dispatched events
+        # have isTrusted=false and are ignored by behavioural detectors.
+        try:
+            for _ in range(random.randint(2, 4)):
+                await page.mouse.move(
+                    random.randint(0, 1280),
+                    random.randint(0, 720),
+                    steps=random.randint(3, 8),
+                )
+        except Exception:
+            pass
         # Simulate a scroll down and back up to avoid "always at top" fingerprint
         await page.evaluate(
             """() => {
@@ -462,20 +349,19 @@ class BrowserManager:
         await asyncio.sleep(delay)
 
     async def _simulate_mouse_movement(self, page: Page) -> None:
-        """Simulate a random mouse-movement event near the viewport center."""
-        await page.evaluate(
-            """() => {
-                const x = Math.floor(Math.random() * 200) + 100;
-                const y = Math.floor(Math.random() * 200) + 100;
-                const el = document.elementFromPoint(x, y);
-                if (el) {
-                    el.dispatchEvent(new MouseEvent('mousemove', {
-                        clientX: x, clientY: y,
-                        bubbles: true, cancelable: true,
-                    }));
-                }
-            }"""
-        )
+        """Move the real cursor along a short, jittered path (trusted input).
+
+        Uses the CDP input pipeline (``page.mouse.move``) so events carry
+        ``isTrusted === true``. Synthetic ``dispatchEvent`` mouse events are
+        ``isTrusted === false`` and are explicitly flagged by behavioural
+        detectors (e.g. brotector's ``Input.untrusted``), so we never use them.
+        """
+        try:
+            target_x = random.randint(80, 1000)
+            target_y = random.randint(80, 600)
+            await page.mouse.move(target_x, target_y, steps=random.randint(5, 12))
+        except Exception:
+            pass
 
     async def screenshot(
         self,

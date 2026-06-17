@@ -6,8 +6,10 @@ fastapi>=0.100.0
 uvicorn>=0.23.0
 
 # Browser Automation
-playwright>=1.40.0
-playwright-stealth>=1.0.0
+# patchright is a CDP-patched, drop-in replacement for Playwright that closes
+# the Runtime.enable / init-script / command-flag leaks vanilla Playwright +
+# stealth plugins cannot. It supersedes both playwright and playwright-stealth.
+patchright>=1.52.0
 
 # Web Scraping
 beautifulsoup4>=4.12.0
