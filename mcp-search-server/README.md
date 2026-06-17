@@ -64,24 +64,64 @@ Run async Playwright Python against a live page. This is the primary browser too
 The code body executes inside an async function with these names in scope:
 - `page` — Playwright `Page` (`await page.goto(url)`, `page.click(sel)`, `page.fill(sel, val)`, …)
 - `context` — the `BrowserContext` (new pages, cookies, …)
-- `interactables()` — async helper returning clickable/fillable elements with selectors
-- `mgr` — the `BrowserManager` (`mgr.get_content(page)`, `mgr.screenshot(page)`)
+- `interactables()` — async helper returning clickable/fillable elements with selectors; call it to **discover** selectors before clicking/filling
+- `mgr` — the `BrowserManager`; `mgr.get_content(page)` returns cleaned page text (the standard way to extract a rendered page)
+- also pre-imported: `asyncio`, `json`, `re`
 
-Use `return <value>` to send data back; `print()` output is also captured.
+Use `return <value>` to send data back; `print()` output is also captured. The
+body is async — `await` every Playwright call.
+
+**First call on an unfamiliar page — recon first, don't blind-guess selectors.**
+Every response (success *or* error) includes the page's live interactables and
+title/URL. So make the first call a cheap recon step — navigate and inspect —
+then act with known selectors on the next call:
+
+```python
+# call 1 (recon): navigate + inspect; note the returned Interactables
+browser_run(session_id="example-3f", code='''
+    await page.goto("https://example.com", wait_until="domcontentloaded")
+    return await mgr.get_content(page)   # or: return await interactables()
+''')
+# call 2 (act): use a selector you saw above
+browser_run(session_id="example-3f", code='''
+    await page.click("button#go")
+    return await page.title()
+''')
+```
+
+Pass a `session_id` for multi-step work so the recon'd page persists across calls
+(a one-off page is closed after each call, losing that context). Make the id
+**unique** so it can't collide with another task reusing the same page — a topic
+word plus a few random chars (e.g. `"walmart-7q3"`), and reuse that exact id on
+follow-up calls.
+
+**Gotchas:**
+- `console.*` does **not** work in-page (the browser Console API is disabled by patchright) — `return`/`print` from Python instead.
+- Prefer `wait_until="domcontentloaded"` over `"networkidle"` (networkidle often times out on pages with analytics/long-polling).
+- Default timeout is `2 × BROWSER_TIMEOUT` (min 60s); raise it with `timeout=`.
+- **Need visual context?** Text alone misses a lot — take a `browser_screenshot` (same `session_id`) when you need to see page layout, rendered state, an image/chart, confirm a click/scroll worked, or see what's blocking you (modal, cookie banner, captcha, login wall).
 
 **Parameters:**
 - `code` (string): async Playwright Python to execute.
-- `session_id` (string, optional): stable name (e.g. `"main"`) to keep the page/cookies alive across calls. Omit for a one-off page closed after the call.
+- `session_id` (string, optional): stable name to keep the page/cookies alive across calls. Make it unique (topic word + a few random chars, e.g. `"walmart-7q3"`) to avoid colliding with another task's session; reuse the same id on follow-ups. Omit for a one-off page closed after the call.
 - `timeout` (integer, optional): seconds; defaults to `2 × BROWSER_TIMEOUT` (min 60).
 
-**Returns:** JSON `{status, result, stdout, url, title, interactables, session_id}`.
+**Returns:** markdown — a status/session line, the page title+URL, the returned
+result, stdout, and the visible interactables. **On error** the same report is
+returned with `status: error` plus an **Error** block (traceback with the failing
+code line), a corrective hint, the page URL/title reached so far, any stdout
+printed before the failure, and the interactables list — so you can see where you
+were and fix the selector/step and retry.
 
 > **Security:** `browser_run` executes Python **in-process** (full host/Python
 > access), gated behind the server API key. Intended for trusted local use.
 
 ### `browser_screenshot`
 Capture a screenshot and return it as an MCP image (for vision). A code return
-value can't carry an image, so this stays a dedicated tool.
+value can't carry an image, so this stays a dedicated tool. Reach for it whenever
+you need **visual context** — page layout, rendered state, an image/chart,
+confirming an action worked, or seeing what's on a page the text didn't capture
+(modal, captcha, login wall).
 
 **Parameters:**
 - `url` (string, optional): page to load first.
@@ -89,6 +129,14 @@ value can't carry an image, so this stays a dedicated tool.
 - `session_id` (string, optional): screenshot a persistent session's current page.
 
 **Returns:** MCP `ImageContent` (base64 PNG) + a `file://` resource URI.
+
+### `browser_sessions`
+List the live browser sessions so you can reuse one instead of guessing ids.
+
+**Parameters:** none.
+
+**Returns:** JSON with a `sessions` array; each entry has `session_id`,
+`current_url`, `current_title`, `pages` (open page count), and `idle_seconds`.
 
 ### `browser_close`
 Close a browser session and free its pages/cookies.
@@ -99,12 +147,13 @@ Close a browser session and free its pages/cookies.
 ## Example Workflow
 
 ```python
-# 1. Multi-step interaction in a persistent session via browser_run:
-browser_run(session_id="main", code='''
-    await page.goto("https://example.com")
+# 1. Multi-step interaction in a persistent session via browser_run
+#    (unique session_id so it can't collide with another task):
+browser_run(session_id="search-9k2", code='''
+    await page.goto("https://example.com", wait_until="domcontentloaded")
     await page.fill("input#search", "playwright")
     await page.click("button[type='submit']")
-    await page.wait_for_load_state("networkidle")
+    await page.wait_for_load_state("domcontentloaded")
     return {
         "title": await page.title(),
         "heading": await page.inner_text("h1"),
@@ -113,10 +162,10 @@ browser_run(session_id="main", code='''
 ''')
 
 # 2. Visual check:
-browser_screenshot(session_id="main")
+browser_screenshot(session_id="search-9k2")
 
 # 3. Clean up:
-browser_close(session_id="main")
+browser_close(session_id="search-9k2")
 ```
 
 ## Usage Pattern
@@ -137,7 +186,7 @@ The MCP search server should be called in the following scenarios:
 |----------|-------|---------|
 | **Expert Reasoning** | `advisor` | Call this whenever you're stuck, need a second opinion, or face a complex reasoning task. Use it liberally. |
 | **Search Tools** | `search`, `fetch`, `deep_search` | Quick information retrieval via HTTP requests and content extraction. |
-| **Browser Automation** | `browser_run`, `browser_screenshot`, `browser_close` | Programmatic Playwright control for JavaScript-heavy pages. |
+| **Browser Automation** | `browser_run`, `browser_screenshot`, `browser_sessions`, `browser_close` | Programmatic Playwright control for JavaScript-heavy pages. |
 | **Data / Compute** | `code_run`, `time_now` | Sandboxed Python computation and time/timezone conversion. |
 | **Output Paging** | `read_output` | Read the remainder of a large result that `fetch` / `deep_search` / `code_run` / `browser_run` only previewed. Those tools return a `*_handle` plus `*_next_offset`; pass them to `read_output` to read the full content in windows (like reading a file by line range). |
 
@@ -202,14 +251,14 @@ User: "Search for 'Python 3.13 release notes' and click on the first result"
 
 Agent workflow:
 1. Call search(query="Python 3.13 release notes", max_results=3)
-2. Drive the page with browser_run (persistent session):
-   browser_run(session_id="main", code='''
-       await page.goto("https://docs.python.org/3/whatsnew/3.13.html")
+2. Drive the page with browser_run (persistent session, unique id):
+   browser_run(session_id="pydocs-5m", code='''
+       await page.goto("https://docs.python.org/3/whatsnew/3.13.html", wait_until="domcontentloaded")
        await page.click("a.release-link")
-       await page.wait_for_load_state("networkidle")
+       await page.wait_for_load_state("domcontentloaded")
        return await mgr.get_content(page)
    ''')
-3. browser_screenshot(session_id="main") to verify visually if needed
+3. browser_screenshot(session_id="pydocs-5m") to verify visually if needed
 ```
 
 #### Scenario 4: Form Interaction

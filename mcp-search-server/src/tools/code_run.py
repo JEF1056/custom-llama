@@ -6,13 +6,15 @@ import multiprocessing
 import os
 import textwrap
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from mcp.server import FastMCP
 from mcp.server.fastmcp import Context
+from pydantic import Field
 
 from src.config import settings
 from src.output_store import output_store
+from src.tools._report import error_report
 
 logger = logging.getLogger(__name__)
 
@@ -159,8 +161,8 @@ def _exec_wrapper(code: str) -> None:
     exec(compile(code, "<sandbox>", "exec"), ns, ns)  # type: ignore[arg-type]
 
 
-def _run_code_sandbox(code: str) -> dict[str, Any]:
-    """Run code in a subprocess sandbox with timeout."""
+def _run_code_sandbox(code: str, timeout: int) -> dict[str, Any]:
+    """Run code in a subprocess sandbox with a per-call timeout (seconds)."""
     wrapped = _wrap_code(code)
     output_file = "/tmp/code_run_output.json"
     # Remove stale output
@@ -172,7 +174,7 @@ def _run_code_sandbox(code: str) -> dict[str, Any]:
         args=(wrapped,),
     )
     proc.start()
-    proc.join(timeout=_CODE_EXEC_TIMEOUT)
+    proc.join(timeout=timeout)
 
     if proc.is_alive():
         proc.terminate()
@@ -182,7 +184,7 @@ def _run_code_sandbox(code: str) -> dict[str, Any]:
             proc.join()
         return {
             "status": "error",
-            "error": f"Code execution timed out after {_CODE_EXEC_TIMEOUT}s",
+            "error": f"Code execution timed out after {timeout}s",
             "exit_code": -1,
         }
 
@@ -220,13 +222,44 @@ def _run_code_sandbox(code: str) -> dict[str, Any]:
     }
 
 
+def _code_error_hint(message: str, exit_code: int | None) -> str | None:
+    """One-line corrective hint for a sandbox-level failure."""
+    msg = (message or "").lower()
+    if "timed out" in msg:
+        return (
+            "Computation exceeded the time limit. Pass a larger timeout=<seconds>, "
+            "or reduce the work (e.g. vectorize with numpy, process less data)."
+        )
+    # SIGKILL (-9) almost always means the OOM killer reclaimed the process.
+    if exit_code in (-9, 137) or "code -9" in msg:
+        return "Process was killed — most likely out of memory. Reduce data size or memory use."
+    return None
+
+
+def _stderr_hint(stderr: str) -> str | None:
+    """Hint when stderr reveals a blocked/failed import (runs but errors at runtime)."""
+    s = (stderr or "").lower()
+    if "not allowed in sandbox" in s or "importerror" in s or "modulenotfounderror" in s:
+        return (
+            "An import failed or was blocked. Allowed: numpy, pandas, matplotlib, scipy, "
+            "sympy, math, statistics, json, csv, re, datetime, collections, itertools, "
+            "functools, io, os.path, pathlib (+ most stdlib). Network/OS modules (os, sys, "
+            "subprocess, socket, http, urllib, requests) are blocked by design — for web "
+            "access use fetch/search/browser_run instead."
+        )
+    return None
+
+
 def code_run_handler(server: FastMCP) -> None:
     """Register the code_run tool."""
 
     @server.tool()
     async def code_run(
-        code: str,
-        timeout: int | None = None,
+        code: Annotated[str, Field(description="Python source to execute. Use print() to emit output; the last expression is also captured.")],
+        timeout: Annotated[
+            int | None,
+            Field(description="Max seconds before the sandbox is killed (default 30). Raise for heavy computation."),
+        ] = None,
         ctx: Context | None = None,
     ) -> str:
         """Execute Python code in a sandboxed subprocess. timeout defaults to 30s.
@@ -234,29 +267,29 @@ def code_run_handler(server: FastMCP) -> None:
         Allowed: numpy, pandas, matplotlib, scipy, sympy, math, statistics, json, csv,
         re, datetime, collections, itertools, functools, io, os.path, pathlib.
         Blocked: os, sys, subprocess, shutil, socket, http, urllib, requests,
-        threading, multiprocessing, signal, mmap.
+        threading, multiprocessing, signal, mmap. (For web access use fetch/search/
+        browser_run, not code_run.)
         Use print() to return values; last expression result is also captured.
         Large stdout/stderr is previewed with a read_output handle shown in its
         section; call read_output(handle=...) to read the rest.
         Returns: markdown — status line, stdout/stderr as code blocks (omitted when
-        empty), and the final expression result.
+        empty), and the final expression result. On failure: an Error block plus a
+        hint (e.g. raise timeout=, OOM, or a blocked import).
         """
-        global _CODE_EXEC_TIMEOUT
-        if timeout:
-            _CODE_EXEC_TIMEOUT = timeout
+        eff_timeout = timeout or _CODE_EXEC_TIMEOUT
 
         try:
             if ctx:
                 await ctx.report_progress(0, 1, "Running code in sandbox\u2026")
-            result = _run_code_sandbox(code)
+            result = _run_code_sandbox(code, eff_timeout)
             if ctx:
                 await ctx.report_progress(1, 1, "Done")
             if result.get("status") != "success":
-                return (
-                    f"**Status:** error\n\n"
-                    f"{result.get('error', 'unknown error')}"
-                    + (f" (exit code {result['exit_code']})" if "exit_code" in result else "")
-                )
+                msg = result.get("error", "unknown error")
+                exit_code = result.get("exit_code")
+                if exit_code is not None:
+                    msg = f"{msg} (exit code {exit_code})"
+                return error_report(msg, _code_error_hint(msg, exit_code))
 
             holder: dict[str, Any] = {}
             output_store.attach(holder, "stdout", result.get("stdout", "") or "", source="code_run stdout")
@@ -275,6 +308,10 @@ def code_run_handler(server: FastMCP) -> None:
                 parts += ["", "**stderr:**", "```text", stderr, "```"]
                 if "stderr_hint" in holder:
                     parts.append(f"_{holder['stderr_hint']}_")
+                # The process exited 0 but raised at runtime (traceback in stderr).
+                runtime_hint = _stderr_hint(result.get("stderr", ""))
+                if runtime_hint:
+                    parts.append(f"_{runtime_hint}_")
 
             res = result.get("result")
             if res is not None:
@@ -283,6 +320,6 @@ def code_run_handler(server: FastMCP) -> None:
             return "\n".join(parts)
         except Exception as e:
             logger.error("Code run error: %s", str(e))
-            return f"**Status:** error\n\n{str(e)}"
+            return error_report(str(e))
 
     logger.info("Registered code_run tool")

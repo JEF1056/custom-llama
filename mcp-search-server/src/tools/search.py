@@ -1,9 +1,11 @@
 """Search tool for MCP server."""
 
 import logging
+from typing import Annotated
 
 from mcp.server import FastMCP
 from mcp.server.fastmcp import Context
+from pydantic import Field
 
 from src.config import settings
 from src.search.engines import get_search_engine
@@ -15,7 +17,14 @@ def search_handler(server: FastMCP) -> None:
     """Register the search tool."""
 
     @server.tool()
-    async def search(query: str, max_results: int | None = None, ctx: Context | None = None) -> str:
+    async def search(
+        query: Annotated[str, Field(description="What to search the web for.")],
+        max_results: Annotated[
+            int | None,
+            Field(description="Max results to return; defaults to the server config (typically 10)."),
+        ] = None,
+        ctx: Context | None = None,
+    ) -> str:
         """Search the web. Returns titles, URLs, and snippets (no full page content).
 
         max_results: defaults to config value (typically 10).

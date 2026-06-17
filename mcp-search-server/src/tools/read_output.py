@@ -1,12 +1,15 @@
 """read_output tool: paginate through large outputs from other tools."""
 
 import logging
+from typing import Annotated
 
 from mcp.server import FastMCP
 from mcp.server.fastmcp import Context
+from pydantic import Field
 
 from src.config import settings
 from src.output_store import output_store
+from src.tools._report import error_report
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +19,16 @@ def read_output_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def read_output(
-        handle: str, offset: int = 0, limit: int | None = None, ctx: Context | None = None
+        handle: Annotated[str, Field(description="The `*_handle` value from a previewing tool's result.")],
+        offset: Annotated[
+            int,
+            Field(description="Start character index; pass the `*_next_offset` from the previous result to continue."),
+        ] = 0,
+        limit: Annotated[
+            int | None,
+            Field(description="Characters to return in this window (defaults to ~16000)."),
+        ] = None,
+        ctx: Context | None = None,
     ) -> str:
         """Read more of a large output that another tool only previewed.
 
@@ -41,7 +53,13 @@ def read_output_handler(server: FastMCP) -> None:
         result = output_store.read(handle, offset=offset, limit=limit or settings.READ_OUTPUT_CHUNK_CHARS)
 
         if result.get("status") != "success":
-            return f"**Error:** {result.get('error', 'unknown error')}"
+            msg = result.get("error", "unknown error")
+            hint = (
+                "Handle not found — it likely expired (~30 min TTL) or was evicted. "
+                "Re-run the original tool (fetch/deep_search/code_run/browser_run) to "
+                "get a fresh handle."
+            )
+            return error_report(msg, hint)
 
         if ctx:
             await ctx.report_progress(1, 1, "Done")

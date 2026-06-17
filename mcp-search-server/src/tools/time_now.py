@@ -3,10 +3,12 @@
 import json
 import logging
 from datetime import datetime, timezone
+from typing import Annotated
 from zoneinfo import ZoneInfo
 
 from mcp.server import FastMCP
 from mcp.server.fastmcp import Context
+from pydantic import Field
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +67,11 @@ def time_now_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def time_now(
-        timezone_name: str = _DEFAULT_TZ, ctx: Context | None = None
+        timezone_name: Annotated[
+            str,
+            Field(description="IANA name (e.g. America/New_York) or alias (PST, EST, UTC, JST). Defaults to Pacific."),
+        ] = _DEFAULT_TZ,
+        ctx: Context | None = None,
     ) -> str:
         """Get the current date and time in a timezone (default: PST/Pacific).
 

@@ -1,13 +1,15 @@
 """Advisor tool — calls the local LLM for expert reasoning on complex problems."""
 
 import logging
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
 from mcp.server import FastMCP
 from mcp.server.fastmcp import Context
+from pydantic import Field
 
 from src.config import settings
+from src.tools._report import error_report
 
 logger = logging.getLogger(__name__)
 
@@ -95,8 +97,11 @@ def advisor_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def advisor(
-        context: str,
-        question: str,
+        context: Annotated[
+            str,
+            Field(description="All relevant background for the question — be generous; the advisor only sees what you pass."),
+        ],
+        question: Annotated[str, Field(description="The specific question or task to reason about.")],
         ctx: Context | None = None,
     ) -> str:
         """Ask the advisor LLM for expert reasoning. Use early and often.
@@ -117,6 +122,10 @@ def advisor_handler(server: FastMCP) -> None:
             return f"**Advisor ({settings.ADVISOR_MODEL}):**\n\n{result}"
         except Exception as e:
             logger.error("Advisor error: %s", str(e))
-            return f"**Advisor error:** {str(e)}"
+            hint = (
+                "The advisor LLM is unreachable or errored. Proceed without it using "
+                "your own reasoning and the other tools, or retry once."
+            )
+            return error_report(f"Advisor ({settings.ADVISOR_MODEL}): {e}", hint)
 
     logger.info("Registered advisor tool")

@@ -1,9 +1,11 @@
 """Deep search tool for MCP server."""
 
 import logging
+from typing import Annotated
 
 from mcp.server import FastMCP
 from mcp.server.fastmcp import Context
+from pydantic import Field
 
 from src.browser.automation import browser_manager
 from src.config import settings
@@ -19,7 +21,12 @@ def deep_search_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def deep_search(
-        query: str, max_results: int | None = None, ctx: Context | None = None
+        query: Annotated[str, Field(description="What to search the web for.")],
+        max_results: Annotated[
+            int | None,
+            Field(description="Size of the search pool; full content is extracted from the top 3 only."),
+        ] = None,
+        ctx: Context | None = None,
     ) -> str:
         """Search the web and extract full page content from the top 3 results in one call.
 

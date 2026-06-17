@@ -1,9 +1,11 @@
 """Fetch tool for MCP server."""
 
 import logging
+from typing import Annotated
 
 from mcp.server import FastMCP
 from mcp.server.fastmcp import Context
+from pydantic import Field
 
 from src.browser.automation import browser_manager
 from src.config import settings
@@ -18,10 +20,19 @@ def fetch_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def fetch(
-        url: str,
-        truncate: TruncationMode = "always",
-        code_block_max_chars: int | None = None,
-        sections: list[str] | None = None,
+        url: Annotated[str, Field(description="The page URL to fetch and extract text from.")],
+        truncate: Annotated[
+            TruncationMode,
+            Field(description='How to trim long pages: "always" (default) | "never" | "main_only" | "code_only".'),
+        ] = "always",
+        code_block_max_chars: Annotated[
+            int | None,
+            Field(description="Override the per-code-block character limit."),
+        ] = None,
+        sections: Annotated[
+            list[str] | None,
+            Field(description="Heading texts to extract only those sections (useful for long pages)."),
+        ] = None,
         ctx: Context | None = None,
     ) -> str:
         """Fetch and extract text from a URL (renders JS via headless browser).
