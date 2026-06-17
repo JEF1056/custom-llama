@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from mcp.server import FastMCP
+from mcp.server.fastmcp import Context
 
 logger = logging.getLogger(__name__)
 

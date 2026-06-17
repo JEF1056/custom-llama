@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from mcp.server import FastMCP
+from mcp.server.fastmcp import Context
 
 from src.config import settings
 from src.output_store import output_store
@@ -226,6 +227,7 @@ def code_run_handler(server: FastMCP) -> None:
     async def code_run(
         code: str,
         timeout: int | None = None,
+        ctx: Context | None = None,
     ) -> str:
         """Execute Python code in a sandboxed subprocess. timeout defaults to 30s.
 
@@ -244,7 +246,11 @@ def code_run_handler(server: FastMCP) -> None:
             _CODE_EXEC_TIMEOUT = timeout
 
         try:
+            if ctx:
+                await ctx.report_progress(0, 1, "Running code in sandbox\u2026")
             result = _run_code_sandbox(code)
+            if ctx:
+                await ctx.report_progress(1, 1, "Done")
             if result.get("status") != "success":
                 return (
                     f"**Status:** error\n\n"

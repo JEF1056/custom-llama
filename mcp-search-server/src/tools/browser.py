@@ -17,6 +17,7 @@ import re
 import textwrap
 
 from mcp.server import FastMCP
+from mcp.server.fastmcp import Context
 from mcp.types import ImageContent, TextContent
 
 from src.browser.automation import get_browser_manager as _get_browser_manager
@@ -87,6 +88,7 @@ def browser_handler(server: FastMCP) -> None:
         code: str,
         session_id: str | None = None,
         timeout: int | None = None,
+        ctx: Context | None = None,
     ) -> str:
         """Drive a real browser by running async Playwright Python.
 
@@ -124,6 +126,8 @@ def browser_handler(server: FastMCP) -> None:
         sid = session_id
         one_off = session_id is None
         try:
+            if ctx:
+                await ctx.report_progress(0, 2, "Preparing browser page\u2026")
             page, sid = await _ensure_page(session_id)
             mgr = _get_browser_manager()
 
@@ -140,6 +144,8 @@ def browser_handler(server: FastMCP) -> None:
 
             buf = io.StringIO()
             eff_timeout = timeout or max(settings.BROWSER_TIMEOUT * 2, 60)
+            if ctx:
+                await ctx.report_progress(1, 2, "Running browser code\u2026")
             with contextlib.redirect_stdout(buf):
                 result = await asyncio.wait_for(
                     ns["__browser_main"](page, page.context, mgr, interactables),
@@ -200,6 +206,8 @@ def browser_handler(server: FastMCP) -> None:
             if summary:
                 parts += ["", "**Interactables:**", "```text", summary, "```"]
 
+            if ctx:
+                await ctx.report_progress(2, 2, "Done")
             return "\n".join(parts)
         except Exception as e:
             logger.error("browser_run error: %s", str(e))
@@ -214,6 +222,7 @@ def browser_handler(server: FastMCP) -> None:
         url: str | None = None,
         full_page: bool = False,
         session_id: str | None = None,
+        ctx: Context | None = None,
     ):
         """Capture a screenshot and return it as an MCP image (for vision).
 
@@ -226,6 +235,8 @@ def browser_handler(server: FastMCP) -> None:
         one_off = session_id is None
         sid = session_id
         try:
+            if ctx:
+                await ctx.report_progress(0, 2, "Preparing page\u2026")
             page, sid = await _ensure_page(session_id)
             if url:
                 await page.goto(
@@ -234,6 +245,8 @@ def browser_handler(server: FastMCP) -> None:
                     wait_until="domcontentloaded",
                 )
 
+            if ctx:
+                await ctx.report_progress(1, 2, "Capturing screenshot\u2026")
             screenshot_bytes, screenshot_path = await _get_browser_manager().screenshot(
                 page, full_page=full_page, session_id=session_id,
             )
@@ -250,6 +263,8 @@ def browser_handler(server: FastMCP) -> None:
             )
             if summary:
                 info += "\n" + summary
+            if ctx:
+                await ctx.report_progress(2, 2, "Done")
             return [image, TextContent(type="text", text=info)]
         except Exception as e:
             logger.error("browser_screenshot error: %s", str(e))
@@ -260,13 +275,17 @@ def browser_handler(server: FastMCP) -> None:
                     await _get_browser_manager().close_session(sid)
 
     @server.tool()
-    async def browser_close(session_id: str) -> str:
+    async def browser_close(session_id: str, ctx: Context | None = None) -> str:
         """Close a browser session and free its pages/cookies.
 
         Pass the session_id you used with browser_run.
         """
         try:
+            if ctx:
+                await ctx.report_progress(0, 1, f"Closing session {session_id}\u2026")
             ok = await _get_browser_manager().close_session(session_id)
+            if ctx:
+                await ctx.report_progress(1, 1, "Done")
             return json.dumps({
                 "status": "success" if ok else "error",
                 "message": f"Session {session_id} {'closed' if ok else 'not found'}",

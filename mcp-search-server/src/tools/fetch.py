@@ -3,6 +3,7 @@
 import logging
 
 from mcp.server import FastMCP
+from mcp.server.fastmcp import Context
 
 from src.browser.automation import browser_manager
 from src.config import settings
@@ -21,6 +22,7 @@ def fetch_handler(server: FastMCP) -> None:
         truncate: TruncationMode = "always",
         code_block_max_chars: int | None = None,
         sections: list[str] | None = None,
+        ctx: Context | None = None,
     ) -> str:
         """Fetch and extract text from a URL (renders JS via headless browser).
 
@@ -37,15 +39,21 @@ def fetch_handler(server: FastMCP) -> None:
         try:
             # Start browser if not running
             if not browser_manager.is_running:
+                if ctx:
+                    await ctx.report_progress(0, 4, "Starting browser\u2026")
                 await browser_manager.start()
 
             # Navigate to the URL
+            if ctx:
+                await ctx.report_progress(1, 4, f"Loading {url}\u2026")
             page = await browser_manager.goto(url)
 
             # Get the rendered page content
             html = await browser_manager.get_content(page)
 
             # Extract the inline preview (honours the caller's truncate mode)
+            if ctx:
+                await ctx.report_progress(2, 4, "Extracting content\u2026")
             extractor = ContentExtractor()
             content = extractor.extract(
                 html,
@@ -71,6 +79,8 @@ def fetch_handler(server: FastMCP) -> None:
             # Clean up page
             await page.close()
 
+            if ctx:
+                await ctx.report_progress(3, 4, "Formatting result\u2026")
             title = content.get("title") or "(untitled)"
             preview = content.get("content", "")
             total_chars = len(full_text)
@@ -89,6 +99,8 @@ def fetch_handler(server: FastMCP) -> None:
                     f'Call read_output(handle="{handle}", offset=0) to read the full page._'
                 )
 
+            if ctx:
+                await ctx.report_progress(4, 4, "Done")
             return "\n".join(parts).rstrip()
         except Exception as e:
             logger.error("Fetch error: %s", str(e))

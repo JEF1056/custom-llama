@@ -3,6 +3,7 @@
 import logging
 
 from mcp.server import FastMCP
+from mcp.server.fastmcp import Context
 
 from src.config import settings
 from src.search.engines import get_search_engine
@@ -14,19 +15,25 @@ def search_handler(server: FastMCP) -> None:
     """Register the search tool."""
 
     @server.tool()
-    async def search(query: str, max_results: int | None = None) -> str:
+    async def search(query: str, max_results: int | None = None, ctx: Context | None = None) -> str:
         """Search the web. Returns titles, URLs, and snippets (no full page content).
 
         max_results: defaults to config value (typically 10).
         Follow up with fetch(url) to get full content, or browser_screenshot(url) for a visual.
         Returns: markdown — a numbered list of results (title, URL, snippet).
         """
+        if ctx:
+            await ctx.report_progress(0, 1, f'Searching for "{query}"\u2026')
         engine = get_search_engine()
         results = await engine.search(query, max_results)
 
         if not results:
+            if ctx:
+                await ctx.report_progress(1, 1, "No results")
             return f'# Search: "{query}"\n\n_No results from {settings.SEARCH_ENGINE}._'
 
+        if ctx:
+            await ctx.report_progress(1, 1, f"Found {len(results)} result(s)")
         lines = [
             f'# Search: "{query}"',
             "",

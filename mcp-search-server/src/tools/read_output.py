@@ -3,6 +3,7 @@
 import logging
 
 from mcp.server import FastMCP
+from mcp.server.fastmcp import Context
 
 from src.config import settings
 from src.output_store import output_store
@@ -14,7 +15,9 @@ def read_output_handler(server: FastMCP) -> None:
     """Register the read_output tool."""
 
     @server.tool()
-    async def read_output(handle: str, offset: int = 0, limit: int | None = None) -> str:
+    async def read_output(
+        handle: str, offset: int = 0, limit: int | None = None, ctx: Context | None = None
+    ) -> str:
         """Read more of a large output that another tool only previewed.
 
         When fetch / deep_search / code_run / browser_run preview a big result,
@@ -33,10 +36,15 @@ def read_output_handler(server: FastMCP) -> None:
         Returns: markdown — the content window followed by a footer with the byte
         range read, total size, and the next read_output call (or "end of output").
         """
+        if ctx:
+            await ctx.report_progress(0, 1, f"Reading output {handle}\u2026")
         result = output_store.read(handle, offset=offset, limit=limit or settings.READ_OUTPUT_CHUNK_CHARS)
 
         if result.get("status") != "success":
             return f"**Error:** {result.get('error', 'unknown error')}"
+
+        if ctx:
+            await ctx.report_progress(1, 1, "Done")
 
         content = result.get("content", "")
         start = result.get("offset", 0)

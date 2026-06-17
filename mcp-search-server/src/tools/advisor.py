@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 from mcp.server import FastMCP
+from mcp.server.fastmcp import Context
 
 from src.config import settings
 
@@ -96,6 +97,7 @@ def advisor_handler(server: FastMCP) -> None:
     async def advisor(
         context: str,
         question: str,
+        ctx: Context | None = None,
     ) -> str:
         """Ask the advisor LLM for expert reasoning. Use early and often.
 
@@ -107,7 +109,11 @@ def advisor_handler(server: FastMCP) -> None:
         Returns: markdown — the advisor's response under a header naming the model.
         """
         try:
+            if ctx:
+                await ctx.report_progress(0, 1, f"Consulting advisor ({settings.ADVISOR_MODEL})\u2026")
             result = await call_advisor(context, question)
+            if ctx:
+                await ctx.report_progress(1, 1, "Done")
             return f"**Advisor ({settings.ADVISOR_MODEL}):**\n\n{result}"
         except Exception as e:
             logger.error("Advisor error: %s", str(e))

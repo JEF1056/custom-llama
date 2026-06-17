@@ -3,6 +3,7 @@
 import logging
 
 from mcp.server import FastMCP
+from mcp.server.fastmcp import Context
 
 from src.browser.automation import browser_manager
 from src.config import settings
@@ -17,7 +18,9 @@ def deep_search_handler(server: FastMCP) -> None:
     """Register the deep search tool."""
 
     @server.tool()
-    async def deep_search(query: str, max_results: int | None = None) -> str:
+    async def deep_search(
+        query: str, max_results: int | None = None, ctx: Context | None = None
+    ) -> str:
         """Search the web and extract full page content from the top 3 results in one call.
 
         Slower than search() but returns full text — use when snippets aren't enough.
@@ -29,6 +32,8 @@ def deep_search_handler(server: FastMCP) -> None:
         the remaining search hits as a link list.
         """
         engine = get_search_engine()
+        if ctx:
+            await ctx.report_progress(0, 1, f'Searching for "{query}"\u2026')
         search_results = await engine.search(query, max_results)
 
         if not search_results:
@@ -42,11 +47,17 @@ def deep_search_handler(server: FastMCP) -> None:
 
         # Extract content from top results
         top = search_results[:3]  # Limit to top 3 for deep extraction
+        # Progress total: one step per extracted result plus a final formatting step.
+        progress_total = len(top) + 1
         sections.append("## Top results (full content)")
         sections.append("")
         for i, result in enumerate(top, 1):
             title = result.get("title", "") or "(untitled)"
             url = result.get("url", "")
+            if ctx:
+                await ctx.report_progress(
+                    i - 1, progress_total, f"Reading result {i}/{len(top)}: {title}"
+                )
             heading = f"[{title}]({url})" if url else title
             sections.append(f"### {i}. {heading}")
             if url:
@@ -83,6 +94,8 @@ def deep_search_handler(server: FastMCP) -> None:
         # Remaining hits as a compact link list
         rest = search_results[3:]
         if rest:
+            if ctx:
+                await ctx.report_progress(len(top), progress_total, "Formatting remaining hits\u2026")
             sections.append("## Other results")
             sections.append("")
             for result in rest:
@@ -94,6 +107,8 @@ def deep_search_handler(server: FastMCP) -> None:
                 if snippet:
                     sections.append(f"  {snippet}")
 
+        if ctx:
+            await ctx.report_progress(progress_total, progress_total, "Done")
         return "\n".join(sections).rstrip()
 
     logger.info("Registered deep_search tool")
