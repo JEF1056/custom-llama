@@ -272,12 +272,11 @@ def test_advisor_handler_success():
             result = await advisor_fn(
                 context="test context",
                 question="test question",
-                model="test-model",
             )
             return result
 
         result = _run(_test())
-    assert result.startswith("**Advisor (test-model):**")
+    assert result.startswith(f"**Advisor ({settings.ADVISOR_MODEL}):**")
     assert "Advisor response" in result
 
 
@@ -352,7 +351,9 @@ def test_config_has_advisor_settings():
 
 def test_config_defaults():
     """Test that config defaults match expected values."""
-    assert settings.ADVISOR_BASE_URL == "http://localhost:8080/v1"
+    assert settings.ADVISOR_BASE_URL == "http://llama-server:8080/v1"
     assert settings.ADVISOR_MODEL == "qwopus3.6-27b"
-    assert settings.ADVISOR_API_KEY == ""
+    # ADVISOR_API_KEY is environment-derived (wired from LLAMA_API_KEY in
+    # deployment), so only assert it is a string rather than a fixed default.
+    assert isinstance(settings.ADVISOR_API_KEY, str)
     assert settings.ADVISOR_MAX_TOKENS == 8192
