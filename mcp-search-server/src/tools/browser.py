@@ -730,8 +730,6 @@ def browser_handler(server: FastMCP) -> None:
             except ValueError:
                 public_url = None
             info = (
-                f"![screenshot]({public_url})\n" if public_url else ""
-            ) + (
                 f"Screenshot URL: {public_url}\n" if public_url
                 else f"Screenshot saved: file://{screenshot_path}\n"
             )

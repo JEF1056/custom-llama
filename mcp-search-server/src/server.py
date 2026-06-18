@@ -287,7 +287,10 @@ async def serve_file(request: Request) -> Response:
         return Response(content="Not found", status_code=404)
     if not file_path.exists() or not file_path.is_file():
         return Response(content="Not found", status_code=404)
-    return FileResponse(str(file_path))
+    return FileResponse(
+        str(file_path),
+        headers={"Cross-Origin-Resource-Policy": "cross-origin"},
+    )
 
 
 async def list_files_api(request: Request) -> Response:
