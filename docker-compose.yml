@@ -246,8 +246,8 @@ services:
 
     volumes:
       # mcp-files: persistent output dir for screenshots and generated files.
-      # Named volume ensures appuser ownership is preserved across restarts.
-      - mcp-files:/app/mcp-files
+      # Use bind mount instead of named volume for full permission control.
+      - ./mcp-search-server/mcp-files:/app/mcp-files
 
     environment:
       MCP_SERVER_HOST: ${MCP_SERVER_HOST:-0.0.0.0}
@@ -268,8 +268,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "2.0"
-          memory: 2G
+          cpus: "8.0"
+          memory: 8G
         reservations:
           cpus: "0.5"
           memory: 512M
@@ -285,8 +285,3 @@ services:
 
     networks:
       - llama-net
-
-
-volumes:
-  mcp-files:
-    driver: local

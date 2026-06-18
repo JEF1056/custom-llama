@@ -1,6 +1,17 @@
 #!/bin/bash
 set -e
 
+# The container starts as root so we can make the bind-mounted output dir
+# writable regardless of its host ownership/uid, then drop to the unprivileged
+# appuser and re-exec this same script. (A bind mount keeps the host's
+# ownership, which usually won't match appuser's uid — the cause of
+# "Permission denied" when saving screenshots.)
+if [ "$(id -u)" = "0" ]; then
+    mkdir -p /app/mcp-files/screenshots 2>/dev/null || true
+    chown -R appuser:appuser /app/mcp-files 2>/dev/null || true
+    exec gosu appuser "$0" "$@"
+fi
+
 # Verify Playwright browsers exist
 if [ ! -d "${PLAYWRIGHT_BROWSERS_PATH:-/opt/playwright}" ]; then
     echo "ERROR: Playwright browsers not found at $PLAYWRIGHT_BROWSERS_PATH"

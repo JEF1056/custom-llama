@@ -14,6 +14,16 @@ from src.tools._report import error_report
 logger = logging.getLogger(__name__)
 
 
+def _fences_as_text(source: str) -> bool:
+    """Whether a stored output was originally rendered in a ```text``` fence.
+
+    browser_run / code_run preview stdout, stderr and (text) result inside fenced
+    code blocks, so read_output must fence their continuations too. fetch and
+    deep_search store raw markdown, which must stay unfenced.
+    """
+    return not source.startswith(("fetch", "deep_search"))
+
+
 def read_output_handler(server: FastMCP) -> None:
     """Register the read_output tool."""
 
@@ -78,6 +88,9 @@ def read_output_handler(server: FastMCP) -> None:
             )
         else:
             footer = f"_Read chars {start}–{end} of {total}. End of output._"
+
+        if _fences_as_text(result.get("source", "")):
+            content = f"```text\n{content}\n```"
 
         return f"{content}\n\n---\n{footer}"
 

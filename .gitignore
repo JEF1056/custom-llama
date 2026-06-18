@@ -29,3 +29,6 @@ opencode.json
 
 # Benchmark results (large JSONL files)
 benchmark/results/
+
+# Mcp files
+mcp-files/

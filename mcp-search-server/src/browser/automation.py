@@ -42,6 +42,7 @@ from typing import Any
 # patchright is a drop-in, CDP-patched replacement for Playwright. Importing it
 # under the same names keeps the rest of the module identical to Playwright.
 from patchright.async_api import async_playwright, Browser, BrowserContext, Page
+import html2text
 
 from src.config import settings
 
@@ -188,6 +189,42 @@ class BrowserManager:
         )
         logger.info("Created context (real Chrome fingerprint, no_viewport)")
         return context
+
+    async def managed_page(self, url: str, session_id: str | None = None):
+        """Async context manager for temporary pages that auto-cleanup on exit.
+
+        Usage:
+            async with browser_manager.managed_page(url) as page:
+                content = await browser_manager.get_content(page)
+                # page is automatically closed when exiting this block
+        
+        Args:
+            url: The URL to navigate to.
+            session_id: Optional session ID. If None, uses ephemeral session.
+
+        Yields:
+            The Page object.
+        """
+        class ManagedPageContext:
+            def __init__(self, mgr, url, session_id):
+                self.mgr = mgr
+                self.url = url
+                self.session_id = session_id
+                self.page = None
+
+            async def __aenter__(self):
+                self.page = await self.mgr.goto(self.url, session_id=self.session_id)
+                return self.page
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                if self.page:
+                    try:
+                        await self.page.close()
+                    except Exception as e:
+                        logger.warning("Error closing managed page: %s", str(e))
+                return False
+
+        return ManagedPageContext(self, url, session_id)
 
     async def stop(self) -> None:
         """Stop the browser pool and close all sessions."""
@@ -538,17 +575,34 @@ class BrowserManager:
         return elements
 
     async def get_content(self, page: Page) -> str:
-        """Get the page content.
+        """Get the page content as markdown-formatted text.
+
+        Fetches the HTML content and converts it to clean markdown using html2text.
+        This provides a more readable, LLM-friendly representation of page content
+        compared to raw HTML.
 
         Args:
             page: The page to get content from.
 
         Returns:
-            The HTML content of the page.
+            The page content as markdown-formatted text.
         """
-        content = await page.content()
-        logger.info("Page content retrieved (%d bytes)", len(content))
-        return content
+        html_content = await page.content()
+        
+        # Convert HTML to markdown using html2text
+        h = html2text.HTML2Text()
+        h.ignore_links = False
+        h.ignore_images = False
+        h.body_width = 0  # Don't wrap text
+        h.unicode_snob = True
+        h.inline_links = True
+        h.protect_links = True
+        
+        markdown_content = h.handle(html_content)
+        
+        logger.info("Page content converted to markdown (%d bytes HTML -> %d bytes markdown)", 
+                    len(html_content), len(markdown_content))
+        return markdown_content
 
     async def get_text(self, page: Page, selector: str) -> str:
         """Get text content of an element.

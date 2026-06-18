@@ -35,8 +35,10 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
 
     Reads MCP_API_KEY from settings.  When the key is empty, auth is skipped
     entirely (backward-compatible).  When set, requires
-    `Authorization: Bearer <key>` on /mcp, /files/*, and /messages/ endpoints.
-    The /health and GET /sse endpoints bypass auth.
+    `Authorization: Bearer <key>` on /mcp and /messages/ endpoints.
+    The /health, GET /sse, and /files/* endpoints bypass auth so that embedded
+    markdown images can be fetched by browsers without credentials.
+    The /api/files management endpoints remain protected.
 
     Rate limiting: 5 failures within 60 s per client IP → HTTP 429.
     Client IP is taken from the CF-Connecting-IP header (Cloudflare tunnel),
@@ -82,9 +84,12 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         if path == "/sse" and request.method == "GET":
             return await call_next(request)
+        # /files/* is public so embedded markdown images render without credentials.
+        if path.startswith("/files/"):
+            return await call_next(request)
 
         # Protected endpoints
-        if path == "/" or path.startswith("/files/") or path == "/messages/" or path.startswith("/api/files"):
+        if path == "/" or path == "/messages/" or path.startswith("/api/files"):
             auth_header = request.headers.get("Authorization", "")
             if not auth_header.startswith("Bearer "):
                 return Response(
@@ -156,18 +161,22 @@ def create_server() -> FastMCP:
             "Playwright Python (page/context/mgr/interactables() in scope; await "
             "everything, `return` data, `print` is captured). Use mgr.get_content(page) "
             "to extract a rendered page and interactables() to discover selectors. "
-            "PASS a session_id for ANY multi-step work (recon + act, chained actions) "
-            "or ALL state (cookies/login/nav) is lost after the call; omit ONLY for "
-            "a single one-shot extract. On an unfamiliar page DON'T blind-guess "
-            "selectors: recon first (goto + get_content/interactables) then act with "
-            "known selectors. Keep session ids SHORT (2-4 chars + digit, e.g. \"wm1\") "
-            "to save tokens. Run independent jobs in PARALLEL by emitting multiple "
-            "browser_run calls in one turn, each with its OWN session_id (e.g. \"wm1\", "
-            "\"amz1\"); browser_screenshot for visual context (same session_id); "
-            "browser_close to free. On error it returns page URL/title, traceback with "
-            "failing line, hint, and interactables — use to fix and retry.\n"
-            "- browser_sessions(): list open sessions (ids + current url) when unsure "
-            "which session_id to reuse.\n"
+            "On an unfamiliar page DON'T blind-guess selectors: make the first call a "
+            "cheap recon (goto + return content/interactables — every response lists "
+            "the page's interactables) then act with known selectors next call. "
+            "Use a session_id to keep state across calls (keep it short to save "
+            "tokens but unique per task — a 2-4 char topic hint + a digit, e.g. "
+            "\"wm1\"; reuse that exact id on follow-ups). Run independent browser "
+            "jobs in PARALLEL by emitting several browser_run calls in one turn, "
+            "each with its own session_id; browser_screenshot for vision; "
+            "browser_close to free it. On error it returns the page URL/title, a "
+            "traceback with the failing line, a hint, and the interactables — read "
+            "them to fix the step and retry. When you need VISUAL context (page "
+            "layout, rendered state, an image/chart, confirming an action worked, or "
+            "seeing what's blocking you) take a browser_screenshot (same session_id) "
+            "instead of guessing from text.\n"
+            "- browser_sessions(): list open browser sessions (ids + current url) "
+            "when unsure which session_id to reuse.\n"
             "- code_run(code): sandboxed Python for math, data, parsing.\n"
             "- time_now: current time / timezone conversion (default PST).\n"
             "- read_output(handle, offset): when fetch/deep_search/code_run/browser_run "
@@ -266,10 +275,16 @@ async def serve_file(request: Request) -> Response:
     """Serve a file from the output directory.
 
     Exposes files produced by MCP tools (e.g. browser_screenshot) as
-    downloadable resources via the FILE_BASE_URL.
+    downloadable resources via the FILE_BASE_URL. Supports nested paths
+    (e.g. ``screenshots/foo.png``) while rejecting path traversal so a
+    request can never escape FILE_OUTPUT_DIR.
     """
     filename = request.path_params["filename"]
-    file_path = Path(settings.FILE_OUTPUT_DIR) / filename
+    base_dir = Path(settings.FILE_OUTPUT_DIR).resolve()
+    file_path = (base_dir / filename).resolve()
+    # Reject any path that escapes the output directory (OWASP A01).
+    if base_dir != file_path and base_dir not in file_path.parents:
+        return Response(content="Not found", status_code=404)
     if not file_path.exists() or not file_path.is_file():
         return Response(content="Not found", status_code=404)
     return FileResponse(str(file_path))
@@ -440,7 +455,7 @@ def create_app(server: FastMCP) -> Starlette:
     healthcheck_route = Route("/health", endpoint=healthcheck, methods=["GET"])
     # /files exact must come before /files/{filename} so Starlette doesn't greedily match
     file_ui_route = Route("/files", endpoint=serve_file_ui, methods=["GET"])
-    file_route = Route("/files/{filename}", endpoint=serve_file, methods=["GET"])
+    file_route = Route("/files/{filename:path}", endpoint=serve_file, methods=["GET"])
     list_files_route = Route("/api/files", endpoint=list_files_api, methods=["GET"])
     upload_file_route = Route("/api/files/upload", endpoint=upload_file, methods=["POST"])
     delete_file_route = Route("/api/files/{filename}", endpoint=delete_file_api, methods=["DELETE"])

@@ -18,6 +18,7 @@ import re
 import textwrap
 import time
 import traceback
+from pathlib import Path
 from typing import Annotated
 
 from mcp.server import FastMCP
@@ -155,6 +156,15 @@ def _clean_browser_traceback(exc: BaseException) -> str:
     offset so reported line numbers line up with the code the model wrote, and
     fall back to the raw exception text if no user frame is present.
     """
+    # SyntaxError is raised at parse/compile time, before any <browser_run>
+    # frame exists, so handle it explicitly: subtract the 1-line wrapper header
+    # from the reported line and echo the offending source line.
+    if isinstance(exc, SyntaxError):
+        user_lineno = (exc.lineno or 2) - 1
+        lines = [f"SyntaxError: {exc.msg} (code line {user_lineno})"]
+        if exc.text:
+            lines.append(f"    {exc.text.strip()}")
+        return "\n".join(lines)
     try:
         tb = exc.__traceback__
         frames = [f for f in traceback.extract_tb(tb) if f.filename == "<browser_run>"]
@@ -168,10 +178,69 @@ def _clean_browser_traceback(exc: BaseException) -> str:
         return f"{type(exc).__name__}: {exc}".strip()
 
 
-def _failure_hint(exc: BaseException) -> str | None:
+def _camel_to_snake(name: str) -> str:
+    """Convert a camelCase identifier to snake_case (waitForTimeout -> wait_for_timeout)."""
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+
+
+_ATTR_ERR_RE = re.compile(r"has no attribute '([A-Za-z_]+)'")
+
+# JavaScript tells: when browser_run code fails to parse as Python, these
+# patterns identify model output that was written against the JS Playwright API.
+_JS_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"\b(?:const|let|var)\s+\w"), "`const`/`let`/`var` declarations"),
+    (re.compile(r"=>"), "arrow functions `=>`"),
+    (re.compile(r"console\.log"), "`console.log` (use Python `print()`)"),
+    (re.compile(r"\.innerText\b|\.innerHTML\b|\.textContent\b"),
+     "DOM properties like `.innerText` (use `await page.inner_text(sel)`)"),
+    (re.compile(r"document\.querySelector"),
+     "`document.querySelector` (use `await page.query_selector(sel)`)"),
+]
+
+
+def _detect_js_syntax(code: str) -> str | None:
+    """Return a corrective hint if `code` looks like JavaScript, else None."""
+    found = [desc for rx, desc in _JS_PATTERNS if rx.search(code)]
+    if not found:
+        return None
+    return (
+        "This looks like JavaScript, but browser_run runs async PYTHON Playwright. "
+        "Detected: " + "; ".join(found[:3]) + ". Rewrite in Python: put each statement "
+        "on its own line, use snake_case methods (page.goto, page.wait_for_timeout, "
+        "page.inner_text), plain Python assignment, `print()` to output, and pass any "
+        'JS to page.evaluate as a STRING: await page.evaluate("() => document.body.innerText").'
+    )
+
+
+def _failure_hint(exc: BaseException, code: str | None = None) -> str | None:
     """Return a one-line corrective hint for common browser_run failures."""
     name = type(exc).__name__
     msg = str(exc).lower()
+    # A SyntaxError means the code never parsed as Python — most often because
+    # the model emitted JavaScript. Surface the JS tells when we can find them.
+    if isinstance(exc, SyntaxError):
+        js = _detect_js_syntax(code or "")
+        if js:
+            return js
+        return (
+            "Invalid Python syntax. browser_run executes async PYTHON Playwright "
+            "(not JavaScript): put each statement on its own line, use snake_case "
+            "methods, and `print()` to return data."
+        )
+    # A camelCase AttributeError means the model used the JavaScript Playwright
+    # API. Check this FIRST: names like 'waitForTimeout' contain the substring
+    # "timeout", which would otherwise misfire the timeout branch below and send
+    # the model chasing a non-existent timeout problem.
+    if name == "AttributeError":
+        m = _ATTR_ERR_RE.search(str(exc))
+        if m and any(c.isupper() for c in m.group(1)):
+            attr = m.group(1)
+            return (
+                f"'{attr}' is the JavaScript Playwright API. This sandbox is "
+                f"PYTHON Playwright — use snake_case: '{_camel_to_snake(attr)}'. "
+                "(e.g. wait_for_timeout, query_selector, wait_for_selector, "
+                "inner_text, get_attribute.)"
+            )
     if name == "TimeoutError" or "timeout" in msg:
         return (
             "Timed out. Try wait_until=\"domcontentloaded\" instead of \"networkidle\", "
@@ -387,7 +456,7 @@ def browser_handler(server: FastMCP) -> None:
 
     @server.tool()
     async def browser_run(
-        code: Annotated[str, Field(description="Async Playwright Python. `page`, `context`, `browser` are in scope; assign `result` or print to return data.")],
+        code: Annotated[str, Field(description="Python Playwright source (NOT JavaScript). snake_case API only — `wait_for_selector` not `waitForSelector`, `inner_text` not `innerText`, `get_attribute` not `getAttribute`. In scope: `page`, `context`, `mgr`, `interactables()`. `await` every call; `return` data; `print()` captured as stdout.")],
         session_id: Annotated[
             str | None,
             Field(description="Persistent session id. Keep it SHORT to save tokens but UNIQUE per concurrent task — a 2-4 char topic hint + a digit, e.g. 'wm1', 'amz2' (a bare word collides; a long random hash wastes tokens). Run independent jobs in parallel by emitting several browser_run calls in ONE turn, each with its own id; omit for a one-off page."),
@@ -412,7 +481,15 @@ def browser_handler(server: FastMCP) -> None:
                       (the standard way to extract a rendered page).
         Also pre-imported: asyncio, json, re.
 
-        How to write the code:
+        How to write the code (Python Playwright — NOT JavaScript):
+          - PYTHON snake_case API only. Common JS→Python translations:
+              waitForSelector / waitForTimeout / waitForLoadState
+                → wait_for_selector / wait_for_timeout / wait_for_load_state
+              querySelector / querySelectorAll
+                → query_selector / query_selector_all
+              innerText / textContent / getAttribute
+                → inner_text / text_content / get_attribute
+          - `console.log` does NOT work — use `print()` or `return` from Python.
           - The body is async — `await` every Playwright call.
           - `return <value>` to send data back (str/number/dict/list are fine).
           - `print(...)` is also captured and shown as stdout.
@@ -431,8 +508,6 @@ def browser_handler(server: FastMCP) -> None:
         calls (a one-off page is closed after each call, losing that context).
 
         Gotchas:
-          - console.* does NOT work in-page (the browser's Console API is disabled).
-            Use `return`/`print` from Python instead of console.log.
           - Prefer `wait_until="domcontentloaded"` over `"networkidle"` (networkidle
             often times out on pages with long-polling / analytics).
           - Default timeout is 2 × BROWSER_TIMEOUT (min 60s); raise it with `timeout=`.
@@ -477,10 +552,7 @@ def browser_handler(server: FastMCP) -> None:
         you can see where you were and fix the selector/step and retry.
         """
         page = None
-        # display_sid is what the model sees (its own id); internal_sid is the
-        # globally-unique key we store under, namespaced per calling connection.
-        display_sid = session_id
-        internal_sid = _scope_id(ctx, session_id)
+        sid = session_id
         one_off = session_id is None
         buf = io.StringIO()
         try:
@@ -496,10 +568,7 @@ def browser_handler(server: FastMCP) -> None:
 
             if ctx:
                 await ctx.report_progress(0, total, "Preparing browser page\u2026")
-            page, internal_sid = await _ensure_page(internal_sid)
-            if display_sid is None:
-                # One-off: surface the transient id so the report is self-consistent.
-                display_sid = internal_sid
+            page, sid = await _ensure_page(session_id)
             mgr = _get_browser_manager()
 
             async def interactables():
@@ -559,7 +628,7 @@ def browser_handler(server: FastMCP) -> None:
                 await ctx.report_progress(total, total, "Done")
             return _render_run_report(
                 status="success",
-                sid=display_sid,
+                sid=sid,
                 title=title,
                 url=url,
                 body_parts=body_parts,
@@ -573,7 +642,7 @@ def browser_handler(server: FastMCP) -> None:
             # line), a corrective hint, the page state reached so far, any stdout
             # captured before the crash, and the live interactables list.
             error_block = _clean_browser_traceback(e)
-            hint = _failure_hint(e)
+            hint = _failure_hint(e, code)
             url = title = None
             summary = ""
             if page is not None:
@@ -586,7 +655,7 @@ def browser_handler(server: FastMCP) -> None:
             output_store.attach(holder, "stdout", buf.getvalue(), source="browser_run stdout")
             return _render_run_report(
                 status="error",
-                sid=display_sid,
+                sid=sid,
                 title=title,
                 url=url,
                 body_parts=[],
@@ -599,7 +668,7 @@ def browser_handler(server: FastMCP) -> None:
         finally:
             if one_off and page is not None:
                 with contextlib.suppress(Exception):
-                    await _get_browser_manager().close_session(internal_sid)
+                    await _get_browser_manager().close_session(sid)
 
     @server.tool()
     async def browser_screenshot(
@@ -626,14 +695,11 @@ def browser_handler(server: FastMCP) -> None:
         """
         page = None
         one_off = session_id is None
-        display_sid = session_id
-        internal_sid = _scope_id(ctx, session_id)
+        sid = session_id
         try:
             if ctx:
                 await ctx.report_progress(0, 2, "Preparing page\u2026")
-            page, internal_sid = await _ensure_page(internal_sid)
-            if display_sid is None:
-                display_sid = internal_sid
+            page, sid = await _ensure_page(session_id)
             if url:
                 await page.goto(
                     url,
@@ -644,7 +710,7 @@ def browser_handler(server: FastMCP) -> None:
             if ctx:
                 await ctx.report_progress(1, 2, "Capturing screenshot\u2026")
             screenshot_bytes, screenshot_path = await _get_browser_manager().screenshot(
-                page, full_page=full_page, session_id=display_sid,
+                page, full_page=full_page, session_id=session_id,
             )
             summary = await _interactables_summary(page)
 
@@ -653,10 +719,23 @@ def browser_handler(server: FastMCP) -> None:
                 data=base64.b64encode(screenshot_bytes).decode("utf-8"),
                 mimeType="image/png",
             )
+            # Build a publicly fetchable URL so the chat UI can render the image.
+            # screenshot_path lives under FILE_OUTPUT_DIR (e.g.
+            # /app/mcp-files/screenshots/foo.png); expose it via the /files route.
+            try:
+                rel_path = Path(screenshot_path).resolve().relative_to(
+                    Path(settings.FILE_OUTPUT_DIR).resolve()
+                )
+                public_url = f"{settings.FILE_BASE_URL.rstrip('/')}/files/{rel_path.as_posix()}"
+            except ValueError:
+                public_url = None
             info = (
-                f"Screenshot saved: file://{screenshot_path}\n"
-                f"Session: {display_sid or 'one-off'}  Full page: {full_page}"
+                f"![screenshot]({public_url})\n" if public_url else ""
+            ) + (
+                f"Screenshot URL: {public_url}\n" if public_url
+                else f"Screenshot saved: file://{screenshot_path}\n"
             )
+            info += f"Session: {sid or 'one-off'}  Full page: {full_page}"
             if summary:
                 info += "\n" + summary
             if ctx:
@@ -668,7 +747,7 @@ def browser_handler(server: FastMCP) -> None:
         finally:
             if one_off and page is not None:
                 with contextlib.suppress(Exception):
-                    await _get_browser_manager().close_session(internal_sid)
+                    await _get_browser_manager().close_session(sid)
 
     @server.tool()
     async def browser_sessions(ctx: Context | None = None) -> str:
@@ -682,12 +761,7 @@ def browser_handler(server: FastMCP) -> None:
             mgr = _get_browser_manager()
             now = time.time()
             sessions = []
-            for internal_sid, session in mgr._sessions.items():
-                # Only surface sessions that belong to THIS caller; map the
-                # internal namespaced key back to the id the caller chose.
-                own_id = _unscope_id(ctx, internal_sid)
-                if own_id is None:
-                    continue
+            for sid, session in mgr._sessions.items():
                 page = session.pages[-1] if session.pages else None
                 url = None
                 title = None
@@ -697,7 +771,7 @@ def browser_handler(server: FastMCP) -> None:
                     with contextlib.suppress(Exception):
                         title = await page.title()
                 sessions.append({
-                    "session_id": own_id,
+                    "session_id": sid,
                     "current_url": url,
                     "current_title": title,
                     "pages": len(session.pages),
@@ -724,7 +798,7 @@ def browser_handler(server: FastMCP) -> None:
         try:
             if ctx:
                 await ctx.report_progress(0, 1, f"Closing session {session_id}\u2026")
-            ok = await _get_browser_manager().close_session(_scope_id(ctx, session_id))
+            ok = await _get_browser_manager().close_session(session_id)
             if ctx:
                 await ctx.report_progress(1, 1, "Done")
             return json.dumps({

@@ -35,7 +35,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates xvfb xauth && \
+    apt-get install -y --no-install-recommends curl ca-certificates xvfb xauth gosu && \
     patchright install --with-deps chrome && \
     patchright install --with-deps chromium && \
     chmod -R o+rX /opt/playwright
@@ -50,7 +50,9 @@ RUN groupadd -r appuser && \
     mkdir -p /app/mcp-files/screenshots /app/.cache/python && \
     chown -R appuser:appuser /app
 
-USER appuser
+# NOTE: we do NOT switch to USER appuser here. The container starts as root so
+# the entrypoint can chown the bind-mounted /app/mcp-files (whose host owner
+# uid may not match appuser) before dropping privileges to appuser via gosu.
 ENV HOME=/home/appuser
 
 # Copy entrypoint and source (changes frequently — placed last)
