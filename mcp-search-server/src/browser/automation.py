@@ -93,58 +93,76 @@ class BrowserSession:
 
 
 class BrowserManager:
-    """Manages Playwright browser instances with anti-detection features and session support."""
+    """Manages multiple Playwright browser instances with anti-detection features and session support.
+    
+    Uses a pool of Browser instances to enable true parallel browser automation.
+    An asyncio.Semaphore limits concurrent browsers to MAX_CONCURRENT_BROWSERS.
+    Each session is assigned to a browser from the pool, allowing independent
+    CDP streams and true parallelization of operations.
+    """
+
+    MAX_CONCURRENT_BROWSERS = 3  # Concurrent Browser instances; tune based on RAM/CPU
 
     def __init__(self, screenshot_dir: str | None = None):
-        """Initialize the browser manager.
+        """Initialize the browser manager with a browser pool.
 
         Args:
             screenshot_dir: Directory to save screenshots. Defaults to /app/mcp-files/screenshots.
         """
         self._playwright = None
-        self._browser: Browser | None = None
-        self._default_context: BrowserContext | None = None
+        self._browser_pool: list[Browser] = []  # Pool of Browser instances
+        self._browser_semaphore: asyncio.Semaphore | None = None  # Limits concurrent browsers
         self._sessions: dict[str, BrowserSession] = {}
+        self._session_to_browser: dict[str, int] = {}  # Maps session_id to pool index
         self._screenshot_dir = screenshot_dir or settings.SCREENSHOT_DIR
         self._cleanup_task: asyncio.Task | None = None
         # Ensure screenshot directory exists
         os.makedirs(self._screenshot_dir, exist_ok=True)
 
     async def start(self) -> None:
-        """Launch a real Google Chrome via the CDP-patched patchright driver.
+        """Launch multiple Chrome browsers via the CDP-patched patchright driver.
 
-        Uses ``channel="chrome"`` so the browser is genuine Google Chrome (not
+        Creates MAX_CONCURRENT_BROWSERS instances to enable true parallelization.
+        Uses ``channel="chrome"`` so each browser is genuine Google Chrome (not
         bundled Chromium / Chrome-for-Testing, which expose a Chromium brand
         that flags automation). Falls back to bundled Chromium if a system
         Chrome is unavailable so the server still starts in minimal envs.
         """
         self._playwright = await async_playwright().start()
+        self._browser_semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_BROWSERS)
         launch_kwargs: dict[str, Any] = {
             "headless": settings.BROWSER_HEADLESS,
             "args": LAUNCH_ARGS,
         }
-        try:
-            self._browser = await self._playwright.chromium.launch(
-                channel="chrome", **launch_kwargs
-            )
-            channel = "chrome"
-        except Exception:
-            logger.warning(
-                "Google Chrome (channel=chrome) unavailable; falling back to bundled Chromium. "
-                "Install real Chrome for the strongest anti-detection."
-            )
-            self._browser = await self._playwright.chromium.launch(**launch_kwargs)
-            channel = "chromium"
-        # Create default context
-        self._default_context = await self._create_hardened_context()
+        
+        # Launch multiple browser instances
+        channel = None
+        for i in range(self.MAX_CONCURRENT_BROWSERS):
+            try:
+                browser = await self._playwright.chromium.launch(
+                    channel="chrome", **launch_kwargs
+                )
+                channel = "chrome"
+            except Exception:
+                if i == 0:
+                    logger.warning(
+                        "Google Chrome (channel=chrome) unavailable; falling back to bundled Chromium. "
+                        "Install real Chrome for the strongest anti-detection."
+                    )
+                browser = await self._playwright.chromium.launch(**launch_kwargs)
+                channel = "chromium"
+            self._browser_pool.append(browser)
+            logger.info("Browser instance %d/%d launched", i + 1, self.MAX_CONCURRENT_BROWSERS)
+        
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         logger.info(
-            "Browser started (channel=%s, headless=%s)",
+            "Browser pool started (%d instances, channel=%s, headless=%s)",
+            len(self._browser_pool),
             channel,
             settings.BROWSER_HEADLESS,
         )
 
-    async def _create_hardened_context(self) -> BrowserContext:
+    async def _create_hardened_context(self, browser: Browser | None = None) -> BrowserContext:
         """Create a browser context that presents a genuine Chrome fingerprint.
 
         Deliberately injects nothing: no spoofed user-agent, locale, timezone,
@@ -154,10 +172,17 @@ class BrowserManager:
         context use the real OS window size (1920x1080 here) instead of the
         emulated default viewport that fingerprinters flag.
 
+        Args:
+            browser: The Browser instance to create context for. If None, uses first from pool.
+
         Returns:
-            A new BrowserContext backed by the real browser fingerprint.
+            A new BrowserContext backed by the real Chrome fingerprint.
         """
-        context = await self._browser.new_context(
+        if browser is None and self._browser_pool:
+            browser = self._browser_pool[0]
+        if browser is None:
+            raise RuntimeError("No browsers in pool")
+        context = await browser.new_context(
             no_viewport=True,
             ignore_https_errors=True,
         )
@@ -165,18 +190,23 @@ class BrowserManager:
         return context
 
     async def stop(self) -> None:
-        """Stop the browser and close all sessions."""
+        """Stop the browser pool and close all sessions."""
         # Close all sessions
         for session_id, session in list(self._sessions.items()):
             await session.close()
             logger.info("Closed session %s during shutdown", session_id)
         self._sessions.clear()
+        self._session_to_browser.clear()
 
-        # Close default context
-        if self._default_context:
-            await self._default_context.close()
-        if self._browser:
-            await self._browser.close()
+        # Close all browsers in the pool
+        for i, browser in enumerate(self._browser_pool):
+            try:
+                await browser.close()
+                logger.info("Closed browser instance %d/%d", i + 1, len(self._browser_pool))
+            except Exception as e:
+                logger.warning("Error closing browser instance %d: %s", i + 1, e)
+        self._browser_pool.clear()
+        
         if self._playwright:
             await self._playwright.stop()
         # Cancel background cleanup task
@@ -187,10 +217,10 @@ class BrowserManager:
             except asyncio.CancelledError:
                 pass
             self._cleanup_task = None
-        logger.info("Browser stopped")
+        logger.info("Browser pool stopped")
 
     async def create_session(self, session_id: str | None = None) -> str:
-        """Create a new browser session.
+        """Create a new browser session with a context from a browser in the pool.
 
         Args:
             session_id: Optional explicit id for the session. If None, a uuid is
@@ -202,17 +232,22 @@ class BrowserManager:
         if not self.is_running:
             await self.start()
 
+        # Select browser from pool using round-robin
+        browser_idx = len(self._sessions) % len(self._browser_pool)
+        browser = self._browser_pool[browser_idx]
+
         session = BrowserSession() if session_id is None else BrowserSession(session_id=session_id)
-        session.context = await self._create_hardened_context()
+        session.context = await self._create_hardened_context(browser=browser)
         self._sessions[session.session_id] = session
-        logger.info("Created new session: %s", session.session_id)
+        self._session_to_browser[session.session_id] = browser_idx
+        logger.info("Created new session: %s (browser pool index=%d)", session.session_id, browser_idx)
         return session.session_id
 
     async def close_session(self, session_id: str | None = None) -> bool:
         """Close a browser session.
 
         Args:
-            session_id: The session ID to close. If None, closes the default context.
+            session_id: The session ID to close. If None, closes all sessions.
 
         Returns:
             True if session was closed, False if session not found.
@@ -222,17 +257,15 @@ class BrowserManager:
             if session:
                 await session.close()
                 del self._sessions[session_id]
+                self._session_to_browser.pop(session_id, None)
                 logger.info("Closed session: %s", session_id)
                 return True
             return False
         else:
-            # Close default context
-            if self._default_context:
-                await self._default_context.close()
-                self._default_context = None
-                logger.info("Closed default context")
-                return True
-            return False
+            # Close all sessions
+            for sid in list(self._sessions.keys()):
+                await self.close_session(sid)
+            return True
 
     def _touch_session(self, session_id: str) -> None:
         """Update last_activity timestamp for a session."""
@@ -268,7 +301,7 @@ class BrowserManager:
         """Get a browser context by session ID.
 
         Args:
-            session_id: The session ID. If None, returns the default context.
+            session_id: The session ID. If None, creates a new ephemeral session.
 
         Returns:
             The browser context, or None if not found.
@@ -279,7 +312,9 @@ class BrowserManager:
                 self._touch_session(session_id)
                 return session.context
             return None
-        return self._default_context
+        # No session_id: create ephemeral session
+        sid = await self.create_session()
+        return self._sessions[sid].context
 
     async def goto(
         self,
@@ -673,12 +708,12 @@ class BrowserManager:
 
     @property
     def is_running(self) -> bool:
-        """Check if the browser is running.
+        """Check if the browser pool is running.
 
         Returns:
-            True if the browser is running, False otherwise.
+            True if the browser pool is initialized, False otherwise.
         """
-        return self._browser is not None and self._default_context is not None
+        return len(self._browser_pool) > 0
 
     @property
     def active_sessions(self) -> list[str]:
