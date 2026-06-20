@@ -47,17 +47,19 @@ def fetch_handler(server: FastMCP) -> None:
         Returns: markdown — title, URL, the extracted content, and (when the page
         was truncated) a footer with the read_output handle to fetch the rest.
         """
+        sid: str | None = None
         try:
-            # Start browser if not running
-            if not browser_manager.is_running:
-                if ctx:
-                    await ctx.report_progress(0, 4, "Starting browser\u2026")
-                await browser_manager.start()
+            # Create an ephemeral session so we can reliably close both page and
+            # context when done — just closing the page leaves the context alive.
+            # create_session() starts the browser pool if it isn't running yet.
+            if ctx:
+                await ctx.report_progress(0, 4, "Starting browser\u2026")
+            sid = await browser_manager.create_session()
 
             # Navigate to the URL
             if ctx:
                 await ctx.report_progress(1, 4, f"Loading {url}\u2026")
-            page = await browser_manager.goto(url)
+            page = await browser_manager.goto(url, session_id=sid)
 
             # Get the rendered page content
             html = await browser_manager.get_content(page)
@@ -87,9 +89,6 @@ def fetch_handler(server: FastMCP) -> None:
                     full_text, full_content["headings"], sections
                 )
 
-            # Clean up page
-            await page.close()
-
             if ctx:
                 await ctx.report_progress(3, 4, "Formatting result\u2026")
             title = content.get("title") or "(untitled)"
@@ -116,5 +115,8 @@ def fetch_handler(server: FastMCP) -> None:
         except Exception as e:
             logger.error("Fetch error: %s", str(e))
             return f"**Error fetching URL:** {str(e)}"
+        finally:
+            if sid is not None:
+                await browser_manager.close_session(sid)
 
     logger.info("Registered fetch tool")

@@ -9,6 +9,10 @@ set -e
 if [ "$(id -u)" = "0" ]; then
     mkdir -p /app/mcp-files/screenshots 2>/dev/null || true
     chown -R appuser:appuser /app/mcp-files 2>/dev/null || true
+    # Xvfb needs /tmp/.X11-unix to exist with sticky bit before it drops to
+    # a non-root uid; otherwise it gets EACCES and Chrome finds no display.
+    mkdir -p /tmp/.X11-unix 2>/dev/null || true
+    chmod 1777 /tmp/.X11-unix 2>/dev/null || true
     exec gosu appuser "$0" "$@"
 fi
 

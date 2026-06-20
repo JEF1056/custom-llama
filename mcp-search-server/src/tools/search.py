@@ -32,17 +32,17 @@ def search_handler(server: FastMCP) -> None:
         Returns: markdown — a numbered list of results (title, URL, snippet).
         """
         if ctx:
-            await ctx.report_progress(0, 1, f'Searching for "{query}"\u2026')
+            await ctx.report_progress(0, 2, f'Searching for "{query}"\u2026')
         engine = get_search_engine()
         results = await engine.search(query, max_results)
 
         if not results:
             if ctx:
-                await ctx.report_progress(1, 1, "No results")
+                await ctx.report_progress(2, 2, "No results")
             return f'# Search: "{query}"\n\n_No results from {settings.SEARCH_ENGINE}._'
 
         if ctx:
-            await ctx.report_progress(1, 1, f"Found {len(results)} result(s)")
+            await ctx.report_progress(1, 2, f"Formatting {len(results)} result(s)\u2026")
         lines = [
             f'# Search: "{query}"',
             "",
@@ -59,6 +59,8 @@ def search_handler(server: FastMCP) -> None:
                 lines.append(f"   {snippet}")
             lines.append("")
 
+        if ctx:
+            await ctx.report_progress(2, 2, "Done")
         return "\n".join(lines).rstrip()
 
     logger.info("Registered search tool")

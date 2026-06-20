@@ -87,7 +87,7 @@ services:
       resources:
         limits:
           cpus: "16.0"
-          memory: 14G
+          memory: 20G
         reservations:
           cpus: "8"
           memory: 4G

@@ -117,6 +117,7 @@ class BrowserManager:
         self._session_to_browser: dict[str, int] = {}  # Maps session_id to pool index
         self._screenshot_dir = screenshot_dir or settings.SCREENSHOT_DIR
         self._cleanup_task: asyncio.Task | None = None
+        self._start_lock = asyncio.Lock()  # Prevents concurrent start() calls from racing
         # Ensure screenshot directory exists
         os.makedirs(self._screenshot_dir, exist_ok=True)
 
@@ -129,6 +130,13 @@ class BrowserManager:
         that flags automation). Falls back to bundled Chromium if a system
         Chrome is unavailable so the server still starts in minimal envs.
         """
+        async with self._start_lock:
+            if self.is_running:
+                return  # Another concurrent caller already started the pool
+            await self._start_unlocked()
+
+    async def _start_unlocked(self) -> None:
+        """Internal: launch the browser pool. Must be called with _start_lock held."""
         self._playwright = await async_playwright().start()
         self._browser_semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_BROWSERS)
         launch_kwargs: dict[str, Any] = {
@@ -154,7 +162,7 @@ class BrowserManager:
                 channel = "chromium"
             self._browser_pool.append(browser)
             logger.info("Browser instance %d/%d launched", i + 1, self.MAX_CONCURRENT_BROWSERS)
-        
+
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         logger.info(
             "Browser pool started (%d instances, channel=%s, headless=%s)",
