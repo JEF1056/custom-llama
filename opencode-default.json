@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["@williamcr01/opencode-tps", "@opencode_weave/weave"],
+  "plugin": ["@williamcr01/opencode-tps", "github:JEF1056/harness#main"],
   "model": "llama.cpp/qwopus3.6-27b",
   "provider": {
     "llama.cpp": {
