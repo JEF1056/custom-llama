@@ -10,6 +10,8 @@
         "baseURL": "https://chat.jessfan.com/v1",
         "apiKey": "{env:LLAMA_API_KEY}",
         "includeUsage": true,
+        "timeout": 600000,
+        "chunkTimeout": 600000,
         "headers": {
           "CF-Access-Client-Id": "{env:CF_ACCESS_CLIENT_ID}",
           "CF-Access-Client-Secret": "{env:CF_ACCESS_CLIENT_SECRET}"

@@ -26,6 +26,7 @@ plans
 .roo
 .roomodes
 opencode.json
+.agents/
 
 # Benchmark results (large JSONL files)
 benchmark/results/

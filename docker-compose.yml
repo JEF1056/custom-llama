@@ -87,6 +87,7 @@ services:
       resources:
         limits:
           cpus: "16.0"
+          memory: "16G"
         reservations:
           cpus: "8"
           memory: 4G
@@ -116,6 +117,7 @@ services:
       LLAMA_HOST: ${LLAMA_HOST:-0.0.0.0}
       LLAMA_PORT: ${LLAMA_PORT:-8080}
       LLAMA_API_KEY: ${LLAMA_API_KEY:-}
+      LLAMA_REMOTE_API_KEY: ${LLAMA_REMOTE_API_KEY:-}
       MCP_API_KEY: ${MCP_API_KEY:-}
       CF_ACCESS_CLIENT_ID: ${CF_ACCESS_CLIENT_ID:-}
       CF_ACCESS_CLIENT_SECRET: ${CF_ACCESS_CLIENT_SECRET:-}
@@ -268,7 +270,7 @@ services:
       resources:
         limits:
           cpus: "8.0"
-          memory: 8G
+          memory: 4G
         reservations:
           cpus: "0.5"
           memory: 512M

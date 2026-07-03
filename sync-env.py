@@ -43,6 +43,7 @@ GLOBAL_SECRETS: set[str] = {
     "CF_ACCESS_CLIENT_ID",
     "CF_ACCESS_CLIENT_SECRET",
     "HF_TOKEN",
+    "LLAMA_REMOTE_API_KEY",
 }
 
 # Auto-generated as random tokens on first run (re-generated with --regenerate)

@@ -9,6 +9,7 @@ set -e
 HOST=${LLAMA_HOST:-0.0.0.0}
 PORT=${LLAMA_PORT:-8080}
 API_KEY=${LLAMA_API_KEY:-}
+REMOTE_API_KEY=${LLAMA_REMOTE_API_KEY:-}
 UI_CONFIG_FILE=/etc/llama-server/webui-config.json
 MODELS_PRESET=/etc/llama-server/models.ini
 MODELS_MAX=${LLAMA_MODELS_MAX:-1}
@@ -36,6 +37,7 @@ WEBUI_PATH=/etc/llama-server/webui
 EXTRA_ARGS=()
 [ "$MODELS_AUTOLOAD" != "on" ] && EXTRA_ARGS+=(--no-models-autoload)
 [ -n "$API_KEY" ]               && EXTRA_ARGS+=(--api-key "$API_KEY")
+[ -n "$REMOTE_API_KEY" ]        && EXTRA_ARGS+=(--remote-api-key "$REMOTE_API_KEY")
 # --path overrides the embedded UI \u2014 useful for local development without a rebuild.
 [ -d "$WEBUI_PATH" ]            && EXTRA_ARGS+=(--path "$WEBUI_PATH")
 

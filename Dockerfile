@@ -44,8 +44,6 @@ RUN rm -rf /var/lib/apt/lists/* && \
 RUN git clone --depth 1 --branch llama-next --recursive \
   https://github.com/JEF1056/llama-cpp-turboquant.git /llama.cpp
 
-COPY server-context.cpp /llama.cpp/tools/server/server-context.cpp
-
 # Pre-populate the UI dist so cmake's local-build check succeeds and skips
 # the HuggingFace download entirely. The new ui-assets.cmake treats
 # tools/ui/dist as "pre-built assets" (Priority 1) and embeds them directly,
