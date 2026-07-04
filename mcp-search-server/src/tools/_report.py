@@ -1,8 +1,8 @@
 """Shared helpers for rendering consistent, recoverable tool error reports.
 
-browser_run returns rich, actionable errors (status line + an Error block + a
-one-line corrective hint) so the model can self-correct. These helpers let the
-other tools (code_run, advisor, read_output) return the same shape instead of a
+Tools return rich, actionable errors (status line + an Error block + a
+one-line corrective hint) so the model can self-correct. These helpers let all
+tools (code_run, advisor, read_output) return the same shape instead of a
 bare exception string the model can't act on.
 """
 

@@ -245,7 +245,7 @@ def _stderr_hint(stderr: str) -> str | None:
             "sympy, math, statistics, json, csv, re, datetime, collections, itertools, "
             "functools, io, os.path, pathlib (+ most stdlib). Network/OS modules (os, sys, "
             "subprocess, socket, http, urllib, requests) are blocked by design — for web "
-            "access use fetch/search/browser_run instead."
+            "access use fetch/search/navigate_page/click/fill/evaluate instead."
         )
     return None
 
@@ -268,7 +268,7 @@ def code_run_handler(server: FastMCP) -> None:
         re, datetime, collections, itertools, functools, io, os.path, pathlib.
         Blocked: os, sys, subprocess, shutil, socket, http, urllib, requests,
         threading, multiprocessing, signal, mmap. (For web access use fetch/search/
-        browser_run, not code_run.)
+        navigate_page, click, fill, evaluate, not code_run.)
         Use print() to return values; last expression result is also captured.
         Large stdout/stderr is previewed with a read_output handle shown in its
         section; call read_output(handle=...) to read the rest.

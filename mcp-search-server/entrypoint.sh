@@ -44,6 +44,8 @@ if command -v Xvfb >/dev/null 2>&1; then
     echo "  Browser: headful via Xvfb on ${DISPLAY} (BROWSER_HEADLESS=${BROWSER_HEADLESS})"
     # -ac disables X access control so Chrome can connect without xauth.
     Xvfb "${DISPLAY}" -screen 0 1920x1080x24 -ac +extension GLX +render -noreset -nolisten tcp &
+    XVFB_PID=$!
+    trap "kill $XVFB_PID 2>/dev/null" EXIT
     # Wait briefly for the X socket so Chrome's first launch finds the display.
     sock="/tmp/.X11-unix/X${DISPLAY#:}"
     for _ in $(seq 1 50); do [ -e "$sock" ] && break; sleep 0.1; done

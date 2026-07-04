@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 def _fences_as_text(source: str) -> bool:
     """Whether a stored output was originally rendered in a ```text``` fence.
 
-    browser_run / code_run preview stdout, stderr and (text) result inside fenced
-    code blocks, so read_output must fence their continuations too. fetch and
-    deep_search store raw markdown, which must stay unfenced.
+    code_run previews stdout, stderr and (text) result inside fenced code blocks,
+    so read_output must fence their continuations too. fetch and deep_search store
+    raw markdown, which must stay unfenced.
     """
     return not source.startswith(("fetch", "deep_search"))
 
@@ -42,11 +42,12 @@ def read_output_handler(server: FastMCP) -> None:
     ) -> str:
         """Read more of a large output that another tool only previewed.
 
-        When fetch / deep_search / code_run / browser_run preview a big result,
-        they add three sibling fields next to the previewed value, e.g. for
-        `content`: `content_handle`, `content_next_offset`, and `content_hint`
-        (the hint is a ready-to-run `read_output(...)` call you can follow
-        directly). Reading the full content is like reading a file by line range.
+        When fetch / deep_search / code_run / take_snapshot / get_content preview
+        a big result, they add three sibling fields next to the previewed value,
+        e.g. for `content`: `content_handle`, `content_next_offset`, and
+        `content_hint` (the hint is a ready-to-run `read_output(...)` call you can
+        follow directly). Reading the full content is like reading a file by line
+        range.
 
         handle: the `*_handle` value from the previewing tool's result.
         offset: starting character index — pass the `*_next_offset` from that
@@ -66,8 +67,8 @@ def read_output_handler(server: FastMCP) -> None:
             msg = result.get("error", "unknown error")
             hint = (
                 "Handle not found — it likely expired (~30 min TTL) or was evicted. "
-                "Re-run the original tool (fetch/deep_search/code_run/browser_run) to "
-                "get a fresh handle."
+                "Re-run the original tool (fetch/deep_search/code_run/take_snapshot/"
+                "get_content) to get a fresh handle."
             )
             return error_report(msg, hint)
 

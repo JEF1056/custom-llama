@@ -34,6 +34,7 @@ import asyncio
 import logging
 import os
 import random
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -58,6 +59,7 @@ LAUNCH_ARGS = [
     "--no-sandbox",
     "--disable-setuid-sandbox",
     "--disable-dev-shm-usage",
+    "--ozone-platform=x11",
     "--window-size=1920,1080",
 ]
 
@@ -608,9 +610,97 @@ class BrowserManager:
         
         markdown_content = h.handle(html_content)
         
-        logger.info("Page content converted to markdown (%d bytes HTML -> %d bytes markdown)", 
+        logger.info("Page content converted to markdown (%d bytes HTML -> %d bytes markdown)",
                     len(html_content), len(markdown_content))
         return markdown_content
+
+    async def get_accessibility_snapshot(
+        self,
+        page: Page,
+        depth: int | None = None,
+        max_length: int | None = None,
+    ) -> str:
+        """Get ARIA snapshot of the page for structured page understanding.
+
+        Uses mode='ai' to include [ref=eN] element references for later targeting.
+        Returns a YAML-like string representing the accessibility tree.
+
+        Args:
+            page: The page to snapshot.
+            depth: Maximum tree depth. None for full depth.
+            max_length: If set, truncate output to this many characters.
+
+        Returns:
+            The ARIA snapshot string, optionally truncated.
+        """
+        snapshot = await page.aria_snapshot(
+            depth=depth,
+            mode="ai",
+        )
+        logger.info("ARIA snapshot captured (%d chars)", len(snapshot))
+        if max_length and len(snapshot) > max_length:
+            snapshot = snapshot[:max_length] + "\n... [truncated]"
+        return snapshot
+
+    async def get_page_state(
+        self,
+        page: Page,
+        max_length: int | None = None,
+    ) -> dict:
+        """Get unified page state for rich LLM context.
+
+        Returns a dict with: url, title, accessibility snapshot, interactables count,
+        and heading hierarchy.
+
+        Args:
+            page: The page to inspect.
+            max_length: If set, truncate accessibility snapshot to this many characters.
+
+        Returns:
+            Dict with url, title, accessibility (str), interactables_count (int),
+            scroll_position (dict), and headings (list of dict).
+        """
+        interactables = await self.get_interactables(page)
+        accessibility = await self.get_accessibility_snapshot(page, max_length=max_length)
+
+        scroll_info = await page.evaluate(
+            "() => ({top: window.scrollY, left: window.scrollX, height: document.body.scrollHeight})"
+        )
+
+        headings = self._extract_headings_from_aria_snapshot(accessibility)
+
+        return {
+            "url": page.url,
+            "title": await page.title(),
+            "accessibility": accessibility,
+            "interactables_count": len(interactables),
+            "scroll_position": scroll_info,
+            "headings": headings,
+        }
+
+    def _extract_headings_from_aria_snapshot(
+        self,
+        snapshot: str,
+    ) -> list[dict]:
+        """Extract headings from an ARIA snapshot string.
+
+        Parses lines matching: heading "Title" [level=N] [ref=eXX]
+
+        Args:
+            snapshot: The ARIA snapshot string.
+
+        Returns:
+            List of dicts with 'level' (int), 'text' (str), and 'ref' (str or None).
+        """
+        headings = []
+        pattern = re.compile(r'heading\s+"([^"]*)"\s+\[level=(\d+)\](?:\s+\[ref=(e\d+)\])?')
+        for match in pattern.finditer(snapshot):
+            headings.append({
+                "text": match.group(1),
+                "level": int(match.group(2)),
+                "ref": match.group(3),
+            })
+        return headings
 
     async def get_text(self, page: Page, selector: str) -> str:
         """Get text content of an element.
