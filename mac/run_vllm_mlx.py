@@ -352,14 +352,14 @@ def patched_run_chunked_text_prefill(self, request, cache) -> mx.array:
         # Determine step size dynamically based on the processed context length
         # to ensure the intermediate self-attention buffer size does not cause Metal OOMs,
         # while keeping processing speed as fast as possible for shorter context bounds.
-        if processed < 30000:
-            step = 4096
-        elif processed < 60000:
+        if processed < 15000:
             step = 2048
-        elif processed < 120000:
+        elif processed < 30000:
             step = 1024
-        else:
+        elif processed < 60000:
             step = 512
+        else:
+            step = 256
             
         step = min(step, total - processed)
 
@@ -388,9 +388,8 @@ def patched_run_chunked_text_prefill(self, request, cache) -> mx.array:
                 f"chunk {chunk_count}, {processed}/{total} tokens (step={step})"
             )
 
-        # Clear Metal cache periodically to free allocator memory pools
-        if chunk_count % 5 == 0:
-            mx.metal.clear_cache()
+        # Clear Metal allocator cache on every single chunk iteration to prevent memory accumulation
+        mx.clear_cache()
             
     if hasattr(output, "logits"):
         return output.logits
