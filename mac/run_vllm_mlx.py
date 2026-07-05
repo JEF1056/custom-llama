@@ -181,6 +181,33 @@ def bypass_validate(request_model):
 
 vllm_mlx.server._validate_model_name = bypass_validate
 
+# 6.5 Patch bind_generation_streams to use thread-local stream caching to prevent exhausting Metal command queue limits
+import vllm_mlx.mlx_streams
+import vllm_mlx.mllm_scheduler
+
+_stream_thread_local = threading.local()
+
+def patched_bind_generation_streams(module_names=("mlx_lm.generate", "mlx_vlm.generate")):
+    if not hasattr(_stream_thread_local, "stream"):
+        _stream_thread_local.stream = mx.new_stream(mx.default_device())
+    
+    default_stream = _stream_thread_local.stream
+    mx.set_default_stream(default_stream)
+    
+    for module_name in module_names:
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        if hasattr(module, "generation_stream"):
+            setattr(module, "generation_stream", default_stream)
+            
+    return default_stream
+
+vllm_mlx.mlx_streams.bind_generation_streams = patched_bind_generation_streams
+vllm_mlx.mllm_scheduler.bind_generation_streams = patched_bind_generation_streams
+print("[COMPAT] Patched bind_generation_streams to use thread-local stream caching and prevent command queue leaks", file=sys.stderr, flush=True)
+
 # 7. Patch asyncio.Queue.put_nowait to be thread-safe for background worker dispatch execution
 orig_put_nowait = asyncio.Queue.put_nowait
 
