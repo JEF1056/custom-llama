@@ -5,6 +5,25 @@ import asyncio
 import threading
 import time
 import logging
+import configparser
+import numpy as np
+from pathlib import Path
+
+# DRY sampler parameters from config/models.ini
+_dry_ini_path = Path(__file__).resolve().parent.parent / "config" / "models.ini"
+_dry_ini_raw = _dry_ini_path.read_text()
+_dry_ini_lines = _dry_ini_raw.split("\n")
+# Strip leading non-section lines (e.g., "version = 1") for configparser compatibility
+for _i, _line in enumerate(_dry_ini_lines):
+    if _line.strip().startswith("["):
+        _dry_ini_raw = "\n".join(_dry_ini_lines[_i:])
+        break
+_dry_ini = configparser.ConfigParser(interpolation=None)
+_dry_ini.read_string(_dry_ini_raw)
+DRY_MULTIPLIER = float(_dry_ini.get("*", "dry-multiplier", fallback="0.0"))
+DRY_BASE = float(_dry_ini.get("*", "dry-base", fallback="1.75"))
+DRY_ALLOWED_LENGTH = int(_dry_ini.get("*", "dry-allowed-length", fallback="128"))
+DRY_PENALTY_LAST_N = int(_dry_ini.get("*", "dry-penalty-last-n", fallback="2048"))
 
 # 1. Load the actual mlx_lm.generate module dynamically using importlib to bypass parent package namespace function collision
 generate_module = importlib.import_module("mlx_lm.generate")
@@ -98,46 +117,96 @@ def active_batch(self, val):
 
 generate_module.BatchGenerator.active_batch = active_batch
 
+def _apply_dry(seq_logits, ctx_tokens):
+    """Apply DRY penalty to seq_logits based on repetition in ctx_tokens.
+
+    Faithful port of llama_sampler_dry_apply from llama-cpp-turboquant.
+    Uses Z-algorithm (reverse) for O(n) repeat computation.
+    """
+    import math
+    n = len(ctx_tokens)
+    if n <= DRY_ALLOWED_LENGTH:
+        return seq_logits
+
+    # Convert to numpy float32 for mutation
+    seq_logits_np = np.array(seq_logits, dtype=np.float32)
+
+    # Z-algorithm (reverse direction) to compute repeat counts
+    repeat_count = [0] * n
+    rt, lt, last = 0, 0, n - 1
+    for k in range(1, n):
+        if k > rt:
+            ml = 0
+            while ml + k < n and ctx_tokens[ml] == ctx_tokens[ml + k]:
+                ml += 1
+            repeat_count[last - k] = ml
+            if ml > 0:
+                lt, rt = k, k + ml - 1
+        else:
+            p = k - lt
+            rpl = rt - k + 1
+            if repeat_count[last - p] < rpl:
+                repeat_count[last - k] = repeat_count[last - p]
+            else:
+                ii = rt + 1
+                while ii < n and ctx_tokens[ii] == ctx_tokens[ii - k]:
+                    ii += 1
+                repeat_count[last - k] = ii - k
+                lt, rt = k, ii - 1
+
+    # Find max repeat length per token where repeat >= allowed_length
+    max_repeat = {}
+    for idx in range(n - 1):
+        rlen = repeat_count[idx]
+        if rlen >= DRY_ALLOWED_LENGTH:
+            tok = ctx_tokens[idx + 1]
+            if tok not in max_repeat or max_repeat[tok] < rlen:
+                max_repeat[tok] = rlen
+
+    # Apply penalty with overflow protection
+    FLOAT_MAX_LOG = 88.7228391
+    max_exp = 0
+    if DRY_BASE > 1.000001:
+        max_exp = int(FLOAT_MAX_LOG / math.log(DRY_BASE))
+
+    for tok_id, rlen in max_repeat.items():
+        exp = rlen - DRY_ALLOWED_LENGTH
+        if max_exp > 0:
+            exp = min(exp, max_exp)
+        penalty = DRY_MULTIPLIER * (DRY_BASE ** exp)
+        seq_logits_np[0, tok_id] -= penalty
+
+    return mx.array(seq_logits_np)
+
 # 3. Define and inject the missing BatchGenerator._step method with DRY sampling support
 def BatchGenerator_step(self, input_tokens, prompt_cache, samplers, logits_processors, tokens):
     logits = self.model(input_tokens, cache=prompt_cache)
     logits = logits[:, -1, :]  # shape [B, V]
-    
-    import numpy as np
-    
+
     next_tokens = []
     next_logprobs = []
     for i in range(input_tokens.shape[0]):
         seq_logits = logits[i : i + 1]
-        
+
         # Apply logits processors if present
         if logits_processors and i < len(logits_processors) and logits_processors[i] is not None:
             seq_logits = logits_processors[i](tokens[i], seq_logits)
-            
-        # Apply DRY sampling penalty to seq_logits (allowed_length=128, penalty_last_n=2048, multiplier=0.4, base=1.75)
-        if len(tokens[i]) > 128:
-            seq_logits_np = np.array(seq_logits)
-            ctx = tokens[i][-2048:]
-            ctx_len = len(ctx)
-            for j in range(128 - 1, ctx_len - 1):
-                L = 0
-                while L <= j and ctx[j - L] == ctx[ctx_len - 1 - L]:
-                    L += 1
-                if L >= 128:
-                    next_tok = ctx[j + 1]
-                    penalty = 0.4 * (1.75 ** (L - 128))
-                    seq_logits_np[0, next_tok] -= penalty
-            seq_logits = mx.array(seq_logits_np)
+
+        # Apply DRY sampling penalty (config-driven, Z-algorithm port from llama-cpp-turboquant)
+        if DRY_MULTIPLIER != 0.0 and DRY_BASE >= 1.0 and DRY_PENALTY_LAST_N != 0:
+            last_n_repeat = min(len(tokens[i]), DRY_PENALTY_LAST_N)
+            if last_n_repeat > DRY_ALLOWED_LENGTH:
+                seq_logits = _apply_dry(seq_logits, tokens[i][-last_n_repeat:])
 
         # Sample next token
         y = samplers[i](seq_logits)
-        
+
         # Calculate log probabilities
         logprob = seq_logits[0, y] - mx.logsumexp(seq_logits, axis=-1)
-        
+
         next_tokens.append(y)
         next_logprobs.append(logprob)
-        
+
     return mx.concatenate(next_tokens), next_logprobs
 
 generate_module.BatchGenerator._step = BatchGenerator_step
