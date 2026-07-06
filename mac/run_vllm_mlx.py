@@ -166,13 +166,210 @@ def _apply_dry(seq_logits, ctx_tokens):
 
     return mx.array(seq_logits_np)
 
-# 3. Define and inject the missing BatchGenerator._step method with DRY sampling support
-def BatchGenerator_step(self, input_tokens, prompt_cache, samplers, logits_processors, tokens):
+# 12. Reasoning budget enforcement — port of common_reasoning_budget.cpp from llama-cpp-turboquant
+# Prevents thinking loops by forcing </think> when budget is exhausted.
+
+from enum import IntEnum
+
+class _RBState(IntEnum):
+    IDLE = 0
+    COUNTING = 1
+    FORCING = 2
+    DONE = 3
+
+_REASONING_BUDGET = 4096  # matches [qwen3.6-35b-a3b] section in config/models.ini
+
+class _TokenMatcher:
+    """Streaming sequence matcher — port of token_matcher from reasoning-budget.cpp."""
+    __slots__ = ('tokens', 'pos')
+
+    def __init__(self, tokens):
+        self.tokens = tokens
+        self.pos = 0
+
+    def advance(self, token):
+        if not self.tokens:
+            return False
+        if token == self.tokens[self.pos]:
+            self.pos += 1
+            if self.pos >= len(self.tokens):
+                self.pos = 0
+                return True
+        else:
+            self.pos = 0
+            if token == self.tokens[0]:
+                self.pos = 1
+        return False
+
+    def reset(self):
+        self.pos = 0
+
+class _ReasoningBudget:
+    """Per-sequence reasoning budget tracker — port of common_reasoning_budget_ctx."""
+    __slots__ = ('state', 'remaining', 'start_matcher', 'end_matcher', 'force_pos',
+                 'start_ids', 'end_ids', 'forced_ids')
+
+    def __init__(self, start_ids, end_ids, budget):
+        self.start_ids = start_ids
+        self.end_ids = end_ids
+        self.forced_ids = end_ids  # force-emit the end tag when budget expires
+        self.state = _RBState.IDLE
+        self.remaining = budget
+        self.start_matcher = _TokenMatcher(start_ids)
+        self.end_matcher = _TokenMatcher(end_ids)
+        self.force_pos = 0
+
+    def apply(self, seq_logits):
+        """Called BEFORE sampling. Forces logits if in FORCING state.
+
+        Port of common_reasoning_budget_apply: set all logits to -inf except forced token.
+        """
+        if self.state != _RBState.FORCING or self.force_pos >= len(self.forced_ids):
+            return seq_logits
+        forced_id = self.forced_ids[self.force_pos]
+        # Convert to numpy for reliable in-place mutation, then back to mlx
+        arr = np.array(seq_logits, dtype=np.float32)
+        arr[:] = -float('inf')
+        arr[0, forced_id] = 0.0
+        return mx.array(arr)
+
+    def accept(self, token):
+        """Called AFTER sampling. Advances state machine.
+
+        Port of common_reasoning_budget_accept.
+        """
+        if self.state == _RBState.IDLE:
+            if self.start_matcher.advance(token):
+                self.state = _RBState.COUNTING
+                self.remaining = _REASONING_BUDGET
+                if self.remaining <= 0:
+                    self.state = _RBState.FORCING
+                    self.force_pos = 0
+
+        elif self.state == _RBState.COUNTING:
+            if self.end_matcher.advance(token):
+                self.state = _RBState.DONE
+                return
+            self.remaining -= 1
+            if self.remaining <= 0:
+                self.state = _RBState.FORCING
+                self.force_pos = 0
+                self.end_matcher.reset()
+
+        elif self.state == _RBState.FORCING:
+            self.force_pos += 1
+            if self.force_pos >= len(self.forced_ids):
+                self.state = _RBState.DONE
+
+        elif self.state == _RBState.DONE:
+            # Re-arm on next thinking block
+            if self.start_matcher.advance(token):
+                self.state = _RBState.COUNTING
+                self.remaining = _REASONING_BUDGET
+                self.end_matcher.reset()
+                if self.remaining <= 0:
+                    self.state = _RBState.FORCING
+                    self.force_pos = 0
+
+# Global state for lazy token resolution
+_think_start_ids = None
+_think_end_ids = None
+_think_tokens_resolved = False
+
+def _resolve_think_tokens():
+    """Resolve </think> and </think> token IDs from the tokenizer.
+
+    Tries multiple access paths; returns True if resolution succeeded.
+    """
+    global _think_start_ids, _think_end_ids, _think_tokens_resolved
+    if _think_tokens_resolved:
+        return True
+
+    # Try vllm-mlx server module
+    try:
+        import vllm_mlx.server as srv
+        tok = getattr(srv, 'tokenizer', None) or getattr(srv, '_tokenizer', None)
+        if tok is not None:
+            _think_start_ids = list(tok.encode("<think>", add_special_tokens=False))
+            _think_end_ids = list(tok.encode("</think>", add_special_tokens=False))
+            _think_tokens_resolved = True
+            print(f"[COMPAT] Resolved thinking tokens via server: start={_think_start_ids}, end={_think_end_ids}", file=sys.stderr, flush=True)
+            return True
+    except Exception:
+        pass
+
+    # Try vllm-mlx engine module
+    try:
+        from vllm_mlx import engine
+        tok = getattr(engine, 'tokenizer', None) or getattr(engine, '_tokenizer', None)
+        if tok is not None:
+            _think_start_ids = list(tok.encode("<think>", add_special_tokens=False))
+            _think_end_ids = list(tok.encode("</think>", add_special_tokens=False))
+            _think_tokens_resolved = True
+            print(f"[COMPAT] Resolved thinking tokens via engine: start={_think_start_ids}, end={_think_end_ids}", file=sys.stderr, flush=True)
+            return True
+    except Exception:
+        pass
+
+    # Try vllm-mlx tokenizer module
+    try:
+        from vllm_mlx import tokenizer as vtok
+        tok = getattr(vtok, 'tokenizer', None) or getattr(vtok, '_tokenizer', None)
+        if tok is not None:
+            _think_start_ids = list(tok.encode("<think>", add_special_tokens=False))
+            _think_end_ids = list(tok.encode("</think>", add_special_tokens=False))
+            _think_tokens_resolved = True
+            print(f"[COMPAT] Resolved thinking tokens via vllm_mlx.tokenizer module: start={_think_start_ids}, end={_think_end_ids}", file=sys.stderr, flush=True)
+            return True
+    except Exception:
+        pass
+
+    # Try to get tokenizer from BatchGenerator instance (self.tokenizer)
+    # This is checked inside the step function, not here, so skip.
+
+    # Fallback: load tokenizer directly via HuggingFace
+    try:
+        from transformers import AutoTokenizer
+        _think_start_ids = list(AutoTokenizer.from_pretrained(
+            "Qwen/Qwen3.6-35B-A3B", trust_remote_code=True).encode("<think>", add_special_tokens=False))
+        _think_end_ids = list(AutoTokenizer.from_pretrained(
+            "Qwen/Qwen3.6-35B-A3B", trust_remote_code=True).encode("</think>", add_special_tokens=False))
+        _think_tokens_resolved = True
+        print(f"[COMPAT] Resolved thinking tokens via HF: start={_think_start_ids}, end={_think_end_ids}", file=sys.stderr, flush=True)
+        return True
+    except Exception:
+        pass
+
+    _think_tokens_resolved = True  # prevent infinite retry
+    print("[WARN] Could not resolve thinking tag tokens — reasoning budget enforcement disabled", file=sys.stderr, flush=True)
+    return False
+
+# Re-define BatchGenerator._step with reasoning budget enforcement integrated
+# This preserves ALL existing behavior (DRY, logits processors, sampling, logprobs)
+# and adds the reasoning budget layer.
+
+def BatchGenerator_step_with_budget(self, input_tokens, prompt_cache, samplers, logits_processors, tokens):
+    """Enhanced _step with reasoning budget enforcement.
+
+    Port of common_reasoning_budget.cpp state machine integration.
+    Resolves thinking-tag token IDs on first call (lazy).
+    """
+    # Resolve thinking-tag token IDs on first invocation
+    has_budget = _resolve_think_tokens() and _think_start_ids is not None and _think_end_ids is not None
+
+    # UID-based tracker map: persists across calls so trackers survive batch filtering
+    _rb_tracker_map = getattr(self, "_rb_tracker_map", {})
+    self._rb_tracker_map = _rb_tracker_map
+
+    # Resolve UIDs from the generation batch (survive filter operations)
+    uids_list = list(self._generation_batch.uids) if hasattr(self, "_generation_batch") else None
+
     logits = self.model(input_tokens, cache=prompt_cache)
     logits = logits[:, -1, :]  # shape [B, V]
 
     next_tokens = []
     next_logprobs = []
+
     for i in range(input_tokens.shape[0]):
         seq_logits = logits[i : i + 1]
 
@@ -186,8 +383,24 @@ def BatchGenerator_step(self, input_tokens, prompt_cache, samplers, logits_proce
             if last_n_repeat > DRY_ALLOWED_LENGTH:
                 seq_logits = _apply_dry(seq_logits, tokens[i][-last_n_repeat:])
 
+        # Apply reasoning budget BEFORE sampling (port of common_reasoning_budget_apply)
+        if has_budget:
+            uid_key = uids_list[i] if uids_list else i
+            tracker = _rb_tracker_map.get(uid_key)
+            if tracker is None:
+                tracker = _ReasoningBudget(_think_start_ids, _think_end_ids, _REASONING_BUDGET)
+                _rb_tracker_map[uid_key] = tracker
+            seq_logits = tracker.apply(seq_logits)
+
         # Sample next token
         y = samplers[i](seq_logits)
+
+        # Accept token AFTER sampling (port of common_reasoning_budget_accept)
+        if has_budget:
+            uid_key = uids_list[i] if uids_list else i
+            tracker = _rb_tracker_map.get(uid_key)
+            if tracker is not None:
+                tracker.accept(y)
 
         # Calculate log probabilities
         logprob = seq_logits[0, y] - mx.logsumexp(seq_logits, axis=-1)
@@ -197,8 +410,8 @@ def BatchGenerator_step(self, input_tokens, prompt_cache, samplers, logits_proce
 
     return mx.concatenate(next_tokens), next_logprobs
 
-generate_module.BatchGenerator._step = BatchGenerator_step
-print("[COMPAT] Successfully injected missing BatchGenerator._step back into mlx_lm.generate.BatchGenerator with DRY sampling", file=sys.stderr, flush=True)
+generate_module.BatchGenerator._step = BatchGenerator_step_with_budget
+print("[COMPAT] Successfully injected missing BatchGenerator._step back into mlx_lm.generate.BatchGenerator with DRY sampling and reasoning budget enforcement (budget=4096, port of common_reasoning_budget.cpp)", file=sys.stderr, flush=True)
 
 # 4. Patch default values in SamplingParams class
 import vllm_mlx.request
