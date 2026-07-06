@@ -276,7 +276,7 @@ _think_start_ids = None
 _think_end_ids = None
 _think_tokens_resolved = False
 
-def _resolve_think_tokens():
+def _resolve_think_tokens(self=None):
     """Resolve </think> and </think> token IDs from the tokenizer.
 
     Tries multiple access paths; returns True if resolution succeeded.
@@ -324,30 +324,22 @@ def _resolve_think_tokens():
     except Exception:
         pass
 
-    # Try to get tokenizer from BatchGenerator instance (self.tokenizer)
-    # This is checked inside the step function, not here, so skip.
+    # Try to get tokenizer from BatchGenerator instance
+    if self is not None:
+        tok = getattr(self, 'tokenizer', None) or getattr(self, '_tokenizer', None)
+        if tok is not None:
+            _think_start_ids = list(tok.encode("<think>", add_special_tokens=False))
+            _think_end_ids = list(tok.encode("</think>", add_special_tokens=False))
+            _think_tokens_resolved = True
+            print(f"[COMPAT] Resolved thinking tokens via BatchGenerator: start={_think_start_ids}, end={_think_end_ids}", file=sys.stderr, flush=True)
+            return True
 
-    # Fallback: load tokenizer directly via HuggingFace
-    try:
-        from transformers import AutoTokenizer
-        _think_start_ids = list(AutoTokenizer.from_pretrained(
-            "Qwen/Qwen3.6-35B-A3B", trust_remote_code=True).encode("<think>", add_special_tokens=False))
-        _think_end_ids = list(AutoTokenizer.from_pretrained(
-            "Qwen/Qwen3.6-35B-A3B", trust_remote_code=True).encode("</think>", add_special_tokens=False))
-        _think_tokens_resolved = True
-        print(f"[COMPAT] Resolved thinking tokens via HF: start={_think_start_ids}, end={_think_end_ids}", file=sys.stderr, flush=True)
-        return True
-    except Exception:
-        pass
+    # No HF fallback - wrong tokenizer would produce subword IDs that match common text,
+    # causing the state machine to fire on coincidental sequences and inject </think>
 
     _think_tokens_resolved = True  # prevent infinite retry
-    print("[WARN] Could not resolve thinking tag tokens — reasoning budget enforcement disabled", file=sys.stderr, flush=True)
+    print("[WARN] Could not resolve thinking tag tokens - reasoning budget enforcement disabled", file=sys.stderr, flush=True)
     return False
-
-# Re-define BatchGenerator._step with reasoning budget enforcement integrated
-# This preserves ALL existing behavior (DRY, logits processors, sampling, logprobs)
-# and adds the reasoning budget layer.
-
 def BatchGenerator_step_with_budget(self, input_tokens, prompt_cache, samplers, logits_processors, tokens):
     """Enhanced _step with reasoning budget enforcement.
 
@@ -355,7 +347,8 @@ def BatchGenerator_step_with_budget(self, input_tokens, prompt_cache, samplers, 
     Resolves thinking-tag token IDs on first call (lazy).
     """
     # Resolve thinking-tag token IDs on first invocation
-    has_budget = _resolve_think_tokens() and _think_start_ids is not None and _think_end_ids is not None
+    _resolve_think_tokens(self)
+    has_budget = _think_start_ids is not None and _think_end_ids is not None
 
     # UID-based tracker map: persists across calls so trackers survive batch filtering
     _rb_tracker_map = getattr(self, "_rb_tracker_map", {})
