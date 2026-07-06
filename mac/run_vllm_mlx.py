@@ -5,25 +5,13 @@ import asyncio
 import threading
 import time
 import logging
-import configparser
 import numpy as np
-from pathlib import Path
 
-# DRY sampler parameters from config/models.ini
-_dry_ini_path = Path(__file__).resolve().parent.parent / "config" / "models.ini"
-_dry_ini_raw = _dry_ini_path.read_text()
-_dry_ini_lines = _dry_ini_raw.split("\n")
-# Strip leading non-section lines (e.g., "version = 1") for configparser compatibility
-for _i, _line in enumerate(_dry_ini_lines):
-    if _line.strip().startswith("["):
-        _dry_ini_raw = "\n".join(_dry_ini_lines[_i:])
-        break
-_dry_ini = configparser.ConfigParser(interpolation=None)
-_dry_ini.read_string(_dry_ini_raw)
-DRY_MULTIPLIER = float(_dry_ini.get("*", "dry-multiplier", fallback="0.0"))
-DRY_BASE = float(_dry_ini.get("*", "dry-base", fallback="1.75"))
-DRY_ALLOWED_LENGTH = int(_dry_ini.get("*", "dry-allowed-length", fallback="128"))
-DRY_PENALTY_LAST_N = int(_dry_ini.get("*", "dry-penalty-last-n", fallback="2048"))
+# DRY sampler parameters (from config/models.ini, hardcoded for portability)
+DRY_MULTIPLIER = 0.4
+DRY_BASE = 1.75
+DRY_ALLOWED_LENGTH = 128
+DRY_PENALTY_LAST_N = 2048
 
 # 1. Load the actual mlx_lm.generate module dynamically using importlib to bypass parent package namespace function collision
 generate_module = importlib.import_module("mlx_lm.generate")
