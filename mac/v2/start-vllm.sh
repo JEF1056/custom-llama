@@ -4,7 +4,8 @@ lsof -ti :8000 | xargs kill -9 2>/dev/null || true
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-SCRIPT_PATH="/Users/jfan/Documents/v2_start-vllm.sh"
+# Resolve our own absolute path dynamically
+SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 PLIST_PATH="/Users/jfan/Library/LaunchAgents/com.jfan.mlx-vlm.plist"
 
 LOCAL_MODEL_PATH="/Users/jfan/Documents/Qwen3.6-35B-A3B-MLX-4bit"

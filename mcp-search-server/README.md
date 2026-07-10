@@ -5,9 +5,9 @@ An advanced MCP (Model Context Protocol) server for semantic web search with bro
 ## Features
 
 - **Semantic Web Search**: Search using natural language queries via multiple search engines (DuckDuckGo, Bing, Google)
-- **Browser Automation**: Playwright-based headless browser for rendering JavaScript-heavy pages
-- **Content Extraction**: Extract structured content from web pages (headings, tables, links, images)
-- **LLM-Friendly Output**: Formatted content optimized for LLM consumption
+- **Browser Automation**: Fine-grained, discrete Playwright tools with anti-detection (patchright + real Chrome, headful via Xvfb, trusted input pipeline)
+- **Content Extraction**: Extract structured content from web pages (headings, tables, links, images) with token-aware summarization
+- **LLM-Friendly Output**: Formatted content optimized for LLM consumption, with pagination for large outputs
 - **Docker-Ready**: Easy deployment with Docker Compose
 
 ## MCP Tools
@@ -18,11 +18,10 @@ you need deeper analysis, when you're stuck on a reasoning task, or when you nee
 a second opinion on a plan.
 
 **Parameters:**
-- `context` (string): The problem context or background information (as much detail as needed).
-- `question` (string): The specific question or task to ask the advisor.
-- `model` (string, optional): The model to use (overrides config default).
+- `context` (string): All relevant background for the question — be generous; the advisor only sees what you pass.
+- `question` (string): The specific question or task to reason about.
 
-**Returns:** JSON with status, model name, and the advisor's analysis.
+**Returns:** Markdown — the advisor's response under a header naming the model.
 
 > **When to use:** Whenever you're unsure about an approach, need to reason through
 > a multi-step plan, or hit a dead end. Call it early and often.
@@ -31,73 +30,138 @@ a second opinion on a plan.
 Search the web for information using the configured search engine.
 
 **Parameters:**
-- `query` (string): The search query
-- `max_results` (integer, optional): Maximum number of results to return
+- `query` (string): What to search the web for.
+- `max_results` (integer, optional): Max results to return; defaults to the server config (typically 10).
 
-**Returns:** JSON string of search results with title, URL, snippet, engine, and timestamp.
+**Returns:** Markdown — a numbered list of results (title, URL, snippet).
 
 ### `fetch`
-Fetch and extract content from a URL using browser automation.
+Fetch and extract text from a URL (renders JS via headless browser).
 
 **Parameters:**
-- `url` (string): The URL to fetch
+- `url` (string): The page URL to fetch and extract text from.
+- `truncate` (string, optional): How to trim long pages: "always" (default) | "never" | "main_only" | "code_only".
+- `code_block_max_chars` (integer, optional): Override the per-code-block character limit.
+- `sections` (list of strings, optional): Heading texts to extract only those sections (useful for long pages).
 
-**Returns:** Structured content including title, text content, headings, links, images, and tables.
+**Returns:** Markdown — title, URL, the extracted content, and (when the page
+was truncated) a footer with the `read_output` handle to fetch the rest.
 
 ### `deep_search`
-Perform a web search and extract full content from top results.
+Search the web and extract full page content from the top 3 results in one call.
 
 **Parameters:**
-- `query` (string): The search query
-- `max_results` (integer, optional): Maximum number of results to return
+- `query` (string): What to search the web for.
+- `max_results` (integer, optional): Size of the search pool; full content is extracted from the top 3 only.
 
-**Returns:** Search results with extracted content from top 3 results.
+**Returns:** Markdown — the top results with their extracted content, followed by
+the remaining search hits as a link list.
 
 ## Browser Automation Tools
 
-Browser control is **programmatic**: instead of many narrow wrappers, the model
-drives a Playwright browser directly by writing async Python. Three tools:
+Browser control uses **discrete, fine-grained tools** rather than a single wrapper.
+Each tool handles one specific browser action, reducing the chance of errors and
+making it easier for the model to reason about what it's doing.
 
-### `browser_run`
-Run async Playwright Python against a live page. This is the primary browser tool.
+### `browser_screenshot`
+Capture a screenshot and return it as an MCP image (for vision).
 
-The code body executes inside an async function with these names in scope:
-- `page` — Playwright `Page` (`await page.goto(url)`, `page.click(sel)`, `page.fill(sel, val)`, …)
-- `context` — the `BrowserContext` (new pages, cookies, …)
-- `interactables()` — async helper returning clickable/fillable elements with selectors; call it to **discover** selectors before clicking/filling
-- `mgr` — the `BrowserManager`; `mgr.get_content(page)` returns cleaned page text (the standard way to extract a rendered page)
-- also pre-imported: `asyncio`, `json`, `re`
+**Parameters:**
+- `url` (string, optional): Optional page to load before capturing.
+- `full_page` (boolean, optional): Capture the entire scrollable page instead of just the viewport.
+- `session_id` (string, optional): Screenshot the current page of a persistent session.
 
-Use `return <value>` to send data back; `print()` output is also captured. The
-body is async — `await` every Playwright call.
+**Returns:** MCP `ImageContent` (base64 PNG) + a `file://` resource URI.
 
-**First call on an unfamiliar page — recon first, don't blind-guess selectors.**
-Every response (success *or* error) includes the page's live interactables and
-title/URL. So make the first call a cheap recon step — navigate and inspect —
-then act with known selectors on the next call:
+### `navigate_page`
+Navigate to a URL and return page state.
 
-```python
-# call 1 (recon): navigate + inspect; note the returned Interactables
-browser_run(session_id="example-3f", code='''
-    await page.goto("https://example.com", wait_until="domcontentloaded")
-    return await mgr.get_content(page)   # or: return await interactables()
-''')
-# call 2 (act): use a selector you saw above
-browser_run(session_id="example-3f", code='''
-    await page.click("button#go")
-    return await page.title()
-''')
-```
+**Parameters:**
+- `url` (string): The URL to navigate to.
+- `session_id` (string, optional): Persistent session id. Omit for one-off navigation.
+- `wait_until` (string, optional): When to consider navigation complete. Default: domcontentloaded.
 
-Pass a `session_id` for multi-step work so the recon'd page persists across calls
-(a one-off page is closed after each call, losing that context). Make the id
-**unique** so it can't collide with another task reusing the same page — a topic
-word plus a few random chars (e.g. `"walmart-7q3"`), and reuse that exact id on
-follow-up calls.
+**Returns:** JSON with status, url, title, accessibility snapshot, and interactables count.
 
-**Gotchas:**
-- `console.*` does **not** work in-page (the browser Console API is disabled by patchright) — `return`/`print` from Python instead.
-- Prefer `wait_until="domcontentloaded"` over `"networkidle"` (networkidle often times out on pages with analytics/long-polling).
+### `take_snapshot`
+Take an ARIA accessibility snapshot of the current page.
+
+**Parameters:**
+- `session_id` (string, optional): Persistent session id. Omit for one-off.
+- `depth` (integer, optional): Maximum ARIA tree depth. None for full. Recommended: 3 for page recon.
+
+**Returns:** JSON with status and the accessibility snapshot (with `[ref=eN]` markers for element targeting).
+
+### `page_state`
+Get unified page state: URL, title, accessibility snapshot, interactables, scroll.
+
+**Parameters:**
+- `session_id` (string, optional): Persistent session id. Omit for one-off.
+
+**Returns:** JSON with status, url, title, accessibility, interactables_count, scroll_position, and headings.
+
+### `click`
+Click an element on the current page by CSS selector.
+
+**Parameters:**
+- `selector` (string): CSS selector for the element to click. Use `get_interactables()` to discover selectors first.
+- `session_id` (string, optional): Persistent session id. Omit for one-off.
+
+**Returns:** JSON with status, action, selector, url, title, and interactables_count.
+
+### `fill`
+Fill an input field on the current page by CSS selector.
+
+**Parameters:**
+- `selector` (string): CSS selector for the input element to fill.
+- `value` (string): The value to fill into the input.
+- `session_id` (string, optional): Persistent session id. Omit for one-off.
+
+**Returns:** JSON with status, action, selector, value, url, and title.
+
+### `get_text`
+Get the inner text of an element by CSS selector.
+
+**Parameters:**
+- `selector` (string): CSS selector for the element whose text to read.
+- `session_id` (string, optional): Persistent session id. Omit for one-off.
+
+**Returns:** JSON with status and the element's text content.
+
+### `evaluate`
+Evaluate JavaScript on the current page.
+
+**Parameters:**
+- `script` (string): JavaScript code to evaluate on the page.
+- `session_id` (string, optional): Persistent session id. Omit for one-off.
+
+**Returns:** JSON with status and the JavaScript result.
+
+### `get_interactables`
+Get all clickable and fillable elements on the current page.
+
+**Parameters:**
+- `session_id` (string, optional): Persistent session id. Omit for one-off.
+
+**Returns:** JSON with status and a list of elements (index, tag, type, text, name, id, placeholder, selector, visible).
+
+### `get_content`
+Get the rendered page content as markdown text.
+
+**Parameters:**
+- `session_id` (string, optional): Persistent session id. Omit for one-off.
+
+**Returns:** JSON with status and the page content converted to markdown via html2text.
+
+### `browser_close`
+Close a browser session and free its pages/cookies.
+
+**Parameters:**
+- `session_id` (string): The session id used with browser tools.
+
+**Returns:** JSON with status and a confirmation message.
+
+> **Anti-detection strategy:** The server uses **patchright** (a CDP-patched Playwright that closes protocol leaks), **real Google Chrome** (not bundled Chromium, which exposes a "HeadlessChrome" brand flag), and **headful mode via Xvfb** when available (a real windowed browser is far harder to fingerprint). No fingerprint injection, no spoofed user-agents, no stealth plugins — the real Chrome identity stays consistent with the host's IP and timezone. All input (navigation, clicks, fills) uses the real CDP pipeline so events carry `isTrusted === true`.
 - Default timeout is `2 × BROWSER_TIMEOUT` (min 60s); raise it with `timeout=`.
 - **Need visual context?** Text alone misses a lot — take a `browser_screenshot` (same `session_id`) when you need to see page layout, rendered state, an image/chart, confirm a click/scroll worked, or see what's blocking you (modal, cookie banner, captcha, login wall).
 
@@ -113,7 +177,7 @@ code line), a corrective hint, the page URL/title reached so far, any stdout
 printed before the failure, and the interactables list — so you can see where you
 were and fix the selector/step and retry.
 
-> **Security:** `browser_run` executes Python **in-process** (full host/Python
+> **Security:** Browser tools execute Python **in-process** (full host/Python
 > access), gated behind the server API key. Intended for trusted local use.
 
 ### `browser_screenshot`
@@ -142,29 +206,30 @@ List the live browser sessions so you can reuse one instead of guessing ids.
 Close a browser session and free its pages/cookies.
 
 **Parameters:**
-- `session_id` (string): the session id used with `browser_run`.
+- `session_id` (string): the session id used with browser tools.
+
+**Returns:** JSON with status and a confirmation message.
 
 ## Example Workflow
 
 ```python
-# 1. Multi-step interaction in a persistent session via browser_run
-#    (unique session_id so it can't collide with another task):
-browser_run(session_id="search-9k2", code='''
-    await page.goto("https://example.com", wait_until="domcontentloaded")
-    await page.fill("input#search", "playwright")
-    await page.click("button[type='submit']")
-    await page.wait_for_load_state("domcontentloaded")
-    return {
-        "title": await page.title(),
-        "heading": await page.inner_text("h1"),
-        "links": await page.eval_on_selector_all("a", "els => els.map(e => e.href)"),
-    }
-''')
+# 1. Navigate and inspect the page:
+navigate_page(url="https://example.com", session_id="search-9k2")
 
-# 2. Visual check:
+# 2. Discover clickable/fillable elements:
+get_interactables(session_id="search-9k2")
+
+# 3. Fill and click using known selectors:
+fill(selector="input#search", value="playwright", session_id="search-9k2")
+click(selector="button[type='submit']", session_id="search-9k2")
+
+# 4. Get the rendered page content:
+get_content(session_id="search-9k2")
+
+# 5. Visual check (if needed):
 browser_screenshot(session_id="search-9k2")
 
-# 3. Clean up:
+# 6. Clean up:
 browser_close(session_id="search-9k2")
 ```
 
@@ -186,9 +251,12 @@ The MCP search server should be called in the following scenarios:
 |----------|-------|---------|
 | **Expert Reasoning** | `advisor` | Call this whenever you're stuck, need a second opinion, or face a complex reasoning task. Use it liberally. |
 | **Search Tools** | `search`, `fetch`, `deep_search` | Quick information retrieval via HTTP requests and content extraction. |
-| **Browser Automation** | `browser_run`, `browser_screenshot`, `browser_sessions`, `browser_close` | Programmatic Playwright control for JavaScript-heavy pages. |
+| **Browser Navigation** | `navigate_page`, `take_snapshot`, `page_state` | Navigate pages and get accessibility/structural context. |
+| **Browser Interaction** | `click`, `fill`, `get_text`, `evaluate` | Interact with page elements using CSS selectors. |
+| **Browser Discovery** | `get_interactables`, `get_content` | Discover clickable/fillable elements and get rendered page text. |
+| **Visual Context** | `browser_screenshot`, `browser_close` | Capture screenshots and clean up sessions. |
 | **Data / Compute** | `code_run`, `time_now` | Sandboxed Python computation and time/timezone conversion. |
-| **Output Paging** | `read_output` | Read the remainder of a large result that `fetch` / `deep_search` / `code_run` / `browser_run` only previewed. Those tools return a `*_handle` plus `*_next_offset`; pass them to `read_output` to read the full content in windows (like reading a file by line range). |
+| **Output Paging** | `read_output` | Read the remainder of a large result that `fetch` / `deep_search` / `code_run` / `take_snapshot` / `get_content` only previewed. Those tools return a `*_handle` plus `*_next_offset`; pass them to `read_output` to read the full content in windows (like reading a file by line range). |
 
 ### Workflow: Search + Reasoning + Browser
 
@@ -223,7 +291,7 @@ Agent workflow:
 1. Call search(query="quantum computing breakthroughs 2026", max_results=5)
 2. Review search results for relevant articles
 3. Call fetch(url="https://example.com/quantum-breakthrough") for promising articles
-4. If the page requires JavaScript rendering, use browser_run to render + extract
+4. If the page requires JavaScript rendering, use navigate_page + get_content
 5. Compile findings from all sources
 ```
 
@@ -235,12 +303,9 @@ User provides: https://example.com/product
 
 Agent workflow:
 1. Call fetch(url="https://example.com/product")
-2. If fetch returns empty or incomplete content (JS-heavy page), use browser_run:
-   browser_run(code='''
-       await page.goto("https://example.com/product")
-       return {"heading": await page.inner_text("h1"),
-               "body": await mgr.get_content(page)}
-   ''')
+2. If fetch returns empty or incomplete content (JS-heavy page), use navigate_page + get_content:
+    navigate_page(url="https://example.com/product", session_id="product-xk")
+    get_content(session_id="product-xk")
 3. Analyze and summarize the content
 ```
 
@@ -251,13 +316,11 @@ User: "Search for 'Python 3.13 release notes' and click on the first result"
 
 Agent workflow:
 1. Call search(query="Python 3.13 release notes", max_results=3)
-2. Drive the page with browser_run (persistent session, unique id):
-   browser_run(session_id="pydocs-5m", code='''
-       await page.goto("https://docs.python.org/3/whatsnew/3.13.html", wait_until="domcontentloaded")
-       await page.click("a.release-link")
-       await page.wait_for_load_state("domcontentloaded")
-       return await mgr.get_content(page)
-   ''')
+2. Drive the page with browser tools (persistent session, unique id):
+    navigate_page(url="https://docs.python.org/3/whatsnew/3.13.html", session_id="pydocs-5m")
+    get_interactables(session_id="pydocs-5m")
+    click(selector="a.release-link", session_id="pydocs-5m")
+    get_content(session_id="pydocs-5m")
 3. browser_screenshot(session_id="pydocs-5m") to verify visually if needed
 ```
 
@@ -267,13 +330,10 @@ Agent workflow:
 User: "Go to https://example.com/search and search for 'AI trends'"
 
 Agent workflow:
-1. browser_run(code='''
-       await page.goto("https://example.com/search")
-       await page.fill("input.search-box", "AI trends")
-       await page.click("button.search-button")
-       await page.wait_for_load_state("networkidle")
-       return await mgr.get_content(page)
-   ''')
+1. navigate_page(url="https://example.com/search", session_id="form-xk")
+    fill(selector="input.search-box", value="AI trends", session_id="form-xk")
+    click(selector="button.search-button", session_id="form-xk")
+    get_content(session_id="form-xk")
 ```
 
 #### Scenario 5: Stuck Agent Recovery
@@ -283,8 +343,8 @@ User: "I need to know the current weather in Tokyo"
 
 Agent workflow:
 1. Call search(query="current weather Tokyo", max_results=3)
-2. If results are thin, fetch a weather page; if JS-heavy, fall back to browser_run
-   to render and extract the live values
+2. If results are thin, fetch a weather page; if JS-heavy, fall back to navigate_page + get_content
+    to render and extract the live values
 3. Compile and present the weather information
 ```
 
@@ -297,10 +357,8 @@ Agent workflow:
 1. Call deep_search(query="React Server Components documentation", max_results=5)
 2. Review extracted content from top results
 3. If content is incomplete (requires JavaScript rendering):
-   browser_run(code='''
-       await page.goto("https://react.dev/reference/rsc/server-components")
-       return await page.inner_text(".content")
-   ''')
+navigate_page(url="https://react.dev/reference/rsc/server-components", session_id="react-xk")
+    get_content(session_id="react-xk")
 ```
 
 ## Setup
