@@ -18,96 +18,131 @@ print(f"  Patching mlx-vlm at: {mlx_site}")
 # 1. Patch cli.py: add --served-model-name argument + env var
 # ============================================================
 with open(cli_file, "r") as f:
-    cli_content = f.read()
+    cli_lines = f.readlines()
 
-# Remove any previous patch attempts to ensure clean state
-cli_lines = []
-skip = False
-for line in cli_content.split("\n"):
-    if 'MLX_VLM_SERVED_MODEL_NAME' in line:
+# Remove any previous patch attempts
+cleaned = []
+skip_block = False
+for i, line in enumerate(cli_lines):
+    stripped = line.strip()
+    # Skip any previous --served-model-name arg block
+    if '"--served-model-name"' in stripped or "'--served-model-name'" in stripped:
+        skip_block = True
         continue
-    if '"--served-model-name"' in line or "'--served-model-name'" in line:
-        skip = True
+    if skip_block:
+        if stripped == ")" or stripped.endswith(")"):
+            skip_block = False
+            continue
+        if stripped.startswith("parser.add_argument(") or stripped == ")":
+            skip_block = False
+            continue
         continue
-    if skip and line.strip() == ")":
-        skip = False
+    # Remove previous env var references
+    if "MLX_VLM_SERVED_MODEL_NAME" in stripped:
         continue
-    if skip and (line.strip().startswith("parser.add_argument") or line.strip() == "):"):
-        skip = False
+    # Remove previous args.served_model_name references
+    if "args.served_model_name" in stripped:
         continue
-    cli_lines.append(line)
+    cleaned.append(line)
 
-cli_content = "\n".join(cli_lines)
+cli_lines = cleaned
 
-# Now add the argument after --model block
-arg_block = '''    parser.add_argument(
-        "--served-model-name",
-        type=str,
-        default=None,
-        help="Alias for the pre-loaded model used in API requests (e.g. qwen3.6-35b-a3b).",
-    )
-'''
+# Find the position after --model argument block to insert --served-model-name
+# The --model block looks like:
+#     parser.add_argument(
+#         "--model",
+#         type=str,
+#         default=None,
+#         help="Pre-load a language model at startup...",
+#     )
+#
+# Insert after the closing paren of the --model block
+result = []
+inserted = False
+i = 0
+while i < len(cli_lines):
+    result.append(cli_lines[i])
+    if not inserted and '"--model"' in cli_lines[i]:
+        # Found the --model line, now find the closing ) of this parser.add_argument
+        paren_depth = 0
+        j = i
+        while j < len(cli_lines):
+            for ch in cli_lines[j]:
+                if ch == '(':
+                    paren_depth += 1
+                elif ch == ')':
+                    paren_depth -= 1
+                    if paren_depth == 0:
+                        # Insert after this line
+                        served_arg = [
+                            "\n",
+                            '    parser.add_argument(\n',
+                            '        "--served-model-name",\n',
+                            '        type=str,\n',
+                            '        default=None,\n',
+                            '        help="Alias for the pre-loaded model used in API requests.",\n',
+                            '    )\n',
+                        ]
+                        result.extend(served_arg)
+                        inserted = True
+                        break
+            if inserted:
+                break
+            j += 1
+    i += 1
 
-model_pattern = '("--model"'
-if model_pattern in cli_content:
-    # Find the end of the --model argument block
-    idx = cli_content.find(model_pattern)
-    # Find the closing paren of this parser.add_argument call
-    paren_start = cli_content.rfind("parser.add_argument(", 0, idx + 200)
-    paren_count = 1
-    pos = paren_start + len("parser.add_argument(")
-    while pos < len(cli_content) and paren_count > 0:
-        if cli_content[pos] == '(':
-            paren_count += 1
-        elif cli_content[pos] == ')':
-            paren_count -= 1
-        pos += 1
-    # Insert after the closing paren
-    cli_content = cli_content[:pos] + "\n" + arg_block + cli_content[pos:]
+if not inserted:
+    print("  [WARNING] Could not find --model argument in cli.py to insert after")
+else:
     print("  [PATCH] cli.py: added --served-model-name argument")
 
-# Add env var assignment
+# Now add the env var assignment after the --model env block
+cli_text = "".join(result)
+
 old_env = '''if args.model:
         os.environ["MLX_VLM_PRELOAD_MODEL"] = args.model
         if args.adapter_path:
             os.environ["MLX_VLM_PRELOAD_ADAPTER"] = args.adapter_path'''
-new_env = '''if args.model:
-        os.environ["MLX_VLM_PRELOAD_MODEL"] = args.model
-        if args.adapter_path:
-            os.environ["MLX_VLM_PRELOAD_ADAPTER"] = args.adapter_path
+
+new_env = old_env + '''
     if args.served_model_name:
         os.environ["MLX_VLM_SERVED_MODEL_NAME"] = args.served_model_name'''
 
-if old_env in cli_content:
-    cli_content = cli_content.replace(old_env, new_env)
+if old_env in cli_text:
+    cli_text = cli_text.replace(old_env, new_env)
     print("  [PATCH] cli.py: added MLX_VLM_SERVED_MODEL_NAME env var")
-elif "args.served_model_name" in cli_content:
-    print("  [PATCH] cli.py: env var already present")
+else:
+    print("  [WARNING] Could not find args.model env block in cli.py")
 
 with open(cli_file, "w") as f:
-    f.write(cli_content)
+    f.write(cli_text)
 
 # ============================================================
 # 2. Patch app.py: resolve served name in get_cached_model
 # ============================================================
 with open(app_file, "r") as f:
-    app_content = f.read()
+    app_text = f.read()
 
 # Remove any previous resolution patch
-app_lines = []
-skip_resolution = False
-for line in app_content.split("\n"):
-    if "Resolve served-model-name alias" in line or "MLX_VLM_SERVED_MODEL_NAME" in line:
-        skip_resolution = False
+app_lines = app_text.split("\n")
+cleaned = []
+for line in app_lines:
+    if "Resolve served-model-name alias" in line:
         continue
-    if "_served_name" in line or "_preload_model" in line:
-        skip_resolution = False
+    if line.strip().startswith("_served = os.environ.get("):
         continue
-    app_lines.append(line)
+    if line.strip().startswith("_preload = os.environ.get("):
+        continue
+    if "_served and _preload and model_path == _served" in line:
+        continue
+    if "model_path = _preload" in line:
+        # Only skip if it's the patch line, not some other assignment
+        if "Resolve" in line or "_served" in line or "_preload" in line:
+            continue
+    cleaned.append(line)
+app_text = "\n".join(cleaned)
 
-app_content = "\n".join(app_lines)
-
-# Now add the resolution logic
+# Insert resolution at the top of get_cached_model
 old_sig = '''def get_cached_model(
     model_path: str,
     adapter_path=_INHERIT_ADAPTER,
@@ -127,14 +162,14 @@ new_sig = '''def get_cached_model(
     if _served and _preload and model_path == _served:
         model_path = _preload'''
 
-if old_sig in app_content:
-    app_content = app_content.replace(old_sig, new_sig)
+if old_sig in app_text:
+    app_text = app_text.replace(old_sig, new_sig)
     print("  [PATCH] app.py: added model name resolution in get_cached_model")
 else:
     print("  [WARNING] Could not find get_cached_model signature in app.py")
 
 with open(app_file, "w") as f:
-    f.write(app_content)
+    f.write(app_text)
 
 print("[PATCH] Complete.")
 PYEOF
