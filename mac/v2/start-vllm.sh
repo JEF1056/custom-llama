@@ -14,12 +14,6 @@ DRAFT_MODEL_PATH="z-lab/Qwen3.6-35B-A3B-DFlash"
 install_startup() {
     echo "Setting up startup script for macOS boot..."
 
-    # Apply model-alias patch to mlx-vlm if needed
-    PATCH_SCRIPT="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)/patch-model-alias.sh"
-    if [ -f "$PATCH_SCRIPT" ]; then
-        bash "$PATCH_SCRIPT"
-    fi
-
     mkdir -p "/Users/jfan/Library/LaunchAgents"
 
     cat <<EOF > "$PLIST_PATH"
@@ -84,6 +78,12 @@ uninstall_startup() {
 if ! python3 -c "import mlx_vlm" 2>/dev/null; then
     echo "mlx-vlm not found, installing..."
     pip3 install -U mlx-vlm --break-system-packages
+fi
+
+# Apply model-alias patch to mlx-vlm
+PATCH_SCRIPT="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)/patch-model-alias.sh"
+if [ -f "$PATCH_SCRIPT" ]; then
+    bash "$PATCH_SCRIPT"
 fi
 
 # Handle flags

@@ -4,121 +4,102 @@
 
 set -e
 
-MLX_VLM_SITE="$(python3 -c "import mlx_vlm, os; print(os.path.dirname(mlx_vlm.__file__))")"
-CLI_FILE="$MLX_VLM_SITE/server/cli.py"
-APP_FILE="$MLX_VLM_SITE/server/app.py"
-
-# Check if already patched
-if grep -q "MLX_VLM_SERVED_MODEL_NAME" "$CLI_FILE" 2>/dev/null; then
-    echo "[PATCH] mlx-vlm already patched. Skipping."
-    exit 0
-fi
-
-echo "[PATCH] Patching mlx-vlm server for model name aliasing..."
-
-# Use Python for reliable multiline patching
 python3 << 'PYEOF'
 import os
+import re
+import mlx_vlm
 
-mlx_site = os.path.dirname(__import__("mlx_vlm").__file__)
-
+mlx_site = os.path.dirname(mlx_vlm.__file__)
 cli_file = os.path.join(mlx_site, "server", "cli.py")
 app_file = os.path.join(mlx_site, "server", "app.py")
 
-# ---- Patch cli.py: add --served-model-name argument ----
+PATCH_MARKER_CLI = "MLX_VLM_SERVED_MODEL_NAME"
+PATCH_MARKER_APP = "Resolve served-model-name alias"
+
+# ============================================================
+# 1. Patch cli.py: add --served-model-name argument + env var
+# ============================================================
 with open(cli_file, "r") as f:
-    content = f.read()
+    cli_content = f.read()
 
-# Insert the argument after --model definition
-marker = '''        "--model",
-        type=str,
-        default=None,
-        help="Pre-load a language model at startup'''
-
-insert = '''        "--model",
-        type=str,
-        default=None,
-        help="Pre-load a language model at startup'''
-
-# The argument block for --model ends with the closing paren; find it
-# and insert our new argument block after it
-import re
-
-# Find the --model arg block and the closing ), then insert after
-pattern = r'(parser\.add_argument\(\s*["\x27]--model["\x27].*?\n\s*\))'
-match = re.search(pattern, content, re.DOTALL)
-if match:
-    insert_pos = match.end()
-    new_arg = '''
-    parser.add_argument(
+if PATCH_MARKER_CLI in cli_content:
+    print("  [PATCH] cli.py already patched.")
+else:
+    # Insert --served-model-name argument after the --model block
+    arg_block = '''    parser.add_argument(
         "--served-model-name",
         type=str,
         default=None,
         help="Alias for the pre-loaded model used in API requests (e.g. qwen3.6-35b-a3b).",
     )
 '''
-    content = content[:insert_pos] + new_arg + content[insert_pos:]
-    with open(cli_file, "w") as f:
-        f.write(content)
-    print(f"  Padded {cli_file}: added --served-model-name argument")
-else:
-    print(f"  WARNING: Could not find --model argument in {cli_file}")
+    # Find the closing paren of the --model argument block
+    model_arg_pattern = r'(parser\.add_argument\(\s*["\x27]--model["\x27].*?\n\s*\))'
+    match = re.search(model_arg_pattern, cli_content, re.DOTALL)
+    if match:
+        insert_pos = match.end()
+        cli_content = cli_content[:insert_pos] + "\n" + arg_block + cli_content[insert_pos:]
 
-# Also add the env var assignment after the --model block
-env_marker = 'if args.model:'
-if env_marker in content:
-    replacement = '''if args.model:
+    # Add env var assignment after the --model env block
+    old_env = '''if args.model:
+        os.environ["MLX_VLM_PRELOAD_MODEL"] = args.model
+        if args.adapter_path:
+            os.environ["MLX_VLM_PRELOAD_ADAPTER"] = args.adapter_path'''
+    new_env = '''if args.model:
         os.environ["MLX_VLM_PRELOAD_MODEL"] = args.model
         if args.adapter_path:
             os.environ["MLX_VLM_PRELOAD_ADAPTER"] = args.adapter_path
     if args.served_model_name:
-        os.environ["MLX_VLM_SERVED_MODEL_NAME"] = args.served_model_name'''
-    # Find the existing block
-    old_block = '''if args.model:
-        os.environ["MLX_VLM_PRELOAD_MODEL"] = args.model
-        if args.adapter_path:
-            os.environ["MLX_VLM_PRELOAD_ADAPTER"] = args.adapter_path'''
-    if old_block in content:
-        content = content.replace(old_block, replacement)
-        with open(cli_file, "w") as f:
-            f.write(content)
-        print(f"  Padded {cli_file}: added MLX_VLM_SERVED_MODEL_NAME env var")
+        os.environ["MLX_VLM_SERVED_MODEL_NAME"] = args.served_model_name  # MLX_VLM_SERVED_MODEL_NAME'''
+    cli_content = cli_content.replace(old_env, new_env)
 
-# ---- Patch app.py: resolve served name in get_cached_model ----
+    with open(cli_file, "w") as f:
+        f.write(cli_content)
+    print("  [PATCH] cli.py: added --served-model-name argument + env var")
+
+# ============================================================
+# 2. Patch app.py: resolve served name in get_cached_model
+# ============================================================
 with open(app_file, "r") as f:
-    content = f.read()
+    app_content = f.read()
 
-# Find the get_cached_model function and inject the resolution logic
-old_sig = '''def get_cached_model(
+if PATCH_MARKER_APP in app_content:
+    print("  [PATCH] app.py already patched.")
+else:
+    # Find the get_cached_model function and inject resolution logic
+    # The function signature:
+    #   def get_cached_model(
+    #       model_path: str,
+    #       adapter_path=_INHERIT_ADAPTER,
+    #       *,
+    #       model_kind: str = "auto",
+    #   ):
+    old_sig = '''def get_cached_model(
     model_path: str,
     adapter_path=_INHERIT_ADAPTER,
     *,
     model_kind: str = "auto",
 ):'''
 
-new_sig = '''def get_cached_model(
+    new_sig = '''def get_cached_model(
     model_path: str,
     adapter_path=_INHERIT_ADAPTER,
     *,
     model_kind: str = "auto",
 ):
-    # Resolve served-model-name alias to actual preloaded path
+    # Resolve served-model-name alias to actual preloaded path  # PATCH_MARKER_APP
     _served_name = os.environ.get("MLX_VLM_SERVED_MODEL_NAME")
     _preload_model = os.environ.get("MLX_VLM_PRELOAD_MODEL")
     if _served_name and _preload_model and model_path == _served_name:
         model_path = _preload_model'''
 
-if old_sig in content:
-    content = content.replace(old_sig, new_sig)
-    with open(app_file, "w") as f:
-        f.write(content)
-    print(f"  Padded {app_file}: added model name resolution in get_cached_model")
-else:
-    print(f"  WARNING: Could not find get_cached_model signature in {app_file}")
+    if old_sig in app_content:
+        app_content = app_content.replace(old_sig, new_sig)
+        with open(app_file, "w") as f:
+            f.write(app_content)
+        print("  [PATCH] app.py: added model name resolution in get_cached_model")
+    else:
+        print("  [WARNING] Could not find get_cached_model signature in app.py")
 
-print("[PATCH] Done. mlx-vlm now supports --served-model-name aliasing.")
+print("[PATCH] Complete.")
 PYEOF
-
-chmod +x "$CLI_FILE" "$APP_FILE" 2>/dev/null || true
-
-echo "[PATCH] Complete."
