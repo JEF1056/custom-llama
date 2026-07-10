@@ -14,6 +14,12 @@ DRAFT_MODEL_PATH="z-lab/Qwen3.6-35B-A3B-DFlash"
 install_startup() {
     echo "Setting up startup script for macOS boot..."
 
+    # Apply model-alias patch to mlx-vlm if needed
+    PATCH_SCRIPT="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)/patch-model-alias.sh"
+    if [ -f "$PATCH_SCRIPT" ]; then
+        bash "$PATCH_SCRIPT"
+    fi
+
     mkdir -p "/Users/jfan/Library/LaunchAgents"
 
     cat <<EOF > "$PLIST_PATH"
@@ -122,4 +128,5 @@ exec mlx_vlm.server \
     --thinking-end-token "</think>" \
     --trust-remote-code \
     --host 0.0.0.0 \
-    --port 8000
+    --port 8000 \
+    --served-model-name "qwen3.6-35b-a3b"
