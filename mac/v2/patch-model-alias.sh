@@ -20,85 +20,95 @@ print(f"  Patching mlx-vlm at: {mlx_site}")
 with open(cli_file, "r") as f:
     cli_lines = f.readlines()
 
-# Remove any previous patch attempts
+# Remove only our previous patch attempts, NOT the original --model block
 cleaned = []
-skip_block = False
-for i, line in enumerate(cli_lines):
-    stripped = line.strip()
-    # Skip any previous --served-model-name arg block
-    if '"--served-model-name"' in stripped or "'--served-model-name'" in stripped:
-        skip_block = True
-        continue
-    if skip_block:
-        if stripped == ")" or stripped.endswith(")"):
-            skip_block = False
-            continue
-        if stripped.startswith("parser.add_argument(") or stripped == ")":
-            skip_block = False
-            continue
-        continue
-    # Remove previous env var references
-    if "MLX_VLM_SERVED_MODEL_NAME" in stripped:
-        continue
-    # Remove previous args.served_model_name references
-    if "args.served_model_name" in stripped:
-        continue
-    cleaned.append(line)
-
-cli_lines = cleaned
-
-# Find the position after --model argument block to insert --served-model-name
-# The --model block looks like:
-#     parser.add_argument(
-#         "--model",
-#         type=str,
-#         default=None,
-#         help="Pre-load a language model at startup...",
-#     )
-#
-# Insert after the closing paren of the --model block
-result = []
-inserted = False
 i = 0
 while i < len(cli_lines):
-    result.append(cli_lines[i])
-    if not inserted and '"--model"' in cli_lines[i]:
-        # Found the --model line, now find the closing ) of this parser.add_argument
-        paren_depth = 0
-        j = i
-        while j < len(cli_lines):
-            for ch in cli_lines[j]:
+    line = cli_lines[i]
+
+    # Skip previous --served-model-name argument blocks
+    if '"--served-model-name"' in line or "'--served-model-name'" in line:
+        # Find the end of this parser.add_argument block by tracking parens
+        depth = 0
+        while i < len(cli_lines):
+            for ch in cli_lines[i]:
                 if ch == '(':
-                    paren_depth += 1
+                    depth += 1
                 elif ch == ')':
-                    paren_depth -= 1
-                    if paren_depth == 0:
-                        # Insert after this line
-                        served_arg = [
-                            "\n",
-                            '    parser.add_argument(\n',
-                            '        "--served-model-name",\n',
-                            '        type=str,\n',
-                            '        default=None,\n',
-                            '        help="Alias for the pre-loaded model used in API requests.",\n',
-                            '    )\n',
-                        ]
-                        result.extend(served_arg)
-                        inserted = True
+                    depth -= 1
+                    if depth == 0:
+                        i += 1
                         break
-            if inserted:
+            if depth == 0:
                 break
-            j += 1
+        i += 1
+        continue
+
+    # Skip previous env var lines
+    if "MLX_VLM_SERVED_MODEL_NAME" in line or "args.served_model_name" in line:
+        i += 1
+        continue
+
+    cleaned.append(line)
+    i += 1
+
+cli_text = "".join(cleaned)
+
+# Now insert --served-model-name after the --model argument block
+# Find the parser.add_argument( block that contains "--model"
+result_lines = []
+inserted = False
+i = 0
+while i < len(cli_text.split("\n")):
+    line = cli_text.split("\n")[i]
+    result_lines.append(line)
+
+    if not inserted and '"--model"' in line:
+        # Found --model line. Track paren depth to find end of this parser.add_argument block.
+        # Go back to find the parser.add_argument( start
+        j = len(result_lines) - 1
+        while j >= 0 and "parser.add_argument(" not in result_lines[j]:
+            j -= 1
+        if j >= 0:
+            # Count parens from that point forward
+            depth = 0
+            k = j
+            while k < len(result_lines):
+                for ch in result_lines[k]:
+                    if ch == '(':
+                        depth += 1
+                    elif ch == ')':
+                        depth -= 1
+                        if depth == 0:
+                            # Insert after line k
+                            insert_after = k
+                            break
+                k += 1
+
+            # Insert the --served-model-name block
+            served_block = [
+                "",
+                '    parser.add_argument(',
+                '        "--served-model-name",',
+                '        type=str,',
+                '        default=None,',
+                '        help="Alias for the pre-loaded model used in API requests.",',
+                '    )',
+            ]
+            result_lines = result_lines[:insert_after + 1] + served_block + result_lines[insert_after + 1:]
+            inserted = True
+            break
+
     i += 1
 
 if not inserted:
     print("  [WARNING] Could not find --model argument in cli.py to insert after")
-else:
+
+cli_text = "\n".join(result_lines)
+if inserted:
     print("  [PATCH] cli.py: added --served-model-name argument")
 
-# Now add the env var assignment after the --model env block
-cli_text = "".join(result)
-
+# Add env var assignment after the --model env block
 old_env = '''if args.model:
         os.environ["MLX_VLM_PRELOAD_MODEL"] = args.model
         if args.adapter_path:
@@ -123,22 +133,18 @@ with open(cli_file, "w") as f:
 with open(app_file, "r") as f:
     app_text = f.read()
 
-# Remove any previous resolution patch
+# Remove only our previous resolution patch
 app_lines = app_text.split("\n")
 cleaned = []
 for line in app_lines:
     if "Resolve served-model-name alias" in line:
         continue
-    if line.strip().startswith("_served = os.environ.get("):
+    if 'os.environ.get("MLX_VLM_SERVED_MODEL_NAME")' in line and "app.py" not in line:
         continue
-    if line.strip().startswith("_preload = os.environ.get("):
-        continue
-    if "_served and _preload and model_path == _served" in line:
+    if 'os.environ.get("MLX_VLM_PRELOAD_MODEL")' in line:
         continue
     if "model_path = _preload" in line:
-        # Only skip if it's the patch line, not some other assignment
-        if "Resolve" in line or "_served" in line or "_preload" in line:
-            continue
+        continue
     cleaned.append(line)
 app_text = "\n".join(cleaned)
 
