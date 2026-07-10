@@ -74,20 +74,17 @@ uninstall_startup() {
     echo "Uninstallation complete!"
 }
 
-# Ensure mlx-vlm is installed
-if ! python3 -c "import mlx_vlm" 2>/dev/null; then
-    echo "mlx-vlm not found, installing..."
-    pip3 install -U mlx-vlm --break-system-packages
-fi
-
-# Apply model-alias patch to mlx-vlm
-PATCH_SCRIPT="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)/patch-model-alias.sh"
-if [ -f "$PATCH_SCRIPT" ]; then
-    bash "$PATCH_SCRIPT"
-fi
-
 # Handle flags
 if [ "$1" == "--install" ]; then
+    # Always reinstall and re-patch
+    echo "Reinstalling mlx-vlm..."
+    pip3 install -U mlx-vlm --break-system-packages
+
+    PATCH_SCRIPT="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)/patch-model-alias.sh"
+    if [ -f "$PATCH_SCRIPT" ]; then
+        bash "$PATCH_SCRIPT"
+    fi
+
     install_startup
     exit 0
 elif [ "$1" == "--uninstall" ]; then
