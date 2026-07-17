@@ -34,13 +34,28 @@ ARG CUDA_ARCH=86
 WORKDIR /src
 RUN git clone --depth 1 --branch "${LLAMA_REF}" "${LLAMA_REPO}" .
 
-# CURL on so llama-server can pull GGUF weights via -hf at runtime.
+# The CUDA driver (libcuda.so.1) is injected by the NVIDIA Container Toolkit at
+# runtime and is absent from the build image, which ships only a stub named
+# libcuda.so. Expose it under the versioned soname and put the stubs dir on
+# LD_LIBRARY_PATH: ld resolves a shared library's transitive DT_NEEDED (here
+# libggml-cuda.so -> libcuda.so.1, for cuMem*/cuDevice*) via LD_LIBRARY_PATH /
+# rpath-link, not the -L search path, so LIBRARY_PATH alone is not enough. The
+# real driver is used at run time; this stub only satisfies the link.
+RUN ln -sf libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
+ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64/stubs${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+
+# CURL on so llama-server can pull GGUF weights via -hf at runtime. The embedded
+# Web UI is disabled (LLAMA_BUILD_UI + LLAMA_USE_PREBUILT_UI OFF): this is a
+# headless API server, and the prebuilt UI-asset download breaks the build (the
+# HF bundle is missing loading.html). Server API/tooling is unaffected.
 RUN cmake -B build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DGGML_CUDA=ON \
         -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCH} \
         -DLLAMA_CURL=ON \
         -DLLAMA_BUILD_SERVER=ON \
+        -DLLAMA_BUILD_UI=OFF \
+        -DLLAMA_USE_PREBUILT_UI=OFF \
     && cmake --build build --target llama-server -j
 
 # --- runtime stage -----------------------------------------------------------
