@@ -5,9 +5,10 @@
 # runtime image ships only the binary + shared libs. CUDA 12.4 supports the
 # RTX 3090.
 #
-# NOTE: DSpark speculative decoding is NOT in this image yet - it is still being
-# ported into the fork. Base inference here already has 1-bit weights, the full
-# 262K context, tool calling (--jinja) and prompt/prefix caching (--cache-reuse).
+# DSpark speculative decoding is built in (from the fork's dspark-integration
+# branch): the drafter loads as a separate GGUF and runs alongside prompt/prefix
+# caching. Base inference has 1-bit weights, the full 262K context and tool
+# calling (--jinja).
 ARG CUDA_VERSION=12.9.0
 
 # --- build stage -------------------------------------------------------------
@@ -23,9 +24,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Which fork/branch to build (defaults to the user's fork + bonsai branch).
+# Which fork/branch to build (defaults to the user's fork + dspark-integration
+# branch, which contains the DSpark drafter + server capture wiring).
 ARG LLAMA_REPO=https://github.com/JEF1056/llama-cpp-turboquant.git
-ARG LLAMA_REF=bonsai
+ARG LLAMA_REF=dspark-integration
 # RTX 3090 = Ampere sm_86. Override for other cards.
 ARG CUDA_ARCH=86
 

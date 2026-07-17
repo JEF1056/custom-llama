@@ -1,7 +1,17 @@
 # RTX 3090 CUDA server for Bonsai-27B (1-bit).
 #
-#   cp .env.example .env   # then edit BONSAI_TOKEN
-#   docker compose up -d --build
+#   cp .env.example .env         # then edit BONSAI_TOKEN
+#   docker compose up -d --build # first run only: builds the image
+#
+# After the first build, editing .env or entrypoint.sh does NOT need a rebuild:
+# .env is read at container start and entrypoint.sh is live-mounted from the
+# host, so just re-run `docker compose up -d` (recreates the container) or
+# `docker compose restart`. Only Dockerfile / fork build-arg changes
+# (LLAMA_REPO/LLAMA_REF/CUDA_ARCH) require `--build`.
+#
+# Model weights are cached once in the bonsai-models volume and reused across
+# restarts, recreation and image rebuilds - never re-downloaded (until you
+# explicitly `docker volume rm bonsai-models`).
 #
 # Requires the NVIDIA Container Toolkit on the host.
 services:
@@ -11,17 +21,28 @@ services:
       dockerfile: Dockerfile
       args:
         LLAMA_REPO: ${LLAMA_REPO:-https://github.com/JEF1056/llama-cpp-turboquant.git}
-        LLAMA_REF: ${LLAMA_REF:-bonsai}
+        LLAMA_REF: ${LLAMA_REF:-dspark-integration}
         CUDA_ARCH: ${CUDA_ARCH:-86}
     image: custom-llama/bonsai-cuda:latest
     container_name: bonsai-cuda
     env_file: .env
+    environment:
+      # Where llama.cpp caches -hf / -hfd / mmproj downloads. Points at the
+      # dedicated bonsai-models volume so weights are pulled once and reused
+      # forever (overrides the entrypoint's standalone /workspace fallback).
+      LLAMA_CACHE: /models
     ports:
       - "${PORT:-8080}:8080"
     volumes:
-      # Persists the downloaded GGUF weights and prompt-cache slots so restarts
-      # are instant.
+      # Model weights cache: downloaded once, reused across restarts, container
+      # recreation and image rebuilds. Cleared only by `docker volume rm
+      # bonsai-models`.
+      - bonsai-models:/models
+      # Prompt-cache slots and any other runtime state.
       - bonsai-data:/workspace
+      # Live-mount the entrypoint so editing it takes effect on the next
+      # `docker compose up -d` / `restart` with NO image rebuild.
+      - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
     deploy:
       resources:
         reservations:
@@ -40,3 +61,4 @@ services:
 
 volumes:
   bonsai-data:
+  bonsai-models:

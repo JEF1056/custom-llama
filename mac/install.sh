@@ -8,9 +8,9 @@
 #   curl -fsSL https://raw.githubusercontent.com/YOURUSER/custom-llama/main/mac/install.sh \
 #     | BONSAI_TOKEN=hf_xxx bash
 #
-# Vision: pass ENABLE_VISION=1 to serve images. On Apple Silicon that requires
+# Vision: enabled by default (ENABLE_VISION=1). On Apple Silicon that requires
 # the ternary (2-bit) 27B MLX build (via mlx-vlm); the 1-bit MLX build is
-# text-only. The default installs the 1-bit text-only build.
+# text-only, so pass ENABLE_VISION=0 for the leaner 1-bit text-only build.
 #
 # DSpark speculative decoding is intentionally OFF on Apple Silicon: at batch 1
 # the verification pass does not amortize yet, so it is not a speedup here.
@@ -55,9 +55,9 @@ mkdir -p "$BONSAI_HOME" "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
 # via mlx-vlm; the 1-bit MLX build is text-only. ENABLE_VISION=1 provisions the
 # ternary model + mlx-vlm venv so vision works at runtime, and is baked into the
 # LaunchAgent so run-mlx-server.sh serves it.
-case "${ENABLE_VISION:-0}" in
-    1|true|yes|on) ENABLE_VISION=1 ;;
-    *)             ENABLE_VISION=0 ;;
+case "${ENABLE_VISION:-1}" in
+    0|false|no|off) ENABLE_VISION=0 ;;
+    *)              ENABLE_VISION=1 ;;
 esac
 if [[ "$ENABLE_VISION" == "1" ]]; then
     SETUP_FAMILY=ternary
