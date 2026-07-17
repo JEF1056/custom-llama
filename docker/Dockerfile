@@ -8,10 +8,10 @@
 # NOTE: DSpark speculative decoding is NOT in this image yet - it is still being
 # ported into the fork. Base inference here already has 1-bit weights, the full
 # 262K context, tool calling (--jinja) and prompt/prefix caching (--cache-reuse).
-ARG CUDA_VERSION=12.4.1
+ARG CUDA_VERSION=12.9.0
 
 # --- build stage -------------------------------------------------------------
-FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu22.04 AS build
+FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu24.04 AS build
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
