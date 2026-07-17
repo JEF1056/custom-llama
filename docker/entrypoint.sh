@@ -4,8 +4,8 @@
 #
 # The image already contains llama-server built from the TurboQuant+ fork, so
 # this just pulls the 1-bit GGUF weights from Hugging Face (cached in the mounted
-# volume) and launches the server with the full 262K context, tool calling and
-# prompt/prefix caching.
+# volume) and launches the server with the full 262K context, tool calling,
+# prompt/prefix caching and (optionally) the Bonsai vision tower.
 #
 # NOTE: DSpark speculative decoding is not in this build yet (it is being ported
 # into the fork). Because there is no DSpark, prompt/prefix caching is always on
@@ -26,8 +26,22 @@ CTX=${CTX:-262144}
 # The fork also offers TurboQuant KV: turbo4 / turbo3 / turbo2 (higher quality
 # at similar or smaller size) - set KV_TYPE=turbo4 to use it.
 KV_TYPE=${KV_TYPE:-q4_0}
-# Prefix-cache reuse window (tokens). Enables cheap multi-turn / agentic reuse.
-CACHE_REUSE=${CACHE_REUSE:-256}
+# Prompt caching. Bonsai is a HYBRID (GDN + attention) arch whose recurrent
+# state can't be position-shifted, so llama.cpp auto-disables --cache-reuse (KV
+# shifting) on it. The mechanism that DOES work here is the server's context
+# checkpoints + prompt-state cache (full sequence-state save/restore) - on by
+# default, and the same machinery speculative decoding reuses. Size its RAM
+# budget in MiB (-1 = no limit, 0 = disable).
+CACHE_RAM_MIB=${CACHE_RAM_MIB:-8192}
+
+# Vision (multimodal). Bonsai ships a ~0.46B vision tower as a separate mmproj
+# GGUF; the fork loads it through the existing Qwen3-VL projector, so image
+# input works with no code changes. Enabled by default; set ENABLE_VISION=0 for
+# a leaner text-only server that skips the ~629 MB mmproj download. MMPROJ_FILE
+# selects the pack - the Q8_0 container holds the HQQ 4-bit tower (~629 MB);
+# Bonsai-27B-mmproj-BF16.gguf (~931 MB) is the higher-precision reference.
+ENABLE_VISION=${ENABLE_VISION:-1}
+MMPROJ_FILE=${MMPROJ_FILE:-Bonsai-27B-mmproj-Q8_0.gguf}
 
 # --- Weights -----------------------------------------------------------------
 # Private HF repo -> needs a read token. BONSAI_TOKEN wins, else HF_TOKEN.
@@ -51,12 +65,24 @@ SERVER_ARGS=(
     -ngl "$NGL"
     -fa on
     --jinja
-    --cache-reuse "$CACHE_REUSE"
+    --cache-ram "$CACHE_RAM_MIB"
     --cache-type-k "$KV_TYPE"
     --cache-type-v "$KV_TYPE"
 )
 if [[ -n "${CTX:-}" && "${CTX}" != "0" ]]; then
     SERVER_ARGS+=(-c "$CTX")
+fi
+# Vision: pin the mmproj explicitly. The URL download reuses the HF token, and
+# giving an explicit file avoids the ambiguous auto-pick between the two mmproj
+# packs; --no-mmproj keeps text-only servers from fetching it at all.
+case "${ENABLE_VISION,,}" in
+    0|false|no|off|"") VISION_ON=0 ;;
+    *)                 VISION_ON=1 ;;
+esac
+if [[ "$VISION_ON" == "1" ]]; then
+    SERVER_ARGS+=(--mmproj-url "https://huggingface.co/${HF_REPO}/resolve/main/${MMPROJ_FILE}")
+else
+    SERVER_ARGS+=(--no-mmproj)
 fi
 # Cap thinking length for clients that don't request a reasoning effort.
 if [[ -n "${REASONING_BUDGET:-}" ]]; then
@@ -73,5 +99,5 @@ if [[ -n "${EXTRA_ARGS:-}" ]]; then
     SERVER_ARGS+=(${EXTRA_ARGS})
 fi
 
-log "Starting llama-server on :$PORT | model=$HF_FILE ctx=$CTX kv=$KV_TYPE cache-reuse=$CACHE_REUSE tool-calling=on"
+log "Starting llama-server on :$PORT | model=$HF_FILE ctx=$CTX kv=$KV_TYPE cache-ram=${CACHE_RAM_MIB}MiB vision=$([[ "$VISION_ON" == "1" ]] && echo on || echo off) tool-calling=on"
 exec llama-server "${SERVER_ARGS[@]}"

@@ -24,6 +24,8 @@
         <string>__HOME__/.bonsai</string>
         <key>MLX_PORT</key>
         <string>__MLX_PORT__</string>
+        <key>ENABLE_VISION</key>
+        <string>__ENABLE_VISION__</string>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>

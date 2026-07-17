@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 #
-# One-line installer for the Bonsai-27B (1-bit) MLX server on a MacBook
+# One-line installer for the Bonsai-27B MLX server on a MacBook
 # (Apple Silicon). Installs the model, then a LaunchAgent that starts the
 # server at login and auto-restarts it on crash (KeepAlive).
 #
 # Usage (from a GitHub raw URL):
 #   curl -fsSL https://raw.githubusercontent.com/YOURUSER/custom-llama/main/mac/install.sh \
 #     | BONSAI_TOKEN=hf_xxx bash
+#
+# Vision: pass ENABLE_VISION=1 to serve images. On Apple Silicon that requires
+# the ternary (2-bit) 27B MLX build (via mlx-vlm); the 1-bit MLX build is
+# text-only. The default installs the 1-bit text-only build.
 #
 # DSpark speculative decoding is intentionally OFF on Apple Silicon: at batch 1
 # the verification pass does not amortize yet, so it is not a speedup here.
@@ -46,6 +50,24 @@ fi
 
 mkdir -p "$BONSAI_HOME" "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
 
+# ---- Vision family selection ------------------------------------------------
+# Image input on Apple Silicon requires the ternary (2-bit) 27B MLX build served
+# via mlx-vlm; the 1-bit MLX build is text-only. ENABLE_VISION=1 provisions the
+# ternary model + mlx-vlm venv so vision works at runtime, and is baked into the
+# LaunchAgent so run-mlx-server.sh serves it.
+case "${ENABLE_VISION:-0}" in
+    1|true|yes|on) ENABLE_VISION=1 ;;
+    *)             ENABLE_VISION=0 ;;
+esac
+if [[ "$ENABLE_VISION" == "1" ]]; then
+    SETUP_FAMILY=ternary
+    SETUP_MLX_VLM=1
+    log "Vision enabled: provisioning the ternary 2-bit 27B MLX build + mlx-vlm (the 1-bit MLX build is text-only)."
+else
+    SETUP_FAMILY=bonsai
+    SETUP_MLX_VLM=0
+fi
+
 # ---- Fetch our wrappers + plist (this repo) ---------------------------------
 if [[ -d "$CL_DIR/.git" ]]; then
     log "Updating custom-llama repo..."
@@ -58,17 +80,18 @@ else
     git -C "$CL_DIR" checkout "$CUSTOM_LLAMA_REF" 2>/dev/null || true
 fi
 
-# ---- Fetch Bonsai-demo and run setup (MLX 1-bit 27B) ------------------------
+# ---- Fetch Bonsai-demo and run setup (MLX 27B) ------------------------------
 if [[ ! -d "$DEMO_DIR/.git" ]]; then
     log "Cloning Bonsai-demo..."
     git clone "$DEMO_REPO" "$DEMO_DIR"
 fi
 
-log "Running Bonsai-demo setup (MLX, Bonsai 1-bit 27B). Downloads several GB and builds the MLX fork..."
+log "Running Bonsai-demo setup (MLX, family=$SETUP_FAMILY 27B). Downloads several GB and builds the MLX fork..."
 (
     cd "$DEMO_DIR"
-    BONSAI_FAMILY=bonsai \
+    BONSAI_FAMILY="$SETUP_FAMILY" \
     BONSAI_MODEL=27B \
+    BONSAI_MLX_VLM="$SETUP_MLX_VLM" \
     BONSAI_OPENWEBUI=0 \
     BONSAI_CODE_INTERPRETER=0 \
     BONSAI_TOKEN="$BONSAI_TOKEN" \
@@ -80,6 +103,7 @@ log "Installing LaunchAgent ($LABEL)..."
 sed -e "s|__REPO__|$CL_DIR|g" \
     -e "s|__HOME__|$HOME|g" \
     -e "s|__MLX_PORT__|$MLX_PORT|g" \
+    -e "s|__ENABLE_VISION__|$ENABLE_VISION|g" \
     "$CL_DIR/mac/com.custom-llama.bonsai-mlx.plist.template" > "$PLIST_DST"
 
 # (Re)load cleanly.

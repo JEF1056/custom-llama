@@ -13,11 +13,23 @@ Three components:
 | [`router/`](router/)   | LiteLLM proxy    | Anywhere; distributes across both |
 
 Speedups wired in: **1-bit weights**, a **quantized KV cache**, flash attention,
-full GPU offload, and a reasoning-budget cap. **Prompt caching** (KV/prefix
-reuse) is active on both machines. The CUDA server is now built from the
+full GPU offload, and a reasoning-budget cap. **Prompt caching** is active on
+both machines. Bonsai is a hybrid (GDN + attention) arch, so on CUDA the caching
+is the server's **context checkpoints + prompt-state cache** (full sequence-state
+save/restore) rather than `--cache-reuse` KV-shifting, which llama.cpp
+auto-disables on hybrid models. The CUDA server is now built from the
 TurboQuant+ llama.cpp fork; **DSpark speculative decoding is being ported into
-the fork and is not in this image yet**, so there is no speculative-vs-cache
-trade-off here — prompt caching is always on.
+the fork and is not in this image yet** - and because that same checkpoint
+machinery is what speculative decoding reuses, caching and DSpark will coexist
+(no speculative-vs-cache trade-off).
+
+**Vision** is enabled on CUDA: Bonsai's separate vision tower ships as an mmproj
+GGUF that the fork loads through its existing Qwen3-VL projector, so the server
+accepts image input out of the box. It is loaded lazily (only when an image
+arrives) and can be turned off with `ENABLE_VISION=0` for a leaner text-only
+server. Note that per-request images are re-encoded, and `--cache-reuse`
+KV-shifting is disabled for multimodal requests - but the checkpoint/prompt-state
+cache still applies to the text prefix.
 
 **Tool calling** (native OpenAI-style `tool_calls`) and the **full 262K context
 window** are enabled on both machines:
@@ -56,8 +68,9 @@ curl http://localhost:8080/v1/chat/completions \
 ```
 
 Toggles live in `docker/.env` — `CTX`, `KV_TYPE` (`q4_0` default, or `turbo4`
-for the fork's TurboQuant KV), `CACHE_REUSE`, `REASONING_BUDGET`, `EXTRA_ARGS`,
-plus build knobs `LLAMA_REPO` / `LLAMA_REF` / `CUDA_ARCH`.
+for the fork's TurboQuant KV), `CACHE_RAM_MIB`, `REASONING_BUDGET`,
+`ENABLE_VISION` / `MMPROJ_FILE`, `EXTRA_ARGS`, plus build knobs `LLAMA_REPO` /
+`LLAMA_REF` / `CUDA_ARCH`.
 
 ---
 
@@ -82,6 +95,11 @@ curl http://localhost:8081/v1/chat/completions \
 
 - Logs: `~/Library/Logs/bonsai-mlx.out.log` / `.err.log`
 - Uninstall: `bash ~/.bonsai/custom-llama/mac/uninstall.sh`
+- **Vision on Mac** is opt-in: install with `ENABLE_VISION=1` (e.g.
+  `... | BONSAI_TOKEN=hf_xxx ENABLE_VISION=1 bash`). On Apple Silicon image
+  input is served through `mlx-vlm`, which only supports the **ternary (2-bit)**
+  27B MLX build, so enabling it serves that build (~7 GB, higher quality)
+  instead of the 1-bit one. The 1-bit MLX build is text-only for now.
 
 > Replace `YOURUSER` with your GitHub account after you push this repo (also the
 > `CUSTOM_LLAMA_REPO` default in [`mac/install.sh`](mac/install.sh)).
@@ -119,5 +137,9 @@ background health checks. Tune in [`router/config.yaml`](router/config.yaml).
 - **DSpark speculative decoding is not in this image yet** — it is still being
   ported into the fork. When it lands it will run alongside the prompt cache
   (no trade-off), unlike the vendor demo where the two are mutually exclusive.
-- Not included: TLS/public exposure, the Ternary quality variant, vision/Open
-  WebUI demos (all available upstream if you want them later).
+- **Vision is enabled** on the CUDA server via the Bonsai mmproj tower (set
+  `ENABLE_VISION=0` to disable). On Mac it is opt-in (`ENABLE_VISION=1` at
+  install), and because 1-bit MLX is text-only today it serves the ternary
+  2-bit build for image input.
+- Not included: TLS/public exposure, the Ternary quality variant as the CUDA
+  default, Open WebUI demos (all available upstream if you want them later).
