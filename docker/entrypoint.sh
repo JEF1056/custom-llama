@@ -51,9 +51,19 @@ MMPROJ_FILE=${MMPROJ_FILE:-Bonsai-27B-mmproj-Q8_0.gguf}
 # Enabled by default; set ENABLE_DSPARK=0 for a plain non-speculative server.
 ENABLE_DSPARK=${ENABLE_DSPARK:-1}
 DSPARK_DRAFT_FILE=${DSPARK_DRAFT_FILE:-Bonsai-27B-dspark-Q4_1.gguf}
+# Sizes the server's decode output reserve as n_parallel * (1 + this). Must be
+# >= the drafter checkpoint's block_size (4 for Bonsai-27B) for the block draft.
+# NOTE: on this fork the dspark capture pass currently flags ~every prompt token
+# as an output row, so the reserve really needs to reach n_batch; but sizing it
+# that high (via a large value here) makes context creation OOM on a 24 GB GPU.
+# There is no config value that both loads and survives long prompts -- this
+# needs a fork-side fix (capture should not force n_outputs_max == n_batch).
+DSPARK_N_MAX=${DSPARK_N_MAX:-8}
 
 # --- Weights -----------------------------------------------------------------
-# Private HF repo -> needs a read token. BONSAI_TOKEN wins, else HF_TOKEN.
+# The prism-ml Bonsai-27B GGUF repos are public, so no token is needed for the
+# default weights; a read token is only required for gated/private repos.
+# BONSAI_TOKEN wins, else HF_TOKEN.
 HF_REPO=${HF_REPO:-prism-ml/Bonsai-27B-gguf}
 HF_FILE=${HF_FILE:-Bonsai-27B-Q1_0.gguf}
 export HF_TOKEN=${BONSAI_TOKEN:-${HF_TOKEN:-}}
@@ -64,15 +74,17 @@ export LLAMA_CACHE=${LLAMA_CACHE:-/workspace/models}
 mkdir -p "$LLAMA_CACHE"
 
 if [[ -z "${HF_TOKEN:-}" ]]; then
-    err "BONSAI_TOKEN/HF_TOKEN is not set. The Bonsai-27B repo is currently"
-    err "private; the weight download will fail without a read token."
+    log "No BONSAI_TOKEN/HF_TOKEN set - downloading anonymously (the default"
+    log "prism-ml Bonsai-27B GGUF repos are public). Set a token only if you"
+    log "point HF_REPO at a gated or private repo."
 fi
 
 # --- Assemble llama-server flags ---------------------------------------------
 SERVER_ARGS=(
     --host 0.0.0.0
     --port "$PORT"
-    -hf "${HF_REPO}:${HF_FILE}"
+    -hf "${HF_REPO}"
+    -hff "${HF_FILE}"
     -ngl "$NGL"
     -fa on
     --jinja
@@ -103,9 +115,15 @@ case "${ENABLE_DSPARK,,}" in
     *)                 DSPARK_ON=1 ;;
 esac
 if [[ "$DSPARK_ON" == "1" ]]; then
+    # -hfd only takes repo[:quant] (there is no exact-file flag for the draft),
+    # and :quant is matched case-insensitively, so derive the quant tag from the
+    # drafter filename (e.g. Bonsai-27B-dspark-Q4_1.gguf -> Q4_1).
+    DSPARK_DRAFT_QUANT="${DSPARK_DRAFT_FILE##*-}"
+    DSPARK_DRAFT_QUANT="${DSPARK_DRAFT_QUANT%.gguf}"
     SERVER_ARGS+=(
         --spec-type draft-dspark
-        -hfd "${HF_REPO}:${DSPARK_DRAFT_FILE}"
+        -hfd "${HF_REPO}:${DSPARK_DRAFT_QUANT}"
+        --spec-draft-n-max "${DSPARK_N_MAX}"
     )
 fi
 # Cap thinking length for clients that don't request a reasoning effort.

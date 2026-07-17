@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ninja-build \
         build-essential \
         libcurl4-openssl-dev \
+        libssl-dev \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -44,22 +45,28 @@ RUN git clone --depth 1 --branch "${LLAMA_REF}" "${LLAMA_REPO}" .
 RUN ln -sf libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
 ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64/stubs${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
-# CURL on so llama-server can pull GGUF weights via -hf at runtime. The embedded
-# Web UI is disabled (LLAMA_BUILD_UI + LLAMA_USE_PREBUILT_UI OFF): this is a
-# headless API server, and the prebuilt UI-asset download breaks the build (the
-# HF bundle is missing loading.html). Server API/tooling is unaffected.
+# CURL on so llama-server can pull GGUF weights via -hf at runtime; OpenSSL on
+# so those downloads work over HTTPS (without it the server aborts with "HTTPS
+# is not supported"). The embedded Web UI is disabled (LLAMA_BUILD_UI +
+# LLAMA_USE_PREBUILT_UI OFF): this is a headless API server, and the prebuilt
+# UI-asset download breaks the build (the HF bundle is missing loading.html).
+# Server API/tooling is unaffected.
 RUN cmake -B build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DGGML_CUDA=ON \
         -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCH} \
         -DLLAMA_CURL=ON \
+        -DLLAMA_OPENSSL=ON \
         -DLLAMA_BUILD_SERVER=ON \
         -DLLAMA_BUILD_UI=OFF \
         -DLLAMA_USE_PREBUILT_UI=OFF \
     && cmake --build build --target llama-server -j
 
 # --- runtime stage -----------------------------------------------------------
-FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu22.04
+# Must match the build stage's Ubuntu release: the binary links against the
+# glibc/libstdc++ (GLIBC_2.38, GLIBCXX_3.4.32) shipped by 24.04, which the
+# 22.04 runtime image does not provide.
+FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \

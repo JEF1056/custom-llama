@@ -1,0 +1,4 @@
+# Local env files hold secrets (BONSAI_TOKEN); never commit them.
+.env
+*.env
+!.env.example
