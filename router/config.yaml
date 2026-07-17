@@ -1,0 +1,40 @@
+# LiteLLM router config: distribute one logical model ("bonsai-27b") across
+# multiple OpenAI-compatible backends (the RTX 3090 CUDA server and the Mac MLX
+# server). Requests are routed by lowest latency, with automatic retry on a
+# healthy backend if one fails.
+#
+# Both entries share the same model_name, so LiteLLM treats them as two
+# deployments of one model and load-balances between them.
+
+model_list:
+  - model_name: bonsai-27b
+    litellm_params:
+      model: openai/bonsai-27b
+      api_base: os.environ/CUDA_BACKEND_URL   # e.g. http://192.168.1.50:8080/v1
+      api_key: os.environ/BACKEND_API_KEY
+
+  - model_name: bonsai-27b
+    litellm_params:
+      model: openai/bonsai-27b
+      api_base: os.environ/MAC_BACKEND_URL    # e.g. http://192.168.1.20:8081/v1
+      api_key: os.environ/BACKEND_API_KEY
+
+router_settings:
+  # Send each request to the deployment with the lowest observed latency.
+  routing_strategy: latency-based-routing
+  # On failure, retry on the other healthy deployment.
+  num_retries: 3
+  timeout: 600
+  # Cool a deployment down after this many failures, for this many seconds.
+  allowed_fails: 2
+  cooldown_time: 30
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 600
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # Periodically ping backends so unhealthy ones are skipped proactively.
+  background_health_checks: true
+  health_check_interval: 30

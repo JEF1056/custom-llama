@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent for the Bonsai-27B (1-bit) MLX server.
+  Placeholders (__REPO__, __HOME__, __MLX_PORT__) are filled in by install.sh.
+  RunAtLoad starts it at login; KeepAlive restarts it if it ever exits.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.custom-llama.bonsai-mlx</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__REPO__/mac/run-mlx-server.sh</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>BONSAI_HOME</key>
+        <string>__HOME__/.bonsai</string>
+        <key>MLX_PORT</key>
+        <string>__MLX_PORT__</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Throttle restarts so a crash loop doesn't spin the CPU. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/bonsai-mlx.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/bonsai-mlx.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

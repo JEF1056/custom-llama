@@ -1,0 +1,26 @@
+# LiteLLM router that load-balances across the CUDA + MLX backends.
+#
+#   cp .env.example .env   # then edit the backend URLs + master key
+#   docker compose up -d
+#
+# Call it like any OpenAI endpoint:
+#   curl http://localhost:4000/v1/chat/completions \
+#     -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+#     -H "Content-Type: application/json" \
+#     -d '{"model":"bonsai-27b","messages":[{"role":"user","content":"hi"}]}'
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    container_name: bonsai-router
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    ports:
+      - "4000:4000"
+    env_file: .env
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:4000/health/liveliness"]
+      interval: 30s
+      timeout: 5s
+      retries: 5

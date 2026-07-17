@@ -1,384 +1,123 @@
-# custom-llama
+# custom-llama — self-hosted Bonsai-27B (1-bit)
 
-A self-hosted LLM inference server built around [llama.cpp (TurboQuant + MTP fork)](https://github.com/JEF1056/llama-cpp-turboquant/tree/llama-next). Exposed publicly via Cloudflare Tunnel with Cloudflare Access authentication.
+Host [`prism-ml/Bonsai-27B`](https://huggingface.co/prism-ml/Bonsai-27B-gguf) —
+a true 1-bit (Q1_0, ~3.5 GB) 27B reasoning + vision model — on your own
+hardware, with every speedup enabled, behind a single load-balancing endpoint.
 
-**Default model:** [qwopus3.6-27B-v2](https://huggingface.co/Jackrong/Qwopus3.6-27B-v2-GGUF) — a reasoning model with native MTP speculative decoding support.
+Three components:
 
-**35B model:** [qwen3.6-35B-A3B](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) — hybrid MoE (DeltaNet + MoE Attention), 3.8B active params. Currently running as [APEX MTP mixed-precision](https://huggingface.co/mudler/Qwen3.6-35B-A3B-APEX-MTP-GGUF) (`qwen3.6-35b-a3b-apex`, `APEX-MTP-I-Compact`). Standard IQ4_XS+MTP GGUF also buildable via `convert-st`.
+| Component | Backend | Where it runs |
+|-----------|---------|---------------|
+| [`docker/`](docker/)   | llama.cpp + CUDA | RTX 3090 (Linux, Docker) |
+| [`mac/`](mac/)         | MLX              | MacBook (Apple Silicon), auto-starts on login |
+| [`router/`](router/)   | LiteLLM proxy    | Anywhere; distributes across both |
 
----
+Speedups wired in: **1-bit weights**, a **quantized KV cache**, flash attention,
+full GPU offload, and a reasoning-budget cap. **Prompt caching** (KV/prefix
+reuse) is active on both machines. The CUDA server is now built from the
+TurboQuant+ llama.cpp fork; **DSpark speculative decoding is being ported into
+the fork and is not in this image yet**, so there is no speculative-vs-cache
+trade-off here — prompt caching is always on.
 
-## Local quick start
+**Tool calling** (native OpenAI-style `tool_calls`) and the **full 262K context
+window** are enabled on both machines:
 
-No Cloudflare or secrets needed — just the inference server on this machine.
+- CUDA: the server runs with `--jinja` for tool calling; `CTX=262144` gives the
+  model's full window (fits in 24 GB thanks to the quantized KV cache). Serving
+  is single-slot (no `--parallel`).
+- MLX: the 27B emits native `tool_calls`, and mlx-lm keeps an unbounded KV cache
+  (full 262K, limited only by unified memory).
 
-```bash
-python sync-env.py
-docker compose build llama-server llama-convert mcp-search-server
-docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS --mtp
-docker compose run --rm llama-convert download qwen3.6-35b-a3b-apex --quant APEX-MTP-I-Compact
-docker compose up -d llama-server mcp-search-server
-
-# Optional, run again to update opencode ctx max lengths
-python sync-env.py
-```
-
-Port 8080 is not exposed by default. Create `docker-compose.override.yml` (gitignored) to open it on localhost:
-
-```yaml
-services:
-  llama-server:
-    ports:
-      - "8080:8080"
-    networks:
-      - llama-net
-      - host-bridge
-
-networks:
-  host-bridge:
-    driver: bridge
-```
-
-Then `docker compose up -d llama-server` (not `restart` — that won't re-read the config). Test with `curl http://localhost:8080/health`.
-
-Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http://localhost:8080/v1`.
-
-> **Without MTP:** if you want a faster first run (skip the safetensors download), use the prebuilt GGUF instead.
-> Comment out `LLAMA_MODEL` and `LLAMA_SPEC_TYPE` in `.env`, then:
-> `docker compose run --rm llama-convert download qwopus3.6-27b --quant IQ4_XS`
+> **Heads up — Hugging Face token required.** The Bonsai-27B repo is currently
+> private, so you need an HF **read** token (`BONSAI_TOKEN`) for downloads.
 
 ---
 
-## Models
+## 1. RTX 3090 — CUDA server (Docker)
 
-### qwopus3.6-27B-v2 (default, loads on first request)
+Requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 
-| Property     | Value                                                  |
-| ------------ | ------------------------------------------------------ |
-| Model        | qwopus3.6-27B-v2                                       |
-| Quant        | IQ4_XS + MTP (~15 GB)                                  |
-| Architecture | Dense transformer, 64 GQA attention layers             |
-| Context      | 150K (native 32K; extended via RoPE scaling)           |
-| Capabilities | Reasoning, tool use, MTP speculative decoding          |
-| MTP speedup  | ~2–2.5× tok/s vs. baseline (requires MTP-capable GGUF) |
+```bash
+cd docker
+cp .env.example .env
+#   edit .env -> set BONSAI_TOKEN (and tune REASONING_BUDGET / CTX)
+docker compose up -d --build
+```
 
-**VRAM budget (RTX 3090, 24 GB):**
+The build compiles `llama-server` from the TurboQuant+ fork for the RTX 3090
+(sm_86); first boot then downloads the 1-bit weights into a Docker volume
+(several GB — be patient; `start_period` is generous). Then:
 
-| Component                   | Size                            |
-| --------------------------- | ------------------------------- |
-| Model (IQ4_XS)              | ~15.0 GB                        |
-| KV cache (turbo3, 150K ctx) | ~2.5 GB                         |
-| draft-mtp KV cache          | ~0.3 GB                         |
-| CUDA context + compute      | ~1.6 GB                         |
-| **Total**                   | **~19.4 GB** (~4.6 GB headroom) |
+```bash
+curl http://localhost:8080/health
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"bonsai-27b","messages":[{"role":"user","content":"Explain 1-bit quantization."}]}'
+```
 
-### qwen3.6-35B-A3B APEX (loads at startup)
-
-| Property      | Value                                                                  |
-| ------------- | ---------------------------------------------------------------------- |
-| Model         | qwen3.6-35B-A3B (APEX-MTP-I-Compact)                                  |
-| Quant         | APEX-MTP-I-Compact (~17.3 GB, MTP included)                           |
-| Architecture  | Hybrid MoE — 30 DeltaNet (linear-recurrent) + 10 MoE Attention layers |
-| Active params | 3.8B of 35B (MoE FFN)                                                  |
-| Context       | 128K                                                                   |
-| Capabilities  | Reasoning, tool use, MTP speculative decoding                          |
-
-**VRAM budget (RTX 3090, 24 GB) — IQ4_XS:**
-
-| Component                    | Size                            |
-| ---------------------------- | ------------------------------- |
-| Model (IQ4_XS)               | ~14.5 GB                        |
-| DeltaNet recurrent state     | ~1.5 GB                         |
-| KV cache (turbo4/2, 65K ctx) | ~0.6 GB                         |
-| draft-mtp KV cache           | ~0.1 GB                         |
-| compute scratch + CUDA       | ~1.5 GB                         |
-| **Total**                    | **~18.2 GB** (~5.8 GB headroom) |
-
-**VRAM budget (RTX 3090, 24 GB) — APEX-MTP-I-Compact:**
-
-| Component                        | Size                            |
-| -------------------------------- | ------------------------------- |
-| Model (APEX-MTP-I-Compact)       | ~17.3 GB                        |
-| DeltaNet recurrent state         | ~1.5 GB                         |
-| KV cache (turbo4/2, 65K ctx)    | ~0.6 GB                         |
-| compute scratch + CUDA          | ~1.5 GB                         |
-| **Total**                        | **~20.9 GB** (~3.1 GB headroom) |
+Toggles live in `docker/.env` — `CTX`, `KV_TYPE` (`q4_0` default, or `turbo4`
+for the fork's TurboQuant KV), `CACHE_REUSE`, `REASONING_BUDGET`, `EXTRA_ARGS`,
+plus build knobs `LLAMA_REPO` / `LLAMA_REF` / `CUDA_ARCH`.
 
 ---
 
-## Architecture
+## 2. MacBook (Apple Silicon) — MLX server, auto-start
 
-```
-              ┌──────────────────────────────────┐
-              │         Cloudflare Edge           │
-              │  chat.jessfan.com                 │
-              │  mcp.jessfan.com                  │
-              └──────────────┬────────────────────┘
-                             │ Cloudflare Tunnel (outbound)
-                             │ Cloudflare Access (auth required)
-              ┌──────────────▼────────────────────┐
-              │         Host Machine               │
-              │  cloudflared                       │
-              └──────────────┬────────────────────┘
-                         ┌───┴───┐
-                   llama-net internal
-                         ┌───┴───┐
-              ┌─────────────┐ ┌─────────────────────┐
-              │ llama-server│ │ mcp-search-server   │
-              │ :8080       │ │ :3100               │
-              └─────────────┘ └─────────────────────┘
+One command, from your GitHub raw URL:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/YOURUSER/custom-llama/main/mac/install.sh \
+  | BONSAI_TOKEN=hf_xxx bash
 ```
 
-> **Note:** `mcp-search-server` provides semantic web search with browser automation via MCP. Accessible at `http://mcp-search-server:3100` on the internal `llama-net` network. The cloudflared tunnel also exposes `chat.jessfan.com` (llama-server) and `mcp.jessfan.com` (mcp-search-server) publicly.
+This installs the model and a **LaunchAgent** that starts the MLX server at
+login and restarts it on crash (`KeepAlive`). Verify:
 
-| Interface                   | URL / Command                 | Auth                                          |
-| --------------------------- | ----------------------------- | --------------------------------------------- |
-| **Local**                   | `http://localhost:8080/v1`    | None (requires `docker-compose.override.yml`) |
-| **API (Cloudflare Access)** | `https://chat.jessfan.com/v1` | Google OAuth / Email (see below)             |
+```bash
+launchctl list | grep bonsai
+curl http://localhost:8081/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"bonsai-27b","messages":[{"role":"user","content":"hi"}]}'
+```
+
+- Logs: `~/Library/Logs/bonsai-mlx.out.log` / `.err.log`
+- Uninstall: `bash ~/.bonsai/custom-llama/mac/uninstall.sh`
+
+> Replace `YOURUSER` with your GitHub account after you push this repo (also the
+> `CUSTOM_LLAMA_REPO` default in [`mac/install.sh`](mac/install.sh)).
 
 ---
 
-## Step-by-step setup guide
-
-### Step 1: Create Cloudflare Tunnel
-
-1. Go to [Cloudflare Zero Trust](https://one.dash.cloudflare.com/)
-2. Navigate to **Networks → Tunnels**
-3. Click **Create a tunnel**
-4. Select **Docker** as the platform
-5. Copy the generated token (looks like `eyJhIjoi...`)
-6. Paste it into your `.env` file as `CF_TUNNEL_TOKEN`
-7. Add two Public Hostnames:
-   - **Subdomain**: `chat` | **Domain**: `jessfan.com` | **Service**: `http://llama-server:8080`
-   - **Subdomain**: `mcp` | **Domain**: `jessfan.com` | **Service**: `http://mcp-search-server:3100`
-8. Save the tunnel
-
-### Step 2: Set up Cloudflare Access
-
-1. Go to **Zero Trust → Access → Applications**
-2. Click **Add an Application**
-3. Choose **Add a Cloud Access Application**
-4. Enter `chat.jessfan.com`
-5. Choose an authentication method:
-   - **Google OAuth** — uses Google credentials (recommended)
-   - **Email/Password** — users get a one-time code via email
-6. Set **Who can access** to your email or "Anyone with the domain"
-7. Save the application
-8. Repeat steps 1-7 for `mcp.jessfan.com` (separate Access application, same auth method)
-
-### Step 3: Configure your `.env` file
+## 3. Router — one endpoint across both backends
 
 ```bash
-python sync-env.py
-```
-
-Edit `.env` and set at minimum:
-
-```bash
-# Cloudflare Tunnel token (from Step 1)
-CF_TUNNEL_TOKEN=eyJhIjoi...
-
-# Cloudflare Access hostname
-CF_ACCESS_HOSTNAME=chat.jessfan.com
-
-# Google OAuth credentials for Cloudflare Access
-CF_ACCESS_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
-CF_ACCESS_GOOGLE_CLIENT_SECRET=your-client-secret
-
-# Optional: API key for llama-server (extra layer of protection)
-LLAMA_API_KEY=$(openssl rand -hex 32)
-```
-
-### Step 4: Build and prepare models
-
-```bash
-# Build the containers
-docker compose build
-docker compose build llama-convert
-
-# ── 27B (default server model) ─────────────────────────────────────────────
-
-# Option A (recommended): MTP-capable GGUF from safetensors — ~2–2.5× faster generation
-# Downloads safetensors, converts to fp16 GGUF, quantizes, cleans up.
-# TriAttention calibration runs automatically (TRIATTENTION_INPUT set in docker-compose.yml).
-docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS --mtp --keep-intermediate
-# Output: ./models/qwopus3.6-27b-IQ4_XS-mtp.gguf  +  ./models/qwopus3.6-27b-mmproj.gguf  +  ./models/qwopus3.6-27b-triattention.bin
-# mmproj is generated as fp16 from the local safetensors (no separate download needed).
-# .env.default already points LLAMA_MODEL at this file and sets LLAMA_SPEC_TYPE=mtp.
-
-# Option B (faster setup, no MTP): prebuilt GGUF from HuggingFace
-# Comment out LLAMA_MODEL and LLAMA_SPEC_TYPE in .env first.
-docker compose run --rm llama-convert download qwopus3.6-27b --quant IQ4_XS
-
-# ── 35B standard (loads at startup) ────────────────────────────────────────
-
-# Option A (recommended): MTP-capable GGUF from safetensors
-docker compose run --rm llama-convert convert-st qwen3.6-35b-a3b --quant IQ4_XS --mtp
-# Output: ./models/qwen3.6-35b-a3b-IQ4_XS-mtp.gguf + ./models/qwen3.6-35b-a3b-mmproj.gguf
-
-# ── 35B APEX MTP (currently active, download-only, MTP heads included) ─────
-
-# APEX-MTP-I-Compact (~17.3 GB, default — fits 24 GB VRAM)
-docker compose run --rm llama-convert download qwen3.6-35b-a3b-apex --quant APEX-MTP-I-Compact
-# Output: ./models/qwen3.6-35b-a3b-apex-APEX-MTP-I-Compact.gguf + ./models/qwen3.6-35b-a3b-apex-mmproj.gguf
-# mmproj is generated as fp16 from Qwen/Qwen3.6-35B-A3B safetensors (mudler repo has none).
-# Note: load-on-startup = true is set in config/models.ini [qwen3.6-35b-a3b] for this variant.
-```
-
-> **Gated models:** set `HF_TOKEN=your_token` in `.env`
-
-### Step 5: Start the services
-
-```bash
+cd router
+cp .env.example .env
+#   edit .env -> set CUDA_BACKEND_URL, MAC_BACKEND_URL, LITELLM_MASTER_KEY
 docker compose up -d
 ```
 
-> **Note:** `docker compose up -d` starts `llama-server` and `mcp-search-server` by default. `cloudflared` requires `--profile cloudflare`, and `llama-convert` requires `--profile convert`.
-
-Check the logs:
-
 ```bash
-docker compose logs -f llama-server   # up to 5 min for large model
-docker compose logs -f cloudflared     # should show "connected"
+curl http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"bonsai-27b","messages":[{"role":"user","content":"hi"}]}'
 ```
 
-### Step 6: Test the API
-
-```bash
-# Local test (no auth needed)
-curl http://localhost:8080/health
-
-# Public API test (requires Cloudflare Access auth)
-curl -H "CF-Access-Client-Id: <id>" \
-     -H "CF-Access-Client-Secret: <secret>" \
-     https://chat.jessfan.com/v1/chat/completions \
-     -H "Content-Type: application/json" \
-     -d '{"model": "qwopus3.6-27b", "messages": [{"role": "user", "content": "Hello"}]}'
-```
-
-### Step 7: Connect an OpenAI-compatible client
-
-```python
-import openai
-
-client = openai.OpenAI(
-    base_url="https://chat.jessfan.com/v1",
-    api_key="none",  # Cloudflare Access handles auth
-    default_headers={
-        "CF-Access-Client-Id": "<your-client-id>",
-        "CF-Access-Client-Secret": "<your-client-secret>",
-    },
-)
-
-response = client.chat.completions.create(
-    model="qwopus3.6-27b",
-    messages=[{"role": "user", "content": "Hello"}],
-)
-```
+Latency-based routing with automatic retry/failover to the healthy backend, plus
+background health checks. Tune in [`router/config.yaml`](router/config.yaml).
 
 ---
 
-## Model management
+## Notes
 
-```bash
-# List all supported models
-docker compose run --rm llama-convert list
-
-# ── 27B (default) ──────────────────────────────────────────────────────────
-
-# MTP-capable GGUF (recommended — from safetensors, includes nextn heads)
-docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS --mtp
-# Output: ./models/qwopus3.6-27b-IQ4_XS-mtp.gguf + ./models/qwopus3.6-27b-mmproj.gguf
-# mmproj is generated as fp16 from safetensors (no separate download).
-
-# ── 35B APEX MTP (currently active, download-only, MTP heads included) ──────
-
-# APEX-MTP-I-Compact (~17.3 GB, recommended — fits 24 GB VRAM)
-docker compose run --rm llama-convert download qwen3.6-35b-a3b-apex --quant APEX-MTP-I-Compact
-# Output: ./models/qwen3.6-35b-a3b-apex-APEX-MTP-I-Compact.gguf + ./models/qwen3.6-35b-a3b-apex-mmproj.gguf
-# mmproj is generated as fp16 from Qwen/Qwen3.6-35B-A3B safetensors (mudler repo has none).
-
-# ── 35B standard (alternative, build from safetensors) ─────────────────────
-
-# MTP-capable GGUF from safetensors
-docker compose run --rm llama-convert convert-st qwen3.6-35b-a3b --quant IQ4_XS --mtp
-# Output: ./models/qwen3.6-35b-a3b-IQ4_XS-mtp.gguf + ./models/qwen3.6-35b-a3b-mmproj.gguf
-
-# Standard prebuilt GGUF (no MTP)
-docker compose run --rm llama-convert download qwen3.6-35b-a3b --quant IQ4_XS
-# Output: ./models/qwen3.6-35b-a3b-IQ4_XS.gguf
-
-# ── Re-quantize an existing GGUF already in ./models ───────────────────────
-docker compose run --rm llama-convert convert /models/qwopus3.6-27b-fp16.gguf --quant Q4_K_M
-```
-
-> **APEX MTP quants** are pre-built by [mudler](https://huggingface.co/mudler/Qwen3.6-35B-A3B-APEX-MTP-GGUF) and use mixed-precision packing with embedded MTP heads. They cannot be produced locally — only downloaded. `APEX-MTP-I-*` variants use imatrix quantization for better quality.
-
-> **TriAttention calibration** runs automatically after every `download` and `convert-st` — no extra flags needed.
-> `calibration-data/wikitext-2-raw-test.txt` (~313k tokens, Wikipedia prose) is mounted into the container by default via `TRIATTENTION_INPUT` in `docker-compose.yml`.
-> Stats are written to `./config/{model}-triattention.bin` and reused on subsequent runs (skipped if already present).
-> To skip calibration entirely, set `TRIATTENTION_INPUT=` (empty) in `.env`.
-
----
-
-## Performance tuning — config sweep
-
-`scripts/spec_sweep/` is a reproducible, resumable tool that tunes the
-`qwopus3.6-27b` decode path for **throughput (t/s)** at mid (~25k) and long
-(~160k) contexts, across text and code, and decides between maximizing
-single-request context vs running two parallel slots.
-
-```bash
-cd custom-llama                         # run from the repo root
-python -m scripts.spec_sweep run        # full staged sweep (resumable)
-python -m scripts.spec_sweep status     # progress + decisions so far
-python -m scripts.spec_sweep payloads   # (re)build prompt payloads
-python -m scripts.spec_sweep reset      # clear state so the next run starts fresh
-python -m scripts.spec_sweep restore    # restore config/models.ini from backup
-```
-
-**Resuming after a crash or interruption:** just re-run `run`. Every finished
-config and stage decision is persisted to
-`benchmark/results/spec-sweep/state.json` (results stream to `results.csv`), so
-a resumed run skips completed work (`[skip] … already done`) and picks up where
-it left off. A config whose server fails to load is recorded as `tg=0` (loses
-ranking) and the sweep continues rather than aborting.
-
-**Resetting the resume state:** `python -m scripts.spec_sweep reset` deletes
-`state.json` and `results.csv`, so the next `run` starts the whole sweep over.
-It leaves `config/models.ini` untouched — use `restore` to revert the live
-config to the pre-sweep backup taken at the start of the first run.
-
-It edits the spec-decode / context params in `config/models.ini` in place
-(section-aware), force-recreates `llama-server`, and measures steady-state
-decode throughput. Staged-greedy stages: `spec-type` → `spec-draft-p-min` →
-`ngram-mod` params → `spec-draft-backend-sampling` → 160k validation →
-context/parallel (`single196` / `maxctx256` @ 262144 / `parallel2` @ 2×~102K).
-Results stream to `benchmark/results/spec-sweep/` (gitignored) and the winning
-config is left live in `config/models.ini`.
-
-See [docs/spec-decode-sweep.md](docs/spec-decode-sweep.md) for the full
-methodology, tracked metrics, resume/ETA behaviour, and reproducibility notes.
-
----
-
-## Docker Compose services
-
-| Service             | Purpose                                             |
-| ------------------- | --------------------------------------------------- |
-| `llama-server`      | llama.cpp inference server (port 8080)              |
-| `cloudflared`       | Cloudflare Tunnel — exposes llama-server and mcp-search-server publicly   |
-| `llama-convert`     | Model conversion tool (download, convert, quantize) |
-| `mcp-search-server` | MCP tool server: search, browser, documents, code (port 3100) |
-
----
-
-## Troubleshooting
-
-- **Model not loading:** Check `docker compose logs llama-server`. Common causes: model file missing (`LLAMA_MODEL` path mismatch), insufficient VRAM.
-- **MTP not working:** Confirm the GGUF was built with `--mtp`. Prebuilt GGUFs strip MTP heads. Verify `LLAMA_SPEC_TYPE=mtp` and `LLAMA_MODEL` point to the `-mtp.gguf` file.
-- **Slow generation (11 vs 20 tok/s):** Context may be filling up within a long conversation. MTP requires a `-mtp.gguf` file.
-- **Cloudflare Tunnel not connecting:** Verify `CF_TUNNEL_TOKEN` is correct. Check `docker compose logs cloudflared`.
-- **Cloudflare Access authentication failing:** Ensure the Access Application is configured for the correct domain and authentication method.
-- **GPU not detected:** Verify NVIDIA Container Toolkit is installed. Check `docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi`.
-- **WSL2 BSOD during download/quantize:** Set `CONVERT_DOWNLOAD_RATE=300M` and `CONVERT_THREADS=4` in `.env`.
+- The CUDA image builds `llama-server` from the TurboQuant+ fork
+  ([`JEF1056/llama-cpp-turboquant`](https://github.com/JEF1056/llama-cpp-turboquant),
+  branch `bonsai`), which already has the `Q1_0` 1-bit kernels, the `qwen35`
+  architecture and the TurboQuant KV cache. Point `LLAMA_REPO` / `LLAMA_REF` at
+  a different fork/branch to build something else.
+- **DSpark speculative decoding is not in this image yet** — it is still being
+  ported into the fork. When it lands it will run alongside the prompt cache
+  (no trade-off), unlike the vendor demo where the two are mutually exclusive.
+- Not included: TLS/public exposure, the Ternary quality variant, vision/Open
+  WebUI demos (all available upstream if you want them later).

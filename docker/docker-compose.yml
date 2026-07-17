@@ -1,0 +1,42 @@
+# RTX 3090 CUDA server for Bonsai-27B (1-bit).
+#
+#   cp .env.example .env   # then edit BONSAI_TOKEN
+#   docker compose up -d --build
+#
+# Requires the NVIDIA Container Toolkit on the host.
+services:
+  bonsai-cuda:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/JEF1056/llama-cpp-turboquant.git}
+        LLAMA_REF: ${LLAMA_REF:-bonsai}
+        CUDA_ARCH: ${CUDA_ARCH:-86}
+    image: custom-llama/bonsai-cuda:latest
+    container_name: bonsai-cuda
+    env_file: .env
+    ports:
+      - "${PORT:-8080}:8080"
+    volumes:
+      # Persists the downloaded GGUF weights and prompt-cache slots so restarts
+      # are instant.
+      - bonsai-data:/workspace
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      # Generous grace period: first boot downloads several GB.
+      start_period: 1800s
+    restart: unless-stopped
+
+volumes:
+  bonsai-data:
