@@ -27,7 +27,12 @@ CTX=${CTX:-262144}
 # KV-cache data type. q4_0 is the safe ~4-bit default that fits 262K on 24 GB.
 # The fork also offers TurboQuant KV: turbo4 / turbo3 / turbo2 (higher quality
 # at similar or smaller size) - set KV_TYPE=turbo4 to use it.
+# KV_TYPE sets both sides at once; KV_TYPE_K / KV_TYPE_V override each side
+# independently (they default to KV_TYPE) for asymmetric K/V, e.g. turbo4 keys
+# + turbo2 values.
 KV_TYPE=${KV_TYPE:-q4_0}
+KV_TYPE_K=${KV_TYPE_K:-$KV_TYPE}
+KV_TYPE_V=${KV_TYPE_V:-$KV_TYPE}
 # Prompt caching. Bonsai is a HYBRID (GDN + attention) arch whose recurrent
 # state can't be position-shifted, so llama.cpp auto-disables --cache-reuse (KV
 # shifting) on it. The mechanism that DOES work here is the server's context
@@ -35,6 +40,12 @@ KV_TYPE=${KV_TYPE:-q4_0}
 # default, and the same machinery speculative decoding reuses. Size its RAM
 # budget in MiB (-1 = no limit, 0 = disable).
 CACHE_RAM_MIB=${CACHE_RAM_MIB:-8192}
+
+# Number of concurrent request slots. The server splits the KV context evenly
+# across slots, so N_PARALLEL slots cap a single sequence to CTX / N_PARALLEL
+# tokens. Keep this at 1 so one request can use the FULL CTX (needed for long
+# 100K+ context); raise it only for concurrent serving of shorter sequences.
+N_PARALLEL=${N_PARALLEL:-1}
 
 # Vision (multimodal). Bonsai ships a ~0.46B vision tower as a separate mmproj
 # GGUF; the fork loads it through the existing Qwen3-VL projector, so image
@@ -70,6 +81,11 @@ MIN_P=${MIN_P:-0.0}
 PRESENCE_PENALTY=${PRESENCE_PENALTY:-0.0}
 REPEAT_PENALTY=${REPEAT_PENALTY:-1.0}
 
+# Preserve thinking. When on (default), prior assistant turns keep their <think>
+# reasoning blocks when the conversation is re-rendered, instead of the template
+# stripping them from every turn before the last user query. Set 0 to strip.
+PRESERVE_THINKING=${PRESERVE_THINKING:-1}
+
 # --- Weights -----------------------------------------------------------------
 # The prism-ml Bonsai-27B GGUF repos are public, so no token is needed for the
 # default weights; a read token is only required for gated/private repos.
@@ -98,9 +114,10 @@ SERVER_ARGS=(
     -ngl "$NGL"
     -fa on
     --jinja
+    --parallel "$N_PARALLEL"
     --cache-ram "$CACHE_RAM_MIB"
-    --cache-type-k "$KV_TYPE"
-    --cache-type-v "$KV_TYPE"
+    --cache-type-k "$KV_TYPE_K"
+    --cache-type-v "$KV_TYPE_V"
     --temp "$TEMP"
     --top-p "$TOP_P"
     --top-k "$TOP_K"
@@ -146,6 +163,14 @@ fi
 if [[ -n "${REASONING_BUDGET:-}" ]]; then
     SERVER_ARGS+=(--reasoning-budget "$REASONING_BUDGET")
 fi
+# Preserve prior-turn <think> blocks when re-rendering the chat (template kwarg).
+case "${PRESERVE_THINKING,,}" in
+    0|false|no|off|"") PRESERVE_THINKING_ON=0 ;;
+    *)                 PRESERVE_THINKING_ON=1 ;;
+esac
+if [[ "$PRESERVE_THINKING_ON" == "1" ]]; then
+    SERVER_ARGS+=(--chat-template-kwargs '{"preserve_thinking": true}')
+fi
 # Optional prompt-cache slot directory (persist reusable KV slots to disk).
 if [[ -n "${SLOT_SAVE_PATH:-}" ]]; then
     mkdir -p "$SLOT_SAVE_PATH"
@@ -157,5 +182,5 @@ if [[ -n "${EXTRA_ARGS:-}" ]]; then
     SERVER_ARGS+=(${EXTRA_ARGS})
 fi
 
-log "Starting llama-server on :$PORT | model=$HF_FILE ctx=$CTX kv=$KV_TYPE cache-ram=${CACHE_RAM_MIB}MiB vision=$([[ "$VISION_ON" == "1" ]] && echo on || echo off) dspark=$([[ "$DSPARK_ON" == "1" ]] && echo on || echo off) tool-calling=on"
+log "Starting llama-server on :$PORT | model=$HF_FILE ctx=$CTX kv=${KV_TYPE_K}/${KV_TYPE_V} slots=${N_PARALLEL} preserve-thinking=$([[ "$PRESERVE_THINKING_ON" == "1" ]] && echo on || echo off) cache-ram=${CACHE_RAM_MIB}MiB vision=$([[ "$VISION_ON" == "1" ]] && echo on || echo off) dspark=$([[ "$DSPARK_ON" == "1" ]] && echo on || echo off) tool-calling=on"
 exec llama-server "${SERVER_ARGS[@]}"
