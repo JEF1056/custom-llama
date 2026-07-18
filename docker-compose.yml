@@ -1,19 +1,31 @@
 # PROD compose — builds the CUDA server from git and starts the LiteLLM router.
 #
 # Prerequisites:
-#   cp docker/.env.example docker/.env     # set BONSAI_TOKEN, tune CTX etc.
+#   cp docker/.env.example docker/.env     # set QWEN_TOKEN, tune CTX etc.
 #   cp router/.env.example router/.env     # set LITELLM_MASTER_KEY, MAC_BACKEND_URL
+#
+# Weights live in the qwen36-models NAMED VOLUME, not in the image, so they
+# survive `docker compose up -d --force-recreate` / image rebuilds (only
+# `docker compose down -v` or `docker volume rm` clears them). Two opt-in
+# one-shot jobs populate that volume, gated behind Compose profiles so a plain
+# `docker compose up` never triggers a multi-GB download on its own:
+#   docker compose --profile bringup run --rm model-bringup   # fast: one public
+#                                                               # pre-quantized GGUF
+#   docker compose --profile prep    run --rm model-prep      # slow: full Phase 2
+#                                                               # BF16->imatrix->quantize
+# Then set MODEL_SOURCE/GGUF_FILE/MMPROJ_FILE in docker/.env to match (see
+# docker/.env.example) and start/recreate the server.
 #
 # First run:
 #   docker compose up -d --build
 #
 # The CUDA server and router share the bonsai-net bridge network. The router
-# reaches the CUDA server at http://bonsai-cuda:8080/v1 without exposing any
+# reaches the CUDA server at http://server:8080/v1 without exposing any
 # additional host ports. The router waits for the CUDA server to be healthy
 # before starting (depends_on + condition: service_healthy).
 #
 # Subsequent restarts (no code change): docker compose up -d
-# Rebuild image (after fork/Dockerfile changes): docker compose up -d --build
+# Rebuild image (after Dockerfile changes): docker compose up -d --build
 #
 # Requires the NVIDIA Container Toolkit on the host.
 
@@ -24,10 +36,10 @@ services:
       dockerfile: Dockerfile
       args:
         BUILD_MODE: git
-        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/JEF1056/llama-cpp-turboquant.git}
-        LLAMA_REF: ${LLAMA_REF:-dspark-integration}
+        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/ikawrakow/ik_llama.cpp.git}
+        LLAMA_REF: ${LLAMA_REF:-main}
         CUDA_ARCH: ${CUDA_ARCH:-86}
-    image: custom-llama/bonsai-cuda:latest
+    image: custom-llama/qwen36-cuda:latest
     container_name: server
     env_file: ./docker/.env
     environment:
@@ -35,8 +47,8 @@ services:
     ports:
       - "${LLAMA_PORT:-8080}:8080"
     volumes:
-      - bonsai-models:/models
-      - bonsai-data:/workspace
+      - qwen36-models:/models
+      - qwen36-data:/workspace
       - ./docker/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
     networks:
       - bonsai-net
@@ -55,6 +67,69 @@ services:
       # Generous: first boot downloads several GB of weights.
       start_period: 1800s
     restart: unless-stopped
+
+  # One-shot job: fetch a single public pre-quantized GGUF + mmproj for fast
+  # bring-up/smoke-testing (docs/iqllama-migration-plan.md Phase 6), before the
+  # in-house recipe (model-prep, below) is ready. Writes into the same
+  # qwen36-models volume the server reads from, under plain filenames
+  # (qwen36-bringup.gguf by default) - point docker/.env's GGUF_FILE at it.
+  # Not started by `docker compose up` (profile-gated); run explicitly:
+  #   docker compose --profile bringup run --rm model-bringup
+  model-bringup:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile
+      args:
+        BUILD_MODE: git
+        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/ikawrakow/ik_llama.cpp.git}
+        LLAMA_REF: ${LLAMA_REF:-main}
+        CUDA_ARCH: ${CUDA_ARCH:-86}
+    image: custom-llama/qwen36-cuda:latest
+    container_name: qwen36-model-bringup
+    profiles: ["bringup"]
+    entrypoint: ["/bin/bash", "/scripts/download-bringup.sh"]
+    env_file: ./docker/.env
+    volumes:
+      - qwen36-models:/models
+      - ./scripts:/scripts:ro
+    networks:
+      - bonsai-net
+    restart: "no"
+
+  # One-shot job: the full Phase 2 pipeline (download Unsloth BF16 shards ->
+  # compute our own diverse imatrix -> llama-quantize with the
+  # "262K-Balanced" recipe). Slow (large download + imatrix pass + quantize);
+  # needs GPU for -ngl on the imatrix step. Writes into qwen36-models, so it
+  # survives server --force-recreate/rebuilds. Not started by `docker compose
+  # up` (profile-gated); run explicitly:
+  #   docker compose --profile prep run --rm model-prep
+  model-prep:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile
+      args:
+        BUILD_MODE: git
+        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/ikawrakow/ik_llama.cpp.git}
+        LLAMA_REF: ${LLAMA_REF:-main}
+        CUDA_ARCH: ${CUDA_ARCH:-86}
+    image: custom-llama/qwen36-cuda:latest
+    container_name: qwen36-model-prep
+    profiles: ["prep"]
+    entrypoint: ["/bin/bash", "/scripts/prepare-weights.sh"]
+    env_file: ./docker/.env
+    volumes:
+      - qwen36-models:/models
+      - ./scripts:/scripts:ro
+    networks:
+      - bonsai-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: "no"
 
   router:
     image: ghcr.io/berriai/litellm:main-stable
@@ -87,5 +162,5 @@ networks:
     driver: bridge
 
 volumes:
-  bonsai-data:
-  bonsai-models:
+  qwen36-data:
+  qwen36-models:

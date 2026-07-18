@@ -3,38 +3,50 @@
 # Default (BUILD_MODE=git): clones LLAMA_REPO at LLAMA_REF during docker build.
 # Local source (BUILD_MODE=local): copies from ./llama-local/ in this directory.
 #   To use local source:
-#     rsync -a --exclude='.git' /path/to/llama-cpp-turboquant/ docker/llama-local/
+#     rsync -a --exclude='.git' /path/to/ik_llama.cpp/ docker/llama-local/
 #     BUILD_MODE=local docker compose up -d --build
 #
-#   cp .env.example .env   # set BONSAI_TOKEN, tune CTX / KV_TYPE etc.
+#   cp .env.example .env   # set QWEN_TOKEN, tune CTX / KV_TYPE etc.
 #   docker compose up -d --build
 #
 # .env and entrypoint.sh changes take effect on the next `docker compose up -d`
 # with no rebuild. Only Dockerfile or build-arg changes require `--build`.
 #
+# /models must hold the offline-produced GGUF (see docs/
+# iqllama-migration-plan.md Phase 2 / scripts/quantize.sh) unless MODEL_SOURCE=hf.
+#
+# Weights live in the qwen36-models-dev NAMED VOLUME (not the image), so they
+# survive `--force-recreate`/rebuilds; only `docker volume rm
+# docker_qwen36-models-dev` (or `down -v`) clears them. Two opt-in one-shot
+# jobs populate it, gated behind Compose profiles so plain `docker compose up`
+# never triggers a multi-GB download:
+#   docker compose --profile bringup run --rm model-bringup-dev
+#   docker compose --profile prep    run --rm model-prep-dev
+#
 # Requires the NVIDIA Container Toolkit on the host.
 services:
-  bonsai-cuda-dev:
+  qwen36-cuda-dev:
     build:
       context: .
       dockerfile: Dockerfile
       args:
         BUILD_MODE: ${BUILD_MODE:-git}
-        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/JEF1056/llama-cpp-turboquant.git}
-        LLAMA_REF: ${LLAMA_REF:-dspark-integration}
+        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/ikawrakow/ik_llama.cpp.git}
+        LLAMA_REF: ${LLAMA_REF:-main}
         CUDA_ARCH: ${CUDA_ARCH:-86}
-    image: custom-llama/bonsai-cuda:dev
-    container_name: bonsai-cuda-dev
+    image: custom-llama/qwen36-cuda:dev
+    container_name: qwen36-cuda-dev
     env_file: .env
     environment:
       LLAMA_CACHE: /models
     ports:
       - "${PORT:-8080}:8080"
     volumes:
-      # Model weights cache: downloaded once, reused across restarts.
-      # Cleared only by `docker volume rm docker_bonsai-models-dev`.
-      - bonsai-models-dev:/models
-      - bonsai-data-dev:/workspace
+      # Model weights: our offline-quantized GGUF (+ mmproj) lives here, plus
+      # the HF download cache when MODEL_SOURCE=hf. Persists across restarts;
+      # cleared only by `docker volume rm docker_qwen36-models-dev`.
+      - qwen36-models-dev:/models
+      - qwen36-data-dev:/workspace
       # Live-mount the entrypoint so edits take effect without a rebuild.
       - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
     deploy:
@@ -52,6 +64,58 @@ services:
       start_period: 1800s
     restart: unless-stopped
 
+  # One-shot: fetch a single public pre-quantized GGUF + mmproj for fast
+  # bring-up (see the prod docker-compose.yml's model-bringup for details).
+  #   docker compose --profile bringup run --rm model-bringup-dev
+  model-bringup-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_MODE: ${BUILD_MODE:-git}
+        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/ikawrakow/ik_llama.cpp.git}
+        LLAMA_REF: ${LLAMA_REF:-main}
+        CUDA_ARCH: ${CUDA_ARCH:-86}
+    image: custom-llama/qwen36-cuda:dev
+    container_name: qwen36-model-bringup-dev
+    profiles: ["bringup"]
+    entrypoint: ["/bin/bash", "/scripts/download-bringup.sh"]
+    env_file: .env
+    volumes:
+      - qwen36-models-dev:/models
+      - ../scripts:/scripts:ro
+    restart: "no"
+
+  # One-shot: full Phase 2 pipeline (BF16 download -> imatrix -> quantize).
+  # Needs GPU for the imatrix pass (see the prod docker-compose.yml's
+  # model-prep for details).
+  #   docker compose --profile prep run --rm model-prep-dev
+  model-prep-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_MODE: ${BUILD_MODE:-git}
+        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/ikawrakow/ik_llama.cpp.git}
+        LLAMA_REF: ${LLAMA_REF:-main}
+        CUDA_ARCH: ${CUDA_ARCH:-86}
+    image: custom-llama/qwen36-cuda:dev
+    container_name: qwen36-model-prep-dev
+    profiles: ["prep"]
+    entrypoint: ["/bin/bash", "/scripts/prepare-weights.sh"]
+    env_file: .env
+    volumes:
+      - qwen36-models-dev:/models
+      - ../scripts:/scripts:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: "no"
+
 volumes:
-  bonsai-data-dev:
-  bonsai-models-dev:
+  qwen36-data-dev:
+  qwen36-models-dev:

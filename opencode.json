@@ -3,13 +3,13 @@
   "provider": {
     "bonsai-local": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "Bonsai-27B (local llama-server)",
+      "name": "Qwen3.6-35B-A3B (local llama-server)",
       "options": {
         "baseURL": "http://localhost:8080/v1"
       },
       "models": {
-        "prism-ml/Bonsai-27B-gguf": {
-          "name": "Bonsai-27B Q1_0",
+        "qwen36-262k-balanced": {
+          "name": "Qwen3.6-35B-A3B 262K-Balanced (custom quant)",
           "tools": true,
           "attachment": true,
           "limit": {
@@ -20,5 +20,5 @@
       }
     }
   },
-  "model": "bonsai-local/prism-ml/Bonsai-27B-gguf"
+  "model": "bonsai-local/qwen36-262k-balanced"
 }

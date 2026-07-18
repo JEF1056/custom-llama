@@ -1,44 +1,44 @@
 #!/usr/bin/env bash
 #
-# Container entrypoint for the Bonsai-27B (1-bit) CUDA server.
+# Container entrypoint for the Qwen3.6-35B-A3B (ik_llama.cpp) CUDA server.
 #
-# The image already contains llama-server built from the TurboQuant+ fork, so
-# this just pulls the 1-bit GGUF weights from Hugging Face (cached in the mounted
-# volume) and launches the server with the full 262K context, tool calling,
-# prompt/prefix caching, DSpark speculative decoding and (optionally) the Bonsai
-# vision tower.
-#
-# DSpark and prompt/prefix caching run together: both ride the same RS-rollback +
-# checkpoint machinery, so there is no speculative-vs-cache trade-off here. The
-# DSpark drafter is a separate GGUF loaded as the draft model (ENABLE_DSPARK=1 by
-# default; set ENABLE_DSPARK=0 for a plain non-speculative server).
+# The image contains stock ik_llama.cpp's llama-server. This launches it with:
+#   - the in-house "262K-Balanced" quant GGUF (or, for bring-up before that
+#     recipe is produced, Unsloth's pre-converted GGUF via -hf/-hff)
+#   - 4-bit Hadamard-rotated KV cache on the attention layers (-khad/-vhad)
+#   - an optional n-gram lookup drafter chained before MTP as a fast/free
+#     first speculative stage (--spec-type ngram-mod:... --spec-type mtp:...),
+#     OFF by default - it breaks speculative decoding entirely when the
+#     vision tower is also loaded, see ENABLE_NGRAM below
+#   - MTP self-speculative decoding (--spec-type mtp:...)
+#   - the Qwen3-VL-family vision tower (--mmproj)
+#   - prompt/context caching (--cache-ram) and the full 262144 native context
+# See docs/iqllama-migration-plan.md for the full design and flag rationale.
 set -euo pipefail
 
-log() { printf '\033[1;32m[bonsai-cuda]\033[0m %s\n' "$*"; }
-err() { printf '\033[1;31m[bonsai-cuda]\033[0m %s\n' "$*" >&2; }
+log() { printf '\033[1;32m[qwen36-cuda]\033[0m %s\n' "$*"; }
+err() { printf '\033[1;31m[qwen36-cuda]\033[0m %s\n' "$*" >&2; }
 
 PORT=${PORT:-8080}
-# Full GPU offload; the 3090 holds the whole 1-bit model.
+# Full GPU offload; the 3090 holds the whole quantized model at the sizes in
+# docs/iqllama-migration-plan.md section 4c/4d.
 NGL=${NGL:-999}
-# Context window in tokens. Default = the model's full 262K. The quantized KV
-# cache keeps even the full window inside the 3090's 24 GB. Set CTX=0 for
-# auto-fit.
+# Context window in tokens. Default = the model's full native 262144. Set
+# CTX=0 to let ik_llama auto-fit context to available VRAM instead.
 CTX=${CTX:-262144}
-# KV-cache data type. q4_0 is the safe ~4-bit default that fits 262K on 24 GB.
-# The fork also offers TurboQuant KV: turbo4 / turbo3 / turbo2 (higher quality
-# at similar or smaller size) - set KV_TYPE=turbo4 to use it.
-# KV_TYPE sets both sides at once; KV_TYPE_K / KV_TYPE_V override each side
-# independently (they default to KV_TYPE) for asymmetric K/V, e.g. turbo4 keys
-# + turbo2 values.
+# KV-cache data type for the 10 full-attention layers (the 30 DeltaNet layers
+# use a fixed-size recurrent state, independent of KV type/context length).
+# q4_0 is the recipe default (~1.5 GB at 262K, see migration plan section 4b).
 KV_TYPE=${KV_TYPE:-q4_0}
 KV_TYPE_K=${KV_TYPE_K:-$KV_TYPE}
 KV_TYPE_V=${KV_TYPE_V:-$KV_TYPE}
-# Prompt caching. Bonsai is a HYBRID (GDN + attention) arch whose recurrent
-# state can't be position-shifted, so llama.cpp auto-disables --cache-reuse (KV
-# shifting) on it. The mechanism that DOES work here is the server's context
-# checkpoints + prompt-state cache (full sequence-state save/restore) - on by
-# default, and the same machinery speculative decoding reuses. Size its RAM
-# budget in MiB (-1 = no limit, 0 = disable).
+# Hadamard-rotate the K/V cache before quantizing (reduces quant error; see
+# migration plan section 0 item 1 / R2). Set 0 to disable.
+KV_HADAMARD=${KV_HADAMARD:-1}
+
+# Prompt caching: the server's context-checkpoint + prompt-state cache (full
+# sequence-state save/restore). Size its RAM budget in MiB (-1 = no limit,
+# 0 = disable).
 CACHE_RAM_MIB=${CACHE_RAM_MIB:-8192}
 
 # Number of concurrent request slots. The server splits the KV context evenly
@@ -47,33 +47,77 @@ CACHE_RAM_MIB=${CACHE_RAM_MIB:-8192}
 # 100K+ context); raise it only for concurrent serving of shorter sequences.
 N_PARALLEL=${N_PARALLEL:-1}
 
-# Vision (multimodal). Bonsai ships a ~0.46B vision tower as a separate mmproj
-# GGUF; the fork loads it through the existing Qwen3-VL projector, so image
-# input works with no code changes. Enabled by default; set ENABLE_VISION=0 for
-# a leaner text-only server that skips the ~629 MB mmproj download. MMPROJ_FILE
-# selects the pack - the Q8_0 container holds the HQQ 4-bit tower (~629 MB);
-# Bonsai-27B-mmproj-BF16.gguf (~931 MB) is the higher-precision reference.
-ENABLE_VISION=${ENABLE_VISION:-1}
-MMPROJ_FILE=${MMPROJ_FILE:-Bonsai-27B-mmproj-Q8_0.gguf}
+# Physical batch size (-ub): the max number of tokens processed together in
+# one GPU pass during prompt processing. Larger values raise prompt-processing
+# throughput (more parallel work per kernel launch) at the cost of more VRAM
+# for compute/activation buffers; generation (token-by-token decode) speed is
+# essentially unaffected by this value. Empirically swept on a single RTX 3090
+# with the ~13GB IQ3_XXS bring-up quant (see docs/qwen36-bench-results.md):
+#   ub=256:  ~15.8GB used, ~1818 tok/s prompt processing
+#   ub=512:  ~16.1GB used, ~2580 tok/s (ik_llama.cpp default)
+#   ub=1024: ~16.6GB used, ~3192 tok/s  <- chosen default: +24% pp throughput
+#            over the stock default for only +3% VRAM, leaving ~8GB headroom
+#            for a larger production quant.
+#   ub=2048: ~17.7GB used, ~3567 tok/s (diminishing returns per extra VRAM)
+# Raise toward 2048 if serving a smaller quant with VRAM to spare; lower
+# toward 256 if a larger quant leaves little headroom.
+UBATCH_SIZE=${UBATCH_SIZE:-1024}
 
-# DSpark speculative decoding. The Bonsai DSpark drafter is a separate ~1.79 GB
-# GGUF (Q4_1) served as the draft model via --spec-type draft-dspark. It shares
-# the RS-rollback + checkpoint path with prompt caching, so both run together.
-# Enabled by default; set ENABLE_DSPARK=0 for a plain non-speculative server.
-ENABLE_DSPARK=${ENABLE_DSPARK:-1}
-DSPARK_DRAFT_FILE=${DSPARK_DRAFT_FILE:-Bonsai-27B-dspark-Q4_1.gguf}
-# Sizes the server's decode output reserve as n_parallel * (1 + this). Must be
-# >= the drafter checkpoint's block_size (4 for Bonsai-27B) for the block draft.
-# NOTE: on this fork the dspark capture pass currently flags ~every prompt token
-# as an output row, so the reserve really needs to reach n_batch; but sizing it
-# that high (via a large value here) makes context creation OOM on a 24 GB GPU.
-# There is no config value that both loads and survives long prompts -- this
-# needs a fork-side fix (capture should not force n_outputs_max == n_batch).
-DSPARK_N_MAX=${DSPARK_N_MAX:-8}
+# Vision (multimodal). Qwen3.6-35B-A3B ships a Qwen3-VL-lineage vision tower as
+# a separate mmproj GGUF (ik_llama's examples/mtmd/clip.cpp has a complete
+# PROJECTOR_TYPE_QWEN3VL implementation). Enabled by default; set
+# ENABLE_VISION=0 for a leaner text-only server that skips the mmproj entirely.
+ENABLE_VISION=${ENABLE_VISION:-1}
+MMPROJ_FILE=${MMPROJ_FILE:-mmproj-BF16.gguf}
+
+# MTP self-speculative decoding (DeepSeek-V3-style single trailing MTP layer,
+# baked into the same GGUF - no separate draft model file needed). Enabled by
+# default; set ENABLE_MTP=0 to disable. MTP_N_MAX is the max number of
+# speculative tokens proposed per round; MTP_P_MIN is the minimum acceptance
+# probability threshold (0.0 = accept greedily-consistent tokens only).
+ENABLE_MTP=${ENABLE_MTP:-1}
+MTP_N_MAX=${MTP_N_MAX:-4}
+MTP_P_MIN=${MTP_P_MIN:-0.0}
+# Optionally requantize the MTP output head independently of the main output
+# tensor (e.g. a higher-precision head raises draft acceptance). Empty = use
+# whatever precision the GGUF already baked in for the MTP head.
+MTP_REQUANTIZE_OUTPUT_TYPE=${MTP_REQUANTIZE_OUTPUT_TYPE:-}
+
+# Optional n-gram lookup drafter, chained as a first (fast/free) speculative
+# stage ahead of MTP (ik_llama.cpp's --spec-type supports a two-stage chain,
+# e.g. `--spec-type ngram-mod:... --spec-type mtp:...`). It costs no extra
+# model inference - just string matching against the existing context/cache -
+# so it's a pure win whenever the response contains repeated or templated
+# spans (long-document summarization, code, boilerplate) that a plain n-gram
+# match can propose for free, leaving MTP to handle the harder/novel spans.
+#
+# **ROOT-CAUSED, not just observed (this build, examples/server/server-
+# context.cpp)**: when `mmproj` is loaded, that file explicitly whitelists
+# ONLY two speculative configs: zero stages, or exactly one stage of type
+# MTP (`spec_stages.empty() || (spec_stages.size()==1 &&
+# spec_stages.front().type==COMMON_SPECULATIVE_TYPE_MTP)`). Anything else -
+# including our ngram-mod+mtp 2-stage chain - fails that check, and the
+# `else` branch doesn't just skip the extra stage: it clears ALL stages
+# (`stages.clear(); has_mtp=false;`), which is why MTP itself stopped
+# working too, not just ngram. This is a deliberate upstream restriction
+# (likely because the mtmd/vision-embeddings codepath has only been wired
+# up against single-stage MTP, which already needs special embeddings
+# handling - see `llama_set_embeddings` right below this check in that
+# file), not something fixable from this entrypoint/Dockerfile. Default is
+# therefore OFF (ENABLE_NGRAM=0) so vision+MTP keeps working out of the
+# box. Only set ENABLE_NGRAM=1 on a text-only deployment (ENABLE_VISION=0) -
+# and note
+# ENABLE_VISION=0 currently hits ITS OWN pre-existing bug in this build
+# (`error: unknown argument: --no-mmproj`), so verify that path separately
+# before relying on the ngram+MTP combo.
+ENABLE_NGRAM=${ENABLE_NGRAM:-0}
+NGRAM_TYPE=${NGRAM_TYPE:-ngram-mod}
+NGRAM_N_MAX=${NGRAM_N_MAX:-64}
+NGRAM_N_MIN=${NGRAM_N_MIN:-2}
+NGRAM_SIZE_N=${NGRAM_SIZE_N:-8}
 
 # Sampling defaults. These set the server-side default generation params;
-# clients may still override them per request. Lower temperature raises DSpark
-# draft acceptance (the drafter proposes near-greedily), so keep it modest.
+# clients may still override them per request.
 TEMP=${TEMP:-0.6}
 TOP_P=${TOP_P:-0.95}
 TOP_K=${TOP_K:-20}
@@ -87,34 +131,33 @@ REPEAT_PENALTY=${REPEAT_PENALTY:-1.0}
 PRESERVE_THINKING=${PRESERVE_THINKING:-1}
 
 # --- Weights -----------------------------------------------------------------
-# The prism-ml Bonsai-27B GGUF repos are public, so no token is needed for the
-# default weights; a read token is only required for gated/private repos.
-# BONSAI_TOKEN wins, else HF_TOKEN.
-HF_REPO=${HF_REPO:-prism-ml/Bonsai-27B-gguf}
-HF_FILE=${HF_FILE:-Bonsai-27B-Q1_0.gguf}
-export HF_TOKEN=${BONSAI_TOKEN:-${HF_TOKEN:-}}
+# Two ways to source the model, controlled by MODEL_SOURCE:
+#   local (default) - our in-house "262K-Balanced" GGUF (docs/
+#                      iqllama-migration-plan.md Phase 2/4), produced offline by
+#                      scripts/quantize.sh and mounted read-only under /models.
+#   hf              - pull a public GGUF straight from Hugging Face via -hf/-hff
+#                      (e.g. Unsloth's pre-converted quant) - useful for bring-up
+#                      / smoke-testing the engine before our recipe is ready.
+MODEL_SOURCE=${MODEL_SOURCE:-local}
+GGUF_FILE=${GGUF_FILE:-qwen36-262k-balanced.gguf}
+HF_REPO=${HF_REPO:-unsloth/Qwen3.6-35B-A3B-MTP-GGUF}
+HF_FILE=${HF_FILE:-}
+export HF_TOKEN=${QWEN_TOKEN:-${HF_TOKEN:-}}
 # Persist downloaded weights so restarts never re-download. Under docker compose
 # this is set to the dedicated /models cache volume; the /workspace fallback
 # keeps standalone `docker run` invocations persistent too.
 export LLAMA_CACHE=${LLAMA_CACHE:-/workspace/models}
 mkdir -p "$LLAMA_CACHE"
 
-if [[ -z "${HF_TOKEN:-}" ]]; then
-    log "No BONSAI_TOKEN/HF_TOKEN set - downloading anonymously (the default"
-    log "prism-ml Bonsai-27B GGUF repos are public). Set a token only if you"
-    log "point HF_REPO at a gated or private repo."
-fi
-
 # --- Assemble llama-server flags ---------------------------------------------
 SERVER_ARGS=(
     --host 0.0.0.0
     --port "$PORT"
-    -hf "${HF_REPO}"
-    -hff "${HF_FILE}"
     -ngl "$NGL"
     -fa on
     --jinja
     --parallel "$N_PARALLEL"
+    -ub "$UBATCH_SIZE"
     --cache-ram "$CACHE_RAM_MIB"
     --cache-type-k "$KV_TYPE_K"
     --cache-type-v "$KV_TYPE_V"
@@ -125,39 +168,81 @@ SERVER_ARGS=(
     --presence-penalty "$PRESENCE_PENALTY"
     --repeat-penalty "$REPEAT_PENALTY"
 )
+case "${MODEL_SOURCE,,}" in
+    hf)
+        if [[ -z "$HF_FILE" ]]; then
+            err "MODEL_SOURCE=hf requires HF_FILE (exact GGUF filename in $HF_REPO)."
+            exit 1
+        fi
+        log "Model source: Hugging Face $HF_REPO / $HF_FILE"
+        SERVER_ARGS+=(-hf "$HF_REPO" -hff "$HF_FILE")
+        ;;
+    local|*)
+        MODEL_PATH="/models/${GGUF_FILE}"
+        if [[ ! -f "$MODEL_PATH" ]]; then
+            err "MODEL_SOURCE=local but $MODEL_PATH is missing."
+            err "Run scripts/quantize.sh (see docs/iqllama-migration-plan.md Phase 2)"
+            err "to produce it, or set MODEL_SOURCE=hf for a public bring-up quant."
+            exit 1
+        fi
+        log "Model source: local $MODEL_PATH"
+        SERVER_ARGS+=(-m "$MODEL_PATH")
+        ;;
+esac
 if [[ -n "${CTX:-}" && "${CTX}" != "0" ]]; then
     SERVER_ARGS+=(-c "$CTX")
 fi
-# Vision: pin the mmproj explicitly. The URL download reuses the HF token, and
-# giving an explicit file avoids the ambiguous auto-pick between the two mmproj
-# packs; --no-mmproj keeps text-only servers from fetching it at all.
+# Hadamard-rotated KV: generic flags, gated purely on head_dim (Qwen3.6's
+# attention head_dim=256 is power-of-2 compatible, see migration plan R2).
+case "${KV_HADAMARD,,}" in
+    0|false|no|off|"") HADAMARD_ON=0 ;;
+    *)                  HADAMARD_ON=1 ;;
+esac
+if [[ "$HADAMARD_ON" == "1" ]]; then
+    SERVER_ARGS+=(-khad -vhad)
+fi
+# Vision: pin the mmproj explicitly (local file if MODEL_SOURCE=local, else
+# resolved from the same HF repo). --no-mmproj keeps text-only servers from
+# loading/downloading it at all.
 case "${ENABLE_VISION,,}" in
     0|false|no|off|"") VISION_ON=0 ;;
     *)                 VISION_ON=1 ;;
 esac
 if [[ "$VISION_ON" == "1" ]]; then
-    SERVER_ARGS+=(--mmproj-url "https://huggingface.co/${HF_REPO}/resolve/main/${MMPROJ_FILE}")
+    if [[ "${MODEL_SOURCE,,}" == "hf" ]]; then
+        SERVER_ARGS+=(--mmproj-url "https://huggingface.co/${HF_REPO}/resolve/main/${MMPROJ_FILE}")
+    else
+        MMPROJ_PATH="/models/${MMPROJ_FILE}"
+        if [[ ! -f "$MMPROJ_PATH" ]]; then
+            err "ENABLE_VISION=1 but $MMPROJ_PATH is missing; set ENABLE_VISION=0"
+            err "or place the mmproj GGUF alongside the model (see Phase 2)."
+            exit 1
+        fi
+        SERVER_ARGS+=(--mmproj "$MMPROJ_PATH")
+    fi
 else
     SERVER_ARGS+=(--no-mmproj)
 fi
-# DSpark speculative decoding: pull the drafter GGUF as the draft model (the
-# download reuses HF_TOKEN) and select the block-diffusion draft type. Prompt
-# caching stays on - they share the same checkpoint/RS path.
-case "${ENABLE_DSPARK,,}" in
-    0|false|no|off|"") DSPARK_ON=0 ;;
-    *)                 DSPARK_ON=1 ;;
+# MTP self-speculative decoding: no separate draft file - the trailing MTP
+# layer(s) are baked into the same GGUF. If the n-gram drafter is also
+# enabled, its --spec-type must be registered FIRST so it forms the first
+# (cheap) stage of the two-stage chain, with MTP as the second stage.
+case "${ENABLE_MTP,,}" in
+    0|false|no|off|"") MTP_ON=0 ;;
+    *)                 MTP_ON=1 ;;
 esac
-if [[ "$DSPARK_ON" == "1" ]]; then
-    # -hfd only takes repo[:quant] (there is no exact-file flag for the draft),
-    # and :quant is matched case-insensitively, so derive the quant tag from the
-    # drafter filename (e.g. Bonsai-27B-dspark-Q4_1.gguf -> Q4_1).
-    DSPARK_DRAFT_QUANT="${DSPARK_DRAFT_FILE##*-}"
-    DSPARK_DRAFT_QUANT="${DSPARK_DRAFT_QUANT%.gguf}"
-    SERVER_ARGS+=(
-        --spec-type draft-dspark
-        -hfd "${HF_REPO}:${DSPARK_DRAFT_QUANT}"
-        --spec-draft-n-max "${DSPARK_N_MAX}"
-    )
+case "${ENABLE_NGRAM,,}" in
+    0|false|no|off|"") NGRAM_ON=0 ;;
+    *)                  NGRAM_ON=1 ;;
+esac
+if [[ "$NGRAM_ON" == "1" ]]; then
+    SERVER_ARGS+=(--spec-type "${NGRAM_TYPE}:n_max=${NGRAM_N_MAX},n_min=${NGRAM_N_MIN},ngram_size_n=${NGRAM_SIZE_N}")
+fi
+if [[ "$MTP_ON" == "1" ]]; then
+    SERVER_ARGS+=(--spec-type "mtp:n_max=${MTP_N_MAX},p_min=${MTP_P_MIN}")
+    if [[ -n "$MTP_REQUANTIZE_OUTPUT_TYPE" ]]; then
+        SERVER_ARGS+=(--mtp-requantize-output-tensor "$MTP_REQUANTIZE_OUTPUT_TYPE")
+    fi
 fi
 # Cap thinking length for clients that don't request a reasoning effort.
 if [[ -n "${REASONING_BUDGET:-}" ]]; then
@@ -182,5 +267,6 @@ if [[ -n "${EXTRA_ARGS:-}" ]]; then
     SERVER_ARGS+=(${EXTRA_ARGS})
 fi
 
-log "Starting llama-server on :$PORT | model=$HF_FILE ctx=$CTX kv=${KV_TYPE_K}/${KV_TYPE_V} slots=${N_PARALLEL} preserve-thinking=$([[ "$PRESERVE_THINKING_ON" == "1" ]] && echo on || echo off) cache-ram=${CACHE_RAM_MIB}MiB vision=$([[ "$VISION_ON" == "1" ]] && echo on || echo off) dspark=$([[ "$DSPARK_ON" == "1" ]] && echo on || echo off) tool-calling=on"
+log "Starting llama-server on :$PORT | model=${MODEL_SOURCE} ctx=$CTX kv=${KV_TYPE_K}/${KV_TYPE_V} hadamard=$([[ "$HADAMARD_ON" == "1" ]] && echo on || echo off) slots=${N_PARALLEL} preserve-thinking=$([[ "$PRESERVE_THINKING_ON" == "1" ]] && echo on || echo off) cache-ram=${CACHE_RAM_MIB}MiB vision=$([[ "$VISION_ON" == "1" ]] && echo on || echo off) mtp=$([[ "$MTP_ON" == "1" ]] && echo on || echo off) tool-calling=on"
 exec llama-server "${SERVER_ARGS[@]}"
+
