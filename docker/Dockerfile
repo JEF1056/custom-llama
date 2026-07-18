@@ -2,21 +2,48 @@
 # llama.cpp fork (Q1_0 1-bit weights + qwen35 arch + TurboQuant KV cache).
 #
 # Multi-stage: a devel image compiles llama-server for Ampere (sm_86); a slim
-# runtime image ships only the binary + shared libs. CUDA 12.4 supports the
-# RTX 3090.
+# runtime image ships only the binary + shared libs.
 #
 # DSpark speculative decoding is built in (from the fork's dspark-integration
 # branch): the drafter loads as a separate GGUF and runs alongside prompt/prefix
 # caching. Base inference has 1-bit weights, the full 262K context and tool
 # calling (--jinja).
-ARG CUDA_VERSION=12.9.0
+#
+# BUILD_MODE controls where the llama.cpp source comes from:
+#   git   (default) - clones LLAMA_REPO at LLAMA_REF
+#   local           - copies from ./llama-local/ in the build context
+#                     (place or rsync the source there before building)
+# CUDA 13.3.0: latest version validated by upstream llama.cpp CI (the `cuda13`
+# tag in .github/workflows/docker.yml). Ships CCCL >= 3.2, which enables the
+# native cub::DeviceTopK fast path in ggml_top_k (CUDA 12.x fell back to a
+# full-vocab argsort). Ampere sm_86 (RTX 3090) is still supported in CUDA 13.
+ARG CUDA_VERSION=13.3.0
+ARG BUILD_MODE=git
+
+# --- source: git -------------------------------------------------------------
+FROM alpine:3.20 AS source-git
+ARG LLAMA_REPO=https://github.com/JEF1056/llama-cpp-turboquant.git
+ARG LLAMA_REF=dspark-integration
+RUN apk add --no-cache git ca-certificates && \
+    git clone --depth 1 --branch "${LLAMA_REF}" "${LLAMA_REPO}" /src
+
+# --- source: local -----------------------------------------------------------
+# Build context must contain the llama.cpp source at ./llama-local/.
+# Example: rsync -a --exclude='.git' /path/to/llama-cpp-turboquant/ docker/llama-local/
+FROM alpine:3.20 AS source-local
+COPY llama-local/ /src/
+
+# --- select source (BUILD_MODE must be 'git' or 'local') ---------------------
+FROM source-${BUILD_MODE} AS source
 
 # --- build stage -------------------------------------------------------------
 FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu24.04 AS build
 
+# RTX 3090 = Ampere sm_86. Override for other cards.
+ARG CUDA_ARCH=86
+
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git \
         cmake \
         ninja-build \
         build-essential \
@@ -25,15 +52,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Which fork/branch to build (defaults to the user's fork + dspark-integration
-# branch, which contains the DSpark drafter + server capture wiring).
-ARG LLAMA_REPO=https://github.com/JEF1056/llama-cpp-turboquant.git
-ARG LLAMA_REF=dspark-integration
-# RTX 3090 = Ampere sm_86. Override for other cards.
-ARG CUDA_ARCH=86
-
 WORKDIR /src
-RUN git clone --depth 1 --branch "${LLAMA_REF}" "${LLAMA_REPO}" .
+COPY --from=source /src .
 
 # The CUDA driver (libcuda.so.1) is injected by the NVIDIA Container Toolkit at
 # runtime and is absent from the build image, which ships only a stub named
@@ -80,6 +100,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=build /src/build/bin/ /opt/bonsai/bin/
 ENV PATH="/opt/bonsai/bin:${PATH}" \
     LD_LIBRARY_PATH="/opt/bonsai/bin"
+
+# Fuse the DSpark markov resample into the drafter decode graph (removes the
+# per-round draft-logits device->host->device round-trip). On by default in the
+# fork; set to 0 to fall back to the host/CUDA resample path.
+ENV LLAMA_DSPARK_MARKOV_INGRAPH=1
 
 WORKDIR /workspace
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh

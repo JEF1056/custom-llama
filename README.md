@@ -8,83 +8,102 @@ Three components:
 
 | Component | Backend | Where it runs |
 |-----------|---------|---------------|
-| [`docker/`](docker/)   | llama.cpp + CUDA | RTX 3090 (Linux, Docker) |
-| [`mac/`](mac/)         | MLX              | MacBook (Apple Silicon), auto-starts on login |
-| [`router/`](router/)   | LiteLLM proxy    | Anywhere; distributes across both |
+| [`docker/`](docker/) | llama.cpp + CUDA | RTX 3090 (Linux, Docker) |
+| [`mac/`](mac/) | MLX | MacBook (Apple Silicon), auto-starts on login |
+| [`router/`](router/) | LiteLLM proxy | Co-located with CUDA server or standalone |
 
 Speedups wired in: **1-bit weights**, a **quantized KV cache**, flash attention,
-full GPU offload, and a reasoning-budget cap. **Prompt caching** is active on
-both machines. Bonsai is a hybrid (GDN + attention) arch, so on CUDA the caching
-is the server's **context checkpoints + prompt-state cache** (full sequence-state
-save/restore) rather than `--cache-reuse` KV-shifting, which llama.cpp
-auto-disables on hybrid models. The CUDA server is now built from the
-TurboQuant+ llama.cpp fork; **DSpark speculative decoding is being ported into
-the fork and is not in this image yet** - and because that same checkpoint
-machinery is what speculative decoding reuses, caching and DSpark will coexist
-(no speculative-vs-cache trade-off).
+full GPU offload, and a reasoning-budget cap. Prompt caching is active: Bonsai
+is a hybrid (GDN + attention) arch, so llama.cpp auto-disables `--cache-reuse`
+KV-shifting; instead the server's context-checkpoint + prompt-state cache is
+used (full sequence-state save/restore). **DSpark speculative decoding** is
+integrated in the fork and active by default (`ENABLE_DSPARK=1`) — it rides the
+same checkpoint machinery as prompt caching, so both run together with no
+trade-off.
 
-**Vision** is enabled on CUDA: Bonsai's separate vision tower ships as an mmproj
-GGUF that the fork loads through its existing Qwen3-VL projector, so the server
-accepts image input out of the box. It is loaded lazily (only when an image
-arrives) and can be turned off with `ENABLE_VISION=0` for a leaner text-only
-server. Note that per-request images are re-encoded, and `--cache-reuse`
-KV-shifting is disabled for multimodal requests - but the checkpoint/prompt-state
-cache still applies to the text prefix.
+**Vision** is enabled on CUDA: Bonsai's vision tower ships as a separate mmproj
+GGUF loaded through the Qwen3-VL projector. Set `ENABLE_VISION=0` for a leaner
+text-only server.
 
-**Tool calling** (native OpenAI-style `tool_calls`) and the **full 262K context
-window** are enabled on both machines:
+**Tool calling** (`tool_calls`) and the **full 262K context window** are enabled
+on both backends. CUDA uses `--jinja`; MLX keeps an unbounded KV cache.
 
-- CUDA: the server runs with `--jinja` for tool calling; `CTX=262144` gives the
-  model's full window (fits in 24 GB thanks to the quantized KV cache). Serving
-  is single-slot (no `--parallel`).
-- MLX: the 27B emits native `tool_calls`, and mlx-lm keeps an unbounded KV cache
-  (full 262K, limited only by unified memory).
-
-> **Heads up — Hugging Face token required.** The Bonsai-27B repo is currently
-> private, so you need an HF **read** token (`BONSAI_TOKEN`) for downloads.
+> **Hugging Face token.** The prism-ml GGUF repos are public — `BONSAI_TOKEN`
+> can be left empty. Set it only for private/gated repos.
 
 ---
 
-## 1. RTX 3090 — CUDA server (Docker)
+## Compose files
 
-Requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+| File | Purpose |
+|------|---------|
+| [`docker-compose.yml`](docker-compose.yml) | **Prod**: builds CUDA server from git + starts router together |
+| [`docker/docker-compose.yml`](docker/docker-compose.yml) | **Dev**: CUDA server only, supports local source builds |
+
+---
+
+## 1. Prod — CUDA server + router (one command)
 
 ```bash
-cd docker
-cp .env.example .env
-#   edit .env -> set BONSAI_TOKEN (and tune REASONING_BUDGET / CTX)
+cp docker/.env.example docker/.env   # set BONSAI_TOKEN, tune CTX / KV_TYPE etc.
+cp router/.env.example router/.env   # set LITELLM_MASTER_KEY, MAC_BACKEND_URL
 docker compose up -d --build
 ```
 
-The build compiles `llama-server` from the TurboQuant+ fork for the RTX 3090
-(sm_86); first boot then downloads the 1-bit weights into a Docker volume
-(several GB — be patient; `start_period` is generous). Then:
+Builds `llama-server` from the TurboQuant+ fork, downloads weights on first
+boot, and starts the LiteLLM router on port 4000. The router reaches the CUDA
+server over an internal Docker network — no host IP needed in `router/.env`.
 
 ```bash
+# direct server
 curl http://localhost:8080/health
-curl http://localhost:8080/v1/chat/completions \
+
+# through router
+curl http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"bonsai-27b","messages":[{"role":"user","content":"Explain 1-bit quantization."}]}'
 ```
 
-Toggles live in `docker/.env` — `CTX`, `KV_TYPE` (`q4_0` default, or `turbo4`
+---
+
+## 2. Dev — CUDA server only (docker/docker-compose.yml)
+
+```bash
+cd docker
+cp .env.example .env
+docker compose up -d --build
+```
+
+### Building from a local fork
+
+Set `BUILD_MODE=local` and provide the source under `docker/llama-local/`:
+
+```bash
+rsync -a --exclude='.git' /path/to/llama-cpp-turboquant/ docker/llama-local/
+BUILD_MODE=local docker compose up -d --build
+```
+
+After the initial build, `.env` and `entrypoint.sh` changes take effect on the
+next `docker compose up -d` with **no rebuild**. Only Dockerfile or build-arg
+changes require `--build`.
+
+Available knobs in `docker/.env`: `CTX`, `KV_TYPE` (`q4_0` default, or `turbo4`
 for the fork's TurboQuant KV), `CACHE_RAM_MIB`, `REASONING_BUDGET`,
-`ENABLE_VISION` / `MMPROJ_FILE`, `EXTRA_ARGS`, plus build knobs `LLAMA_REPO` /
-`LLAMA_REF` / `CUDA_ARCH`.
+`ENABLE_VISION` / `MMPROJ_FILE`, `ENABLE_DSPARK` / `DSPARK_DRAFT_FILE`,
+`EXTRA_ARGS`. Build knobs: `LLAMA_REPO` / `LLAMA_REF` / `CUDA_ARCH`.
 
 ---
 
-## 2. MacBook (Apple Silicon) — MLX server, auto-start
-
-One command, from your GitHub raw URL:
+## 3. MacBook (Apple Silicon) — MLX server, auto-start
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/YOURUSER/custom-llama/main/mac/install.sh \
   | BONSAI_TOKEN=hf_xxx bash
 ```
 
-This installs the model and a **LaunchAgent** that starts the MLX server at
-login and restarts it on crash (`KeepAlive`). Verify:
+Installs a **LaunchAgent** that starts the MLX server at login and restarts on
+crash. Verify:
 
 ```bash
 launchctl list | grep bonsai
@@ -95,51 +114,41 @@ curl http://localhost:8081/v1/chat/completions \
 
 - Logs: `~/Library/Logs/bonsai-mlx.out.log` / `.err.log`
 - Uninstall: `bash ~/.bonsai/custom-llama/mac/uninstall.sh`
-- **Vision on Mac** is opt-in: install with `ENABLE_VISION=1` (e.g.
-  `... | BONSAI_TOKEN=hf_xxx ENABLE_VISION=1 bash`). On Apple Silicon image
-  input is served through `mlx-vlm`, which only supports the **ternary (2-bit)**
-  27B MLX build, so enabling it serves that build (~7 GB, higher quality)
-  instead of the 1-bit one. The 1-bit MLX build is text-only for now.
+- Vision opt-in: `ENABLE_VISION=1 ... | bash`. On Apple Silicon this serves
+  the ternary (2-bit) MLX build (~7 GB); the 1-bit build is text-only for now.
 
-> Replace `YOURUSER` with your GitHub account after you push this repo (also the
-> `CUSTOM_LLAMA_REPO` default in [`mac/install.sh`](mac/install.sh)).
+> Replace `YOURUSER` with your GitHub account (also in `mac/install.sh`).
 
 ---
 
-## 3. Router — one endpoint across both backends
+## 4. Router — standalone
+
+The router is included in the prod `docker-compose.yml`. To run it independently:
 
 ```bash
 cd router
-cp .env.example .env
-#   edit .env -> set CUDA_BACKEND_URL, MAC_BACKEND_URL, LITELLM_MASTER_KEY
+cp .env.example .env   # set LITELLM_MASTER_KEY, CUDA_BACKEND_URL, MAC_BACKEND_URL
 docker compose up -d
 ```
 
-```bash
-curl http://localhost:4000/v1/chat/completions \
-  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"bonsai-27b","messages":[{"role":"user","content":"hi"}]}'
-```
-
-Latency-based routing with automatic retry/failover to the healthy backend, plus
-background health checks. Tune in [`router/config.yaml`](router/config.yaml).
+Latency-based routing with automatic retry/failover. Tune backends and routing
+strategy in [`router/config.yaml`](router/config.yaml).
 
 ---
 
 ## Notes
 
-- The CUDA image builds `llama-server` from the TurboQuant+ fork
+- The CUDA image is built from the TurboQuant+ fork
   ([`JEF1056/llama-cpp-turboquant`](https://github.com/JEF1056/llama-cpp-turboquant),
-  branch `bonsai`), which already has the `Q1_0` 1-bit kernels, the `qwen35`
-  architecture and the TurboQuant KV cache. Point `LLAMA_REPO` / `LLAMA_REF` at
-  a different fork/branch to build something else.
-- **DSpark speculative decoding is not in this image yet** — it is still being
-  ported into the fork. When it lands it will run alongside the prompt cache
-  (no trade-off), unlike the vendor demo where the two are mutually exclusive.
-- **Vision is enabled** on the CUDA server via the Bonsai mmproj tower (set
-  `ENABLE_VISION=0` to disable). On Mac it is opt-in (`ENABLE_VISION=1` at
-  install), and because 1-bit MLX is text-only today it serves the ternary
-  2-bit build for image input.
-- Not included: TLS/public exposure, the Ternary quality variant as the CUDA
-  default, Open WebUI demos (all available upstream if you want them later).
+  branch `dspark-integration`), which has Q1_0 kernels, the qwen35 architecture,
+  TurboQuant KV cache, and DSpark speculative decoding. Point `LLAMA_REPO` /
+  `LLAMA_REF` at a different fork/branch to build something else.
+- **DSpark** is active by default (`ENABLE_DSPARK=1`). Set `ENABLE_DSPARK=0` for
+  a plain server. The drafter is a separate ~1.8 GB GGUF downloaded on first
+  boot alongside the main weights.
+- **Vision** is enabled on CUDA (`ENABLE_VISION=0` to disable). On Mac it is
+  opt-in at install time.
+- The prod compose exposes the CUDA server on `LLAMA_PORT` (default 8080) and
+  the router on `ROUTER_PORT` (default 4000). Set these in the shell or a root
+  `.env` to change ports without editing the compose file.
+

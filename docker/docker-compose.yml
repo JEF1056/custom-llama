@@ -1,47 +1,41 @@
-# RTX 3090 CUDA server for Bonsai-27B (1-bit).
+# DEV compose — builds and runs the CUDA server locally.
 #
-#   cp .env.example .env         # then edit BONSAI_TOKEN
-#   docker compose up -d --build # first run only: builds the image
+# Default (BUILD_MODE=git): clones LLAMA_REPO at LLAMA_REF during docker build.
+# Local source (BUILD_MODE=local): copies from ./llama-local/ in this directory.
+#   To use local source:
+#     rsync -a --exclude='.git' /path/to/llama-cpp-turboquant/ docker/llama-local/
+#     BUILD_MODE=local docker compose up -d --build
 #
-# After the first build, editing .env or entrypoint.sh does NOT need a rebuild:
-# .env is read at container start and entrypoint.sh is live-mounted from the
-# host, so just re-run `docker compose up -d` (recreates the container) or
-# `docker compose restart`. Only Dockerfile / fork build-arg changes
-# (LLAMA_REPO/LLAMA_REF/CUDA_ARCH) require `--build`.
+#   cp .env.example .env   # set BONSAI_TOKEN, tune CTX / KV_TYPE etc.
+#   docker compose up -d --build
 #
-# Model weights are cached once in the bonsai-models volume and reused across
-# restarts, recreation and image rebuilds - never re-downloaded (until you
-# explicitly `docker volume rm bonsai-models`).
+# .env and entrypoint.sh changes take effect on the next `docker compose up -d`
+# with no rebuild. Only Dockerfile or build-arg changes require `--build`.
 #
 # Requires the NVIDIA Container Toolkit on the host.
 services:
-  bonsai-cuda:
+  bonsai-cuda-dev:
     build:
       context: .
       dockerfile: Dockerfile
       args:
+        BUILD_MODE: ${BUILD_MODE:-git}
         LLAMA_REPO: ${LLAMA_REPO:-https://github.com/JEF1056/llama-cpp-turboquant.git}
         LLAMA_REF: ${LLAMA_REF:-dspark-integration}
         CUDA_ARCH: ${CUDA_ARCH:-86}
-    image: custom-llama/bonsai-cuda:latest
-    container_name: bonsai-cuda
+    image: custom-llama/bonsai-cuda:dev
+    container_name: bonsai-cuda-dev
     env_file: .env
     environment:
-      # Where llama.cpp caches -hf / -hfd / mmproj downloads. Points at the
-      # dedicated bonsai-models volume so weights are pulled once and reused
-      # forever (overrides the entrypoint's standalone /workspace fallback).
       LLAMA_CACHE: /models
     ports:
       - "${PORT:-8080}:8080"
     volumes:
-      # Model weights cache: downloaded once, reused across restarts, container
-      # recreation and image rebuilds. Cleared only by `docker volume rm
-      # bonsai-models`.
-      - bonsai-models:/models
-      # Prompt-cache slots and any other runtime state.
-      - bonsai-data:/workspace
-      # Live-mount the entrypoint so editing it takes effect on the next
-      # `docker compose up -d` / `restart` with NO image rebuild.
+      # Model weights cache: downloaded once, reused across restarts.
+      # Cleared only by `docker volume rm docker_bonsai-models-dev`.
+      - bonsai-models-dev:/models
+      - bonsai-data-dev:/workspace
+      # Live-mount the entrypoint so edits take effect without a rebuild.
       - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
     deploy:
       resources:
@@ -55,10 +49,9 @@ services:
       interval: 30s
       timeout: 5s
       retries: 10
-      # Generous grace period: first boot downloads several GB.
       start_period: 1800s
     restart: unless-stopped
 
 volumes:
-  bonsai-data:
-  bonsai-models:
+  bonsai-data-dev:
+  bonsai-models-dev:

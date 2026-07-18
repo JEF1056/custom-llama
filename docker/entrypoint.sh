@@ -60,6 +60,16 @@ DSPARK_DRAFT_FILE=${DSPARK_DRAFT_FILE:-Bonsai-27B-dspark-Q4_1.gguf}
 # needs a fork-side fix (capture should not force n_outputs_max == n_batch).
 DSPARK_N_MAX=${DSPARK_N_MAX:-8}
 
+# Sampling defaults. These set the server-side default generation params;
+# clients may still override them per request. Lower temperature raises DSpark
+# draft acceptance (the drafter proposes near-greedily), so keep it modest.
+TEMP=${TEMP:-0.6}
+TOP_P=${TOP_P:-0.95}
+TOP_K=${TOP_K:-20}
+MIN_P=${MIN_P:-0.0}
+PRESENCE_PENALTY=${PRESENCE_PENALTY:-0.0}
+REPEAT_PENALTY=${REPEAT_PENALTY:-1.0}
+
 # --- Weights -----------------------------------------------------------------
 # The prism-ml Bonsai-27B GGUF repos are public, so no token is needed for the
 # default weights; a read token is only required for gated/private repos.
@@ -91,6 +101,12 @@ SERVER_ARGS=(
     --cache-ram "$CACHE_RAM_MIB"
     --cache-type-k "$KV_TYPE"
     --cache-type-v "$KV_TYPE"
+    --temp "$TEMP"
+    --top-p "$TOP_P"
+    --top-k "$TOP_K"
+    --min-p "$MIN_P"
+    --presence-penalty "$PRESENCE_PENALTY"
+    --repeat-penalty "$REPEAT_PENALTY"
 )
 if [[ -n "${CTX:-}" && "${CTX}" != "0" ]]; then
     SERVER_ARGS+=(-c "$CTX")

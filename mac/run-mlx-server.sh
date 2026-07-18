@@ -33,6 +33,27 @@ export APC_ENABLED=${APC_ENABLED:-1}
 # Set MLX_KV_BITS= (empty) to keep a full-precision KV cache.
 MLX_KV_BITS=${MLX_KV_BITS:-4}
 
+# Default sampling params (clients may override per request). Mirrors the CUDA
+# server defaults; a modest temperature keeps output consistent. Set any to
+# empty to leave the MLX server's own default in place. presence_penalty (0.0)
+# and repetition_penalty (1.0) are already the MLX defaults, so they are not
+# forwarded explicitly.
+TEMP=${TEMP:-0.6}
+TOP_P=${TOP_P:-0.95}
+TOP_K=${TOP_K:-20}
+MIN_P=${MIN_P:-0.0}
+
+# Repetition control. The CUDA server breaks 1-bit generation loops with the DRY
+# sampler, but DRY is a llama.cpp-only feature - MLX (mlx-lm/mlx-vlm) does not
+# implement it. The closest analogue MLX offers is repetition_penalty plus its
+# scan window (repetition_context_size). Left empty by default so the running
+# LaunchAgent is never broken by an unrecognized flag; set REPETITION_PENALTY
+# (e.g. 1.1) once you've confirmed this MLX build accepts --repetition-penalty.
+# A modest value is tool-calling-safe. If your PrismML MLX fork happens to expose
+# DRY flags, pass them through EXTRA_ARGS instead.
+REPETITION_PENALTY=${REPETITION_PENALTY:-}
+REPETITION_CONTEXT_SIZE=${REPETITION_CONTEXT_SIZE:-}
+
 # Vision routing (see header). ENABLE_VISION=1 selects the ternary family and
 # lets the demo's start_mlx_server.sh route to mlx-vlm (image input); otherwise
 # stay on the 1-bit text-only mlx_lm server. install.sh must have run with the
@@ -80,9 +101,35 @@ if [[ -n "$MLX_KV_BITS" ]]; then
     KV_BITS_ARG="--kv-bits $MLX_KV_BITS"
 fi
 
+# Default sampling flags, forwarded to whichever MLX server is picked (both
+# mlx-lm and mlx-vlm accept --temp/--top-p/--top-k/--min-p). Leave a var empty
+# to skip its flag.
+SAMPLING_ARGS=""
+if [[ -n "$TEMP" ]]; then
+    SAMPLING_ARGS="$SAMPLING_ARGS --temp $TEMP"
+fi
+if [[ -n "$TOP_P" ]]; then
+    SAMPLING_ARGS="$SAMPLING_ARGS --top-p $TOP_P"
+fi
+if [[ -n "$TOP_K" ]]; then
+    SAMPLING_ARGS="$SAMPLING_ARGS --top-k $TOP_K"
+fi
+if [[ -n "$MIN_P" ]]; then
+    SAMPLING_ARGS="$SAMPLING_ARGS --min-p $MIN_P"
+fi
+# Repetition penalty (MLX's DRY analogue): only forwarded when explicitly set,
+# so an MLX build that doesn't accept the flag can't crash-loop the LaunchAgent.
+if [[ -n "$REPETITION_PENALTY" ]]; then
+    SAMPLING_ARGS="$SAMPLING_ARGS --repetition-penalty $REPETITION_PENALTY"
+fi
+if [[ -n "$REPETITION_CONTEXT_SIZE" ]]; then
+    SAMPLING_ARGS="$SAMPLING_ARGS --repetition-context-size $REPETITION_CONTEXT_SIZE"
+fi
+
 # start_mlx_server.sh forwards extra args to the MLX server.
 exec ./scripts/start_mlx_server.sh \
     --host "$MLX_HOST" \
     --port "$MLX_PORT" \
     ${KV_BITS_ARG} \
+    ${SAMPLING_ARGS} \
     ${EXTRA_ARGS:-}
