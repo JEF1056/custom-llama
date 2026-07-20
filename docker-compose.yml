@@ -135,7 +135,6 @@ services:
     container_name: qwen36-model-prep
     profiles: ["prep"]
     entrypoint: ["/bin/bash", "/scripts/prepare-weights.sh"]
-    env_file: ./docker/.env
     volumes:
       - qwen36-models:/models
       - ./scripts:/scripts:ro
@@ -168,7 +167,6 @@ services:
     container_name: qwen36-model-prep-cpu
     profiles: ["prep-cpu"]
     entrypoint: ["/bin/bash", "/scripts/prepare-weights.sh"]
-    env_file: ./docker/.env
     environment:
       NGL: "0"
     volumes:
