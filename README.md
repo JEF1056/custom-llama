@@ -1,57 +1,73 @@
-# custom-llama — Self-host Qwen3.6-35B-A3B on your own hardware
+# custom-llama — Setup Guide
 
-Host **[Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B)** — a hybrid MoE reasoning + vision model with 262K native context, tool calling, and MTP self-speculative decoding — on your own hardware behind a single load-balancing endpoint.
+Host **[Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B)** on your own hardware behind a single load-balancing endpoint.
 
-## What's in this repo
+**Model:** Hybrid MoE reasoning + vision model with 262K native context, tool calling, and MTP self-speculative decoding.
 
-| Component | Backend | Where it runs |
-|-----------|---------|---------------|
+**Built on:** [JEF1056/ik_llama.cpp](https://github.com/JEF1056/ik_llama.cpp) (branch `ngram-mtp-vision-chain`) — a patch allowing n-gram lookup drafting alongside MTP with the vision tower loaded.
+
+---
+
+## Architecture
+
+| Component | Backend | Location |
+|-----------|---------|----------|
 | `docker/` | `ik_llama.cpp` + CUDA (RTX 3090) | Linux host via Docker |
-| `mac/` | MLX (`mlx-vlm`) | MacBook / Apple Silicon, auto-starts at login |
+| `mac/` | MLX (`mlx-vlm`) | MacBook / Apple Silicon |
 | `router/` | LiteLLM proxy | Co-located with CUDA or standalone |
-
-Built on stock **[ikawrakow/ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp)** (no forks/patches), with every speedup enabled: mixed-precision quant, 4-bit Hadamard-rotated KV cache, Flash Attention, fused MoE, MTP self-speculative decoding, and prompt caching.
-
-See [`docs/iqllama-migration-plan.md`](docs/iqllama-migration-plan.md) for the full design and source-verified feasibility findings.
 
 ---
 
 ## Prerequisites
 
 - **Linux host** with NVIDIA GPU (RTX 3090 recommended, 24 GB VRAM)
-- **NVIDIA Container Toolkit** installed (for Docker GPU passthrough)
+- **NVIDIA Container Toolkit** installed (Docker GPU passthrough)
 - **Docker** and **Docker Compose** v2
-- **~70 GB free disk** for model weights (full pipeline) or **~17 GB** (bring-up only)
-- **Hugging Face token** (`hf_xxx`) — only needed for gated/private repos; the default bring-up weights are public
+- **~70 GB free disk** for full pipeline or **~17 GB** for quick bring-up
+- **Hugging Face token** (`hf_xxx`) — only for gated/private repos; default bring-up weights are public
 - **MacBook with Apple Silicon** — for the MLX backend (separate deployment)
 
 ---
 
-## Quick Start — Fastest path to a running server
+## Option A: Linux + CUDA (Docker)
 
-This gets you a working server in minutes using a pre-quantized GGUF from Hugging Face.
-
-### 1. Clone and configure
+### Step 1: Clone and configure
 
 ```bash
-# Copy env files from examples
 cp docker/.env.example docker/.env
 cp router/.env.example router/.env
-
-# Edit router/.env — set your master key and backend URLs
-# (When running both server + router in the same compose, the CUDA_BACKEND_URL
-#  is overridden to http://server:8080/v1 automatically — no host IP needed)
 ```
 
-### 2. Download bring-up weights (one-time, ~17 GB)
+Edit `router/.env` to set your master key and backend URLs. When running both server and router in the same compose, `CUDA_BACKEND_URL` is overridden to `http://server:8080/v1` automatically.
+
+### Step 2: Download weights (choose one)
+
+**Quick bring-up (~17 GB, pre-quantized):**
 
 ```bash
 docker compose --profile bringup run --rm model-bringup
 ```
 
-This downloads a pre-quantized GGUF and the vision mmproj into the shared volume. Takes a few minutes depending on your internet speed.
+This downloads a pre-quantized GGUF and vision mmproj into the shared volume. Takes a few minutes.
 
-### 3. Build and start everything
+**Production quantization (~70 GB, custom recipe):**
+
+```bash
+docker compose build
+docker compose --profile prep run --rm model-prep
+```
+
+This runs the full offline pipeline:
+1. Downloads Unsloth's pre-converted BF16 GGUF shards + mmproj (~70 GB)
+2. Computes a custom imatrix from a diverse calibration corpus
+3. Quantizes with the "262K-Balanced" recipe:
+   - Edge experts: `iq4_ks` | Middle experts: `iq3_k` | Shared expert: `q8_0`
+   - Attention layers: `iq5_ks` | Router: `q8_0` | Token embedding: `iq4_ks`
+   - Output: `q6_K` | MTP block: BF16 (output head at `q8_0`)
+
+A GPU is required for the imatrix step. This takes a while.
+
+### Step 3: Start everything
 
 ```bash
 docker compose up -d --build
@@ -59,7 +75,7 @@ docker compose up -d --build
 
 This builds the CUDA server from `ik_llama.cpp` source, then starts the LiteLLM router. The router waits for the server to be healthy before starting.
 
-### 4. Test it
+### Step 4: Test it
 
 ```bash
 # Direct to server
@@ -72,61 +88,9 @@ curl http://localhost:4000/v1/chat/completions \
   -d '{"model":"qwen3.6-35b","messages":[{"role":"user","content":"Explain gated DeltaNet."}]}'
 ```
 
----
+### Development mode (server only)
 
-## Production Setup — Full custom quantization
-
-The bring-up path above uses a public pre-quantized GGUF for quick validation. For production, run the full offline quantization pipeline to produce your own **"262K-Balanced"** GGUF (~16.8 GB) using a custom quantization recipe tuned for this model.
-
-### Step 1: Prepare the environment
-
-```bash
-cp docker/.env.example docker/.env
-cp router/.env.example router/.env
-```
-
-### Step 2: Build the Docker image
-
-```bash
-docker compose build
-```
-
-This compiles `llama-server`, `llama-quantize`, `llama-imatrix`, and `llama-gguf-split` from `ik_llama.cpp` `main` with CUDA support for your GPU architecture (default: sm_86 for RTX 3090).
-
-### Step 3: Run the full weights pipeline
-
-```bash
-docker compose --profile prep run --rm model-prep
-```
-
-This runs the complete offline pipeline:
-1. Downloads Unsloth's pre-converted BF16 GGUF shards + mmproj from Hugging Face (~70 GB download)
-2. Computes a custom imatrix from a diverse calibration corpus (chat/code/reasoning/tool-calling)
-3. Quantizes with the "262K-Balanced" recipe:
-   - Edge experts: `iq4_ks` (most sensitive layers)
-   - Middle experts: `iq3_k` (sparse bulk)
-   - Shared expert: `q8_0`
-   - Attention layers: `iq5_ks`
-   - Router: `q8_0`
-   - Token embedding: `iq4_ks`
-   - Output: `q6_K`
-   - MTP block: kept at BF16 (except output head at `q8_0`)
-
-This step takes a while (large download + imatrix pass + quantize). A GPU is required for the imatrix step.
-
-### Step 4: Start the server
-
-```bash
-docker compose up -d
-```
-
-The server automatically picks up the quantized GGUF from the shared volume.
-
----
-
-## Development Setup — CUDA server only
-
-For iterating on the server configuration without the router:
+For iterating on server config without the router:
 
 ```bash
 cd docker
@@ -134,21 +98,15 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-**Building from a local `ik_llama.cpp` checkout:**
+The dev stack defaults to port `8081` to avoid collision with prod's `8080`. Build from a local `ik_llama.cpp` checkout:
 
 ```bash
-# Rsync your local source into the build context
-rsync -a --exclude='.git' /path/to/ik_llama.cpp/ docker/llama-local/
-
-# Build from local source instead of cloning from git
-BUILD_MODE=local docker compose up -d --build
+BUILD_MODE=local LLAMA_LOCAL_PATH=/path/to/ik_llama.cpp docker compose up -d --build
 ```
-
-After the initial build, `.env` and `entrypoint.sh` changes take effect on the next `docker compose up -d` **without a rebuild**. Only Dockerfile or build-arg changes require `--build`.
 
 ---
 
-## MacBook Setup — Apple Silicon (MLX)
+## Option B: MacBook + Apple Silicon (MLX)
 
 The CUDA server requires an NVIDIA GPU. For MacBooks with Apple Silicon, use the separate MLX deployment:
 
@@ -157,7 +115,7 @@ curl -fsSL https://raw.githubusercontent.com/YOURUSER/custom-llama/main/mac/inst
   | BONSAI_TOKEN=hf_xxx bash
 ```
 
-Replace `YOURUSER` with your GitHub account and `hf_xxx` with your Hugging Face read token (required — the Bonsai-27B repos are private).
+Replace `YOURUSER` with your GitHub account and `hf_xxx` with your Hugging Face read token (required — Bonsai-27B repos are private).
 
 This installs:
 - The MLX model (ternary 2-bit for vision, or 1-bit text-only)
@@ -170,9 +128,9 @@ This installs:
 
 ---
 
-## Standalone Router
+## Option C: Standalone Router
 
-The router is included in the prod compose file. To run it independently (e.g., pointing at external backends):
+To run the router independently (e.g., pointing at external backends):
 
 ```bash
 cd router
@@ -180,7 +138,7 @@ cp .env.example .env    # set LITELLM_MASTER_KEY, CUDA_BACKEND_URL, MAC_BACKEND_
 docker compose up -d
 ```
 
-The router uses **latency-based routing** with automatic retry/failover. Tune backends and strategy in [`router/config.yaml`](router/config.yaml). By default it routes to both the CUDA server and Mac backend, sending each request to the lowest-latency deployment with 3 retries on failure.
+The router uses **latency-based routing** with automatic retry/failover. Tune backends and strategy in `router/config.yaml`. By default it routes to both the CUDA server and Mac backend, sending each request to the lowest-latency deployment with 3 retries on failure.
 
 ---
 
@@ -218,7 +176,7 @@ The router uses **latency-based routing** with automatic retry/failover. Tune ba
 
 ---
 
-## Manual script usage
+## Manual Script Usage
 
 The quantization scripts can also be run directly outside of Docker:
 
@@ -260,7 +218,7 @@ Set `CUDA_ARCH` in `docker/.env` to match your GPU architecture (e.g., `89` for 
 
 ---
 
-## Benchmark results
+## Benchmark Results
 
 See [`docs/qwen36-bench-results.md`](docs/qwen36-bench-results.md) for full benchmark results and methodology. Key results from real hardware (RTX 3090):
 

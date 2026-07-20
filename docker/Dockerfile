@@ -15,9 +15,13 @@
 #
 # BUILD_MODE controls where the ik_llama.cpp source comes from:
 #   git   (default) - clones LLAMA_REPO at LLAMA_REF
-#   local           - copies from ./llama-local/ in the build context
-#                     (place or rsync the source there before building)
-ARG CUDA_VERSION=12.6.3
+#   local           - copies from an external host directory via a named
+#                     build context (see docker-compose.yml's
+#                     `additional_contexts: llama-src=...`) - no in-repo
+#                     copy needed. Default host path: ~/ik_llama.cpp
+#                     (our JEF1056/ik_llama.cpp fork with the ngram+MTP+
+#                     vision patch - see docs/iqllama-migration-plan.md).
+ARG CUDA_VERSION=13.3.0
 ARG BUILD_MODE=git
 
 # --- source: git -------------------------------------------------------------
@@ -27,11 +31,12 @@ ARG LLAMA_REF=main
 RUN apk add --no-cache git ca-certificates && \
     git clone --depth 1 --branch "${LLAMA_REF}" "${LLAMA_REPO}" /src
 
-# --- source: local -----------------------------------------------------------
-# Build context must contain the ik_llama.cpp source at ./llama-local/.
-# Example: rsync -a --exclude='.git' /path/to/ik_llama.cpp/ docker/llama-local/
+# --- source: local -------------------------------------------------------------
+# Sourced from the "llama-src" named build context (an external host
+# directory, e.g. ~/ik_llama.cpp), NOT a path inside this build context.
+# See docker-compose.yml's `build.additional_contexts.llama-src`.
 FROM alpine:3.20 AS source-local
-COPY llama-local/ /src/
+COPY --from=llama-src . /src/
 
 # --- select source (BUILD_MODE must be 'git' or 'local') ---------------------
 FROM source-${BUILD_MODE} AS source

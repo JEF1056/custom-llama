@@ -1,4 +1,15 @@
-# PROD compose — builds the CUDA server from git and starts the LiteLLM router.
+# PROD compose — builds the CUDA server and starts the LiteLLM router.
+#
+# BUILD_MODE (default: git) clones our JEF1056/ik_llama.cpp fork's
+# ngram-mtp-vision-chain branch (LLAMA_REPO/LLAMA_REF below) during the
+# image build - a patch on top of stock ikawrakow/ik_llama.cpp allowing an
+# n-gram lookup drafter to chain alongside MTP even when the vision tower is
+# loaded (stock ik_llama.cpp silently disables ALL speculative decoding in
+# that combination - see docs/iqllama-migration-plan.md and repo memory for
+# the full investigation). Override LLAMA_REPO/LLAMA_REF to build stock
+# upstream ikawrakow/ik_llama.cpp@main instead, or set BUILD_MODE=local to
+# build from an external host checkout via a named build context (see
+# docker/docker-compose.yml's dev setup for that variant).
 #
 # Prerequisites:
 #   cp docker/.env.example docker/.env     # set QWEN_TOKEN, tune CTX etc.
@@ -25,7 +36,8 @@
 # before starting (depends_on + condition: service_healthy).
 #
 # Subsequent restarts (no code change): docker compose up -d
-# Rebuild image (after Dockerfile changes): docker compose up -d --build
+# Rebuild image (after Dockerfile changes, or a new commit on the fork
+# branch): docker compose up -d --build
 #
 # Requires the NVIDIA Container Toolkit on the host.
 
@@ -35,9 +47,9 @@ services:
       context: ./docker
       dockerfile: Dockerfile
       args:
-        BUILD_MODE: git
-        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/ikawrakow/ik_llama.cpp.git}
-        LLAMA_REF: ${LLAMA_REF:-main}
+        BUILD_MODE: ${BUILD_MODE:-git}
+        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/JEF1056/ik_llama.cpp.git}
+        LLAMA_REF: ${LLAMA_REF:-ngram-mtp-vision-chain}
         CUDA_ARCH: ${CUDA_ARCH:-86}
     image: custom-llama/qwen36-cuda:latest
     container_name: server
@@ -52,6 +64,13 @@ services:
       - ./docker/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
     networks:
       - bonsai-net
+    # Raises the locked-memory ceiling so --mlock (docker/.env's USE_MLOCK=1)
+    # can actually lock the model into RAM if enabled; harmless/no-op if
+    # USE_MLOCK stays at its default of 0.
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
     deploy:
       resources:
         reservations:
@@ -80,9 +99,9 @@ services:
       context: ./docker
       dockerfile: Dockerfile
       args:
-        BUILD_MODE: git
-        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/ikawrakow/ik_llama.cpp.git}
-        LLAMA_REF: ${LLAMA_REF:-main}
+        BUILD_MODE: ${BUILD_MODE:-git}
+        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/JEF1056/ik_llama.cpp.git}
+        LLAMA_REF: ${LLAMA_REF:-ngram-mtp-vision-chain}
         CUDA_ARCH: ${CUDA_ARCH:-86}
     image: custom-llama/qwen36-cuda:latest
     container_name: qwen36-model-bringup
@@ -108,9 +127,9 @@ services:
       context: ./docker
       dockerfile: Dockerfile
       args:
-        BUILD_MODE: git
-        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/ikawrakow/ik_llama.cpp.git}
-        LLAMA_REF: ${LLAMA_REF:-main}
+        BUILD_MODE: ${BUILD_MODE:-git}
+        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/JEF1056/ik_llama.cpp.git}
+        LLAMA_REF: ${LLAMA_REF:-ngram-mtp-vision-chain}
         CUDA_ARCH: ${CUDA_ARCH:-86}
     image: custom-llama/qwen36-cuda:latest
     container_name: qwen36-model-prep

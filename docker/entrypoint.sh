@@ -47,6 +47,23 @@ CACHE_RAM_MIB=${CACHE_RAM_MIB:-8192}
 # 100K+ context); raise it only for concurrent serving of shorter sequences.
 N_PARALLEL=${N_PARALLEL:-1}
 
+# Model-loading memory behavior. Since the model is fully GPU-offloaded
+# (NGL=999), these mainly affect load-time staging/host-RAM residency of the
+# GGUF's pages, not steady-state decode throughput - but can help avoid the
+# OS silently paging out host-side buffers (KV/MTP staging, mmap'd file
+# pages) under memory pressure.
+#   DISABLE_MMAP=1 (--no-mmap): read the whole GGUF into RAM up front instead
+#     of mmap'ing it (slower/more RAM at load, but avoids later page faults
+#     if the file cache gets evicted under host memory pressure).
+#   USE_MLOCK=1 (--mlock): lock the model's resident RAM pages so the OS can
+#     never swap/evict them. Needs the container to have enough locked-memory
+#     ulimit (docker run --ulimit memlock=-1:-1, or an equivalent Compose
+#     ulimits entry) - without it, llama-server will fail to mlock and error
+#     out or warn depending on build; test before enabling in production.
+# Both default OFF (mmap is normally fine and enables faster/lower-RAM load).
+DISABLE_MMAP=${DISABLE_MMAP:-0}
+USE_MLOCK=${USE_MLOCK:-0}
+
 # Physical batch size (-ub): the max number of tokens processed together in
 # one GPU pass during prompt processing. Larger values raise prompt-processing
 # throughput (more parallel work per kernel launch) at the cost of more VRAM
@@ -168,6 +185,14 @@ SERVER_ARGS=(
     --presence-penalty "$PRESENCE_PENALTY"
     --repeat-penalty "$REPEAT_PENALTY"
 )
+case "${DISABLE_MMAP,,}" in
+    0|false|no|off|"") ;;
+    *) SERVER_ARGS+=(--no-mmap) ;;
+esac
+case "${USE_MLOCK,,}" in
+    0|false|no|off|"") ;;
+    *) SERVER_ARGS+=(--mlock) ;;
+esac
 case "${MODEL_SOURCE,,}" in
     hf)
         if [[ -z "$HF_FILE" ]]; then

@@ -1,25 +1,39 @@
 # DEV compose — builds and runs the CUDA server locally.
 #
-# Default (BUILD_MODE=git): clones LLAMA_REPO at LLAMA_REF during docker build.
-# Local source (BUILD_MODE=local): copies from ./llama-local/ in this directory.
-#   To use local source:
-#     rsync -a --exclude='.git' /path/to/ik_llama.cpp/ docker/llama-local/
-#     BUILD_MODE=local docker compose up -d --build
+# Default (BUILD_MODE=local): builds from an external host checkout of our
+# JEF1056/ik_llama.cpp fork (default path: /home/jfan/ik_llama.cpp, override
+# via LLAMA_LOCAL_PATH), referenced through Docker's "llama-src" named build
+# context (additional_contexts below) - no in-repo copy needed. That fork
+# carries a patch (branch ngram-mtp-vision-chain) allowing an n-gram lookup
+# drafter to chain alongside MTP even when the vision tower is loaded (see
+# docs/iqllama-migration-plan.md and repo memory for the investigation).
+#   BUILD_MODE=local LLAMA_LOCAL_PATH=/path/to/ik_llama.cpp docker compose up -d --build
+#
+# Stock upstream (BUILD_MODE=git): clones LLAMA_REPO at LLAMA_REF instead.
+#   BUILD_MODE=git docker compose up -d --build
 #
 #   cp .env.example .env   # set QWEN_TOKEN, tune CTX / KV_TYPE etc.
 #   docker compose up -d --build
 #
 # .env and entrypoint.sh changes take effect on the next `docker compose up -d`
-# with no rebuild. Only Dockerfile or build-arg changes require `--build`.
+# with no rebuild. Only Dockerfile, build-arg, or fork-checkout changes require
+# `--build`.
 #
 # /models must hold the offline-produced GGUF (see docs/
 # iqllama-migration-plan.md Phase 2 / scripts/quantize.sh) unless MODEL_SOURCE=hf.
 #
-# Weights live in the qwen36-models-dev NAMED VOLUME (not the image), so they
-# survive `--force-recreate`/rebuilds; only `docker volume rm
-# docker_qwen36-models-dev` (or `down -v`) clears them. Two opt-in one-shot
-# jobs populate it, gated behind Compose profiles so plain `docker compose up`
-# never triggers a multi-GB download:
+# Weights are SHARED with the prod stack (../docker-compose.yml): this compose
+# attaches to the same `custom-llama_qwen36-models` / `custom-llama_qwen36-data`
+# named volumes as external volumes, rather than creating separate dev copies
+# (those volumes must already exist, i.e. the prod stack must have been
+# started at least once). That means whatever GGUF the prod stack already
+# downloaded/quantized is immediately usable here (no re-download), and vice
+# versa - but also means running both stacks at once will contend for the
+# same GPU/model file. The host port defaults to DEV_PORT (8081), distinct
+# from prod's 8080, so both CAN run simultaneously without a port collision.
+# Two opt-in one-shot jobs can (re)populate the shared volume, gated behind
+# Compose profiles so plain `docker compose up` never triggers a multi-GB
+# download:
 #   docker compose --profile bringup run --rm model-bringup-dev
 #   docker compose --profile prep    run --rm model-prep-dev
 #
@@ -30,25 +44,39 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        BUILD_MODE: ${BUILD_MODE:-git}
+        BUILD_MODE: ${BUILD_MODE:-local}
         LLAMA_REPO: ${LLAMA_REPO:-https://github.com/ikawrakow/ik_llama.cpp.git}
         LLAMA_REF: ${LLAMA_REF:-main}
         CUDA_ARCH: ${CUDA_ARCH:-86}
+        CUDA_VERSION: ${CUDA_VERSION:-13.3.0}
+      additional_contexts:
+        llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
     image: custom-llama/qwen36-cuda:dev
     container_name: qwen36-cuda-dev
     env_file: .env
     environment:
       LLAMA_CACHE: /models
     ports:
-      - "${PORT:-8080}:8080"
+      # Distinct default host port from prod's LLAMA_PORT (8080) since both
+      # stacks share the same docker/.env (and thus the same internal PORT),
+      # so they'd otherwise collide if run simultaneously. Override DEV_PORT
+      # to change; the container's internal port is unaffected.
+      - "${DEV_PORT:-8081}:8080"
     volumes:
-      # Model weights: our offline-quantized GGUF (+ mmproj) lives here, plus
-      # the HF download cache when MODEL_SOURCE=hf. Persists across restarts;
-      # cleared only by `docker volume rm docker_qwen36-models-dev`.
-      - qwen36-models-dev:/models
-      - qwen36-data-dev:/workspace
+      # Model weights: SHARED with the prod stack (see header comment) via
+      # the external qwen36-models/qwen36-data volumes - not separate dev
+      # copies. Persists across restarts; cleared only by
+      # `docker volume rm custom-llama_qwen36-models` (affects prod too).
+      - qwen36-models:/models
+      - qwen36-data:/workspace
       # Live-mount the entrypoint so edits take effect without a rebuild.
       - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+    # Raises the locked-memory ceiling so --mlock (.env's USE_MLOCK=1) can
+    # actually lock the model into RAM if enabled; harmless/no-op otherwise.
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
     deploy:
       resources:
         reservations:
@@ -72,17 +100,19 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        BUILD_MODE: ${BUILD_MODE:-git}
+        BUILD_MODE: ${BUILD_MODE:-local}
         LLAMA_REPO: ${LLAMA_REPO:-https://github.com/ikawrakow/ik_llama.cpp.git}
         LLAMA_REF: ${LLAMA_REF:-main}
         CUDA_ARCH: ${CUDA_ARCH:-86}
+      additional_contexts:
+        llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
     image: custom-llama/qwen36-cuda:dev
     container_name: qwen36-model-bringup-dev
     profiles: ["bringup"]
     entrypoint: ["/bin/bash", "/scripts/download-bringup.sh"]
     env_file: .env
     volumes:
-      - qwen36-models-dev:/models
+      - qwen36-models:/models
       - ../scripts:/scripts:ro
     restart: "no"
 
@@ -95,17 +125,19 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        BUILD_MODE: ${BUILD_MODE:-git}
+        BUILD_MODE: ${BUILD_MODE:-local}
         LLAMA_REPO: ${LLAMA_REPO:-https://github.com/ikawrakow/ik_llama.cpp.git}
         LLAMA_REF: ${LLAMA_REF:-main}
         CUDA_ARCH: ${CUDA_ARCH:-86}
+      additional_contexts:
+        llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
     image: custom-llama/qwen36-cuda:dev
     container_name: qwen36-model-prep-dev
     profiles: ["prep"]
     entrypoint: ["/bin/bash", "/scripts/prepare-weights.sh"]
     env_file: .env
     volumes:
-      - qwen36-models-dev:/models
+      - qwen36-models:/models
       - ../scripts:/scripts:ro
     deploy:
       resources:
@@ -117,5 +149,12 @@ services:
     restart: "no"
 
 volumes:
-  qwen36-data-dev:
-  qwen36-models-dev:
+  # External: these are the SAME volumes created/owned by the prod stack's
+  # docker-compose.yml (project name "custom-llama"), attached here by their
+  # literal Docker volume name so dev and prod share one copy of the weights.
+  qwen36-data:
+    external: true
+    name: custom-llama_qwen36-data
+  qwen36-models:
+    external: true
+    name: custom-llama_qwen36-models
