@@ -150,6 +150,81 @@ services:
               capabilities: [gpu]
     restart: "no"
 
+  # One-shot: same Phase 2 pipeline as model-prep but running entirely on
+  # CPU — no NVIDIA toolkit or GPU reservation needed.  NGL=0 forces CPU for
+  # the imatrix pass from the start (skips the OOM-fallback path).  imatrix
+  # on CPU is slow (~hours for 200 chunks on a 66 GB BF16 GGUF) but produces
+  # the same output as the GPU path.  Run explicitly:
+  #   docker compose --profile prep-cpu run --rm model-prep-cpu
+  model-prep-cpu:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.cpu
+      args:
+        BUILD_MODE: ${BUILD_MODE:-git}
+        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/JEF1056/ik_llama.cpp.git}
+        LLAMA_REF: ${LLAMA_REF:-ngram-mtp-vision-chain}
+    image: custom-llama/qwen36-cpu:latest
+    container_name: qwen36-model-prep-cpu
+    profiles: ["prep-cpu"]
+    entrypoint: ["/bin/bash", "/scripts/prepare-weights.sh"]
+    env_file: ./docker/.env
+    environment:
+      NGL: "0"
+    volumes:
+      - qwen36-models:/models
+      - ./scripts:/scripts:ro
+    networks:
+      - bonsai-net
+    restart: "no"
+
+  # CPU-only server — same weights volume, no GPU required.
+  # Profile-gated so it doesn't start alongside the GPU server by default:
+  #   docker compose --profile cpu up -d server-cpu
+  #   docker compose --profile cpu up -d --build  # (re-)build first)
+  # Exposes port CPU_PORT (default 8083) directly; the LiteLLM router is NOT
+  # wired to this service by default (the router's CUDA_BACKEND_URL points at
+  # the GPU `server`). To route through LiteLLM, add this as a model in
+  # router/config.yaml and set CUDA_BACKEND_URL accordingly.
+  server-cpu:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.cpu
+      args:
+        BUILD_MODE: ${BUILD_MODE:-git}
+        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/JEF1056/ik_llama.cpp.git}
+        LLAMA_REF: ${LLAMA_REF:-ngram-mtp-vision-chain}
+    image: custom-llama/qwen36-cpu:latest
+    container_name: server-cpu
+    profiles: ["cpu"]
+    env_file: ./docker/.env
+    environment:
+      LLAMA_CACHE: /models
+      # CPU-only: disable GPU-specific features unconditionally.
+      NGL: "0"
+      FLASH_ATTN: "off"
+      KV_HADAMARD: "0"
+      ENABLE_MTP: "0"
+    ports:
+      - "${CPU_PORT:-8083}:8080"
+    volumes:
+      - qwen36-models:/models
+      - qwen36-data:/workspace
+      - ./docker/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+    networks:
+      - bonsai-net
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 300s
+    restart: unless-stopped
+
   router:
     image: ghcr.io/berriai/litellm:main-stable
     container_name: bonsai-router

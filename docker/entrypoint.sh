@@ -23,6 +23,9 @@ PORT=${PORT:-8080}
 # Full GPU offload; the 3090 holds the whole quantized model at the sizes in
 # docs/iqllama-migration-plan.md section 4c/4d.
 NGL=${NGL:-999}
+# Flash attention. GPU-only feature; set to off for CPU-only deployments
+# (the cpu Compose services set FLASH_ATTN=off automatically).
+FLASH_ATTN=${FLASH_ATTN:-on}
 # Context window in tokens. Default = the model's full native 262144. Set
 # CTX=0 to let ik_llama auto-fit context to available VRAM instead.
 CTX=${CTX:-262144}
@@ -171,7 +174,7 @@ SERVER_ARGS=(
     --host 0.0.0.0
     --port "$PORT"
     -ngl "$NGL"
-    -fa on
+    -fa "$FLASH_ATTN"
     --jinja
     --parallel "$N_PARALLEL"
     -ub "$UBATCH_SIZE"

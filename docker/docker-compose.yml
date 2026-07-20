@@ -92,6 +92,52 @@ services:
       start_period: 1800s
     restart: unless-stopped
 
+  # CPU-only server — same weights volume, no GPU required.
+  # Useful on developer laptops or hosts without an NVIDIA GPU.
+  # Profile-gated so it doesn't start alongside the GPU server by default:
+  #   docker compose --profile cpu up -d qwen36-cpu-dev
+  #   docker compose --profile cpu up -d --build  # (re-)build first)
+  # Port defaults to CPU_DEV_PORT (8082) so it can run alongside the GPU dev
+  # server on 8081 if needed.
+  qwen36-cpu-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+      args:
+        BUILD_MODE: ${BUILD_MODE:-local}
+        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/ikawrakow/ik_llama.cpp.git}
+        LLAMA_REF: ${LLAMA_REF:-main}
+      additional_contexts:
+        llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
+    image: custom-llama/qwen36-cpu:dev
+    container_name: qwen36-cpu-dev
+    profiles: ["cpu"]
+    env_file: .env
+    environment:
+      LLAMA_CACHE: /models
+      # CPU-only: disable GPU-specific features unconditionally.
+      NGL: "0"
+      FLASH_ATTN: "off"
+      KV_HADAMARD: "0"
+      ENABLE_MTP: "0"
+    ports:
+      - "${CPU_DEV_PORT:-8082}:8080"
+    volumes:
+      - qwen36-models:/models
+      - qwen36-data:/workspace
+      - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 300s
+    restart: unless-stopped
+
   # One-shot: fetch a single public pre-quantized GGUF + mmproj for fast
   # bring-up (see the prod docker-compose.yml's model-bringup for details).
   #   docker compose --profile bringup run --rm model-bringup-dev
@@ -146,6 +192,33 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    restart: "no"
+
+  # One-shot: same pipeline as model-prep-dev but running entirely on CPU.
+  # No NVIDIA toolkit or GPU reservation needed.  NGL=0 forces CPU for the
+  # imatrix step from the start.  imatrix on CPU is slow but produces the
+  # same output.  Run explicitly:
+  #   docker compose --profile prep-cpu run --rm model-prep-cpu-dev
+  model-prep-cpu-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+      args:
+        BUILD_MODE: ${BUILD_MODE:-local}
+        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/ikawrakow/ik_llama.cpp.git}
+        LLAMA_REF: ${LLAMA_REF:-main}
+      additional_contexts:
+        llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
+    image: custom-llama/qwen36-cpu:dev
+    container_name: qwen36-model-prep-cpu-dev
+    profiles: ["prep-cpu"]
+    entrypoint: ["/bin/bash", "/scripts/prepare-weights.sh"]
+    env_file: .env
+    environment:
+      NGL: "0"
+    volumes:
+      - qwen36-models:/models
+      - ../scripts:/scripts:ro
     restart: "no"
 
 volumes:
