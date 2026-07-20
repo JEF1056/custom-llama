@@ -89,53 +89,165 @@ if [[ ! -f "$IMATRIX" ]]; then
         mkdir -p "$(dirname "$IMATRIX")"
         cp "$BUNDLED_IMATRIX" "$IMATRIX"
     else
-    echo "[quantize] imatrix not found — building from exllamav3 standard corpus..."
+    echo "[quantize] imatrix not found — building corpus..."
 
     _CORPUS_TMPDIR=$(mktemp -d)
     trap 'echo "[quantize] cleaning up corpus tmpdir..."; rm -rf "$_CORPUS_TMPDIR"' EXIT
     export _CORPUS_TMPDIR
 
-    echo "[quantize] downloading exllamav3 standard_cal_data (6 files)..."
+    # ------------------------------------------------------------------
+    # Corpus assembly — three complementary sources:
+    #
+    #   1. bartowski calibration_datav5 (base, ~4 MB):
+    #      General text, code/debug exercises, math word problems,
+    #      narratives, multilingual — the de-facto standard for GGUF
+    #      imatrix across bartowski's entire model library.
+    #
+    #   2. OpenThoughts-114k subset (thinking traces):
+    #      Chain-of-thought reasoning with <think>…</think> blocks from
+    #      open-thoughts/OpenThoughts-114k (public HuggingFace dataset).
+    #      Calibrates the thinking layers that Qwen3 uses heavily.
+    #
+    #   3. glaive-function-calling-v2 subset (tool calling):
+    #      JSON function-call turn pairs from glaiveai/glaive-function-
+    #      calling-v2 (public HuggingFace dataset).  Covers the structured
+    #      output patterns used by tool-call workflows.
+    #
+    # Mix: 60 % bartowski, 25 % thinking, 15 % tool-calling.
+    # Each source is truncated so no single one dominates.
+    # Falls back gracefully: if a HuggingFace fetch fails the remaining
+    # sources still produce a valid corpus.
+    # ------------------------------------------------------------------
+    echo "[quantize] downloading calibration corpus (bartowski v5 + thinking + tool-calling)..."
     python3 - <<'PYEOF'
-import urllib.request, os, random, sys
+import urllib.request, os, random, sys, json, textwrap
 
-tmpdir   = os.environ["_CORPUS_TMPDIR"]
-base_url = ("https://raw.githubusercontent.com/turboderp-org/exllamav3"
-            "/master/exllamav3/conversion/standard_cal_data")
-
-# Weights match calibration_data.py: wiki 50, c4/code 20 each, multi/tech 10
-# each, tiny 5. Random-token rows (weight 20) are skipped for a text corpus.
-files = [
-    ("wiki.utf8",         50),
-    ("c4.utf8",           20),
-    ("code.utf8",         20),
-    ("multilingual.utf8", 10),
-    ("technical.utf8",    10),
-    ("tiny.utf8",          5),
-]
-total_weight = sum(w for _, w in files)
-
-parts = []
-for fname, weight in files:
-    url  = f"{base_url}/{fname}"
-    path = os.path.join(tmpdir, fname)
-    print(f"[quantize]   {fname} (weight {weight}/{total_weight})", flush=True)
-    urllib.request.urlretrieve(url, path)
-    with open(path, "r", encoding="utf-8", errors="replace") as fh:
-        lines = [l for l in fh.read().splitlines() if len(l.strip()) > 30]
-    # Take a proportional slice so no single source dominates
-    n = max(200, int(len(lines) * weight / total_weight))
-    parts.extend(lines[:n])
-
+tmpdir = os.environ["_CORPUS_TMPDIR"]
 random.seed(42)
-random.shuffle(parts)
+parts = {"base": [], "thinking": [], "toolcall": []}
+
+# ── 1. bartowski calibration_datav5 ──────────────────────────────────────────
+BART_URL = (
+    "https://gist.github.com/bartowski1182/82ae9b520227f57d79ba04add13d0d0d"
+    "/raw/ce111d8971a07caebd8234ef336b2102d6c5fb85/calibration_datav5.txt"
+)
+print("[quantize]   source 1/3: bartowski calibration_datav5 ...", flush=True)
+try:
+    path = os.path.join(tmpdir, "bart_v5.txt")
+    urllib.request.urlretrieve(BART_URL, path)
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        lines = [l.strip() for l in fh if len(l.strip()) > 40]
+    # Keep up to 2 400 lines (60 % target share)
+    parts["base"] = lines[:2400]
+    print(f"[quantize]     {len(parts['base'])} lines", flush=True)
+except Exception as exc:
+    print(f"[quantize]   WARNING: bartowski download failed: {exc}", flush=True)
+
+# ── 2. OpenThoughts-114k — thinking traces ────────────────────────────────────
+# Public dataset; fetch via HuggingFace datasets parquet endpoint.
+# Each record has 'conversations': [{role, content}, …].  The assistant turn
+# contains <think>…</think> blocks which are the key calibration signal.
+THINK_URL = (
+    "https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k"
+    "/resolve/main/data/train-00000-of-00006.parquet"
+)
+print("[quantize]   source 2/3: OpenThoughts-114k (thinking traces) ...", flush=True)
+try:
+    import importlib
+    if importlib.util.find_spec("pandas") and importlib.util.find_spec("pyarrow"):
+        import pandas as pd
+        path = os.path.join(tmpdir, "thinking.parquet")
+        urllib.request.urlretrieve(THINK_URL, path)
+        df = pd.read_parquet(path, columns=["conversations"])
+        thinking_lines = []
+        for convs in df["conversations"]:
+            for turn in (convs if isinstance(convs, list) else []):
+                role    = turn.get("role", "") if isinstance(turn, dict) else ""
+                content = turn.get("content", "") if isinstance(turn, dict) else ""
+                if role == "assistant" and "<think>" in content and len(content) > 200:
+                    # Emit a condensed excerpt so one record doesn't flood the corpus
+                    thinking_lines.append(content[:2000])
+                    break
+        random.shuffle(thinking_lines)
+        # Keep up to ~1 000 lines (25 % target share)
+        parts["thinking"] = thinking_lines[:1000]
+        print(f"[quantize]     {len(parts['thinking'])} thinking traces", flush=True)
+    else:
+        # Fall back: install pandas+pyarrow transiently
+        import subprocess
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "-q", "pandas", "pyarrow"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        import pandas as pd
+        path = os.path.join(tmpdir, "thinking.parquet")
+        urllib.request.urlretrieve(THINK_URL, path)
+        df = pd.read_parquet(path, columns=["conversations"])
+        thinking_lines = []
+        for convs in df["conversations"]:
+            for turn in (convs if isinstance(convs, list) else []):
+                role    = turn.get("role", "") if isinstance(turn, dict) else ""
+                content = turn.get("content", "") if isinstance(turn, dict) else ""
+                if role == "assistant" and "<think>" in content and len(content) > 200:
+                    thinking_lines.append(content[:2000])
+                    break
+        random.shuffle(thinking_lines)
+        parts["thinking"] = thinking_lines[:1000]
+        print(f"[quantize]     {len(parts['thinking'])} thinking traces", flush=True)
+except Exception as exc:
+    print(f"[quantize]   WARNING: thinking corpus failed: {exc}", flush=True)
+
+# ── 3. glaive-function-calling-v2 — tool-call turns ──────────────────────────
+# Public dataset; JSONL format.  Each record has 'chat' field containing
+# a conversation with function-call and result turns in chatml format.
+GLAIVE_URL = (
+    "https://huggingface.co/datasets/glaiveai/glaive-function-calling-v2"
+    "/resolve/main/data/train-00000-of-00001-5b71c9e9688399b7.parquet"
+)
+print("[quantize]   source 3/3: glaive function-calling v2 (tool calls) ...", flush=True)
+try:
+    import importlib
+    if not importlib.util.find_spec("pandas"):
+        import subprocess
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "-q", "pandas", "pyarrow"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    import pandas as pd
+    path = os.path.join(tmpdir, "glaive.parquet")
+    urllib.request.urlretrieve(GLAIVE_URL, path)
+    df = pd.read_parquet(path, columns=["chat"])
+    tool_lines = []
+    for chat in df["chat"]:
+        if isinstance(chat, str) and len(chat) > 100:
+            # Each chat is a full multi-turn conversation string; take a slice
+            tool_lines.append(chat[:3000])
+    random.shuffle(tool_lines)
+    # Keep up to ~600 lines (15 % target share)
+    parts["toolcall"] = tool_lines[:600]
+    print(f"[quantize]     {len(parts['toolcall'])} tool-call conversations", flush=True)
+except Exception as exc:
+    print(f"[quantize]   WARNING: tool-call corpus failed: {exc}", flush=True)
+
+# ── Merge, shuffle, write ─────────────────────────────────────────────────────
+all_lines = parts["base"] + parts["thinking"] + parts["toolcall"]
+if not all_lines:
+    print("[quantize] ERROR: all corpus sources failed — cannot build imatrix", flush=True)
+    sys.exit(1)
+
+random.shuffle(all_lines)
 
 out = os.path.join(tmpdir, "corpus.txt")
 with open(out, "w", encoding="utf-8") as fh:
-    fh.write("\n".join(parts))
+    fh.write("\n".join(all_lines))
+
 mb = os.path.getsize(out) / 1024 / 1024
-print(f"[quantize] corpus assembled: {out} ({mb:.1f} MB, {len(parts)} lines)",
-      flush=True)
+print(
+    f"[quantize] corpus assembled: {out} ({mb:.1f} MB, {len(all_lines)} lines) "
+    f"[base={len(parts['base'])} thinking={len(parts['thinking'])} "
+    f"toolcall={len(parts['toolcall'])}]",
+    flush=True,
+)
 PYEOF
 
     mkdir -p "$(dirname "$IMATRIX")"
