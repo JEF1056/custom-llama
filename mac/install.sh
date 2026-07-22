@@ -106,11 +106,11 @@ source "$VENV_DIR/bin/activate"
 log "Upgrading pip..."
 pip install --upgrade pip setuptools wheel
 
-log "Installing MLX stack (mlx-kquant, mlx-lm[torch], mlx-vlm[torch])..."
-pip install mlx-kquant "mlx-lm[torch]" "mlx-vlm[torch]"
+log "Installing MLX stack (mlx-lm[torch], mlx-vlm[torch])..."
+pip install "mlx-lm[torch]" "mlx-vlm[torch]"
 
-# Pin MLX version compatible with mlx-kquant
-log "Pinning mlx==0.31.2 (compatible with mlx-kquant)..."
+# Pin MLX version
+log "Pinning mlx==0.31.2..."
 pip install "mlx==0.31.2"
 
 log "MLX stack installed successfully."
@@ -169,29 +169,24 @@ else
     log "MLX FP16 safetensors already exist at $MLX_FP16_DIR, skipping conversion."
 fi
 
-# ---- Quantize with K-quant policy --------------------------------------------
+# ---- Quantize with custom affine quantization ----------------------------------
+# Uses mlx-lm's built-in affine quantization with a custom preset matching
+# the K-quant recipe: edge experts Q4, middle experts Q3, attention Q5,
+# shared expert Q8, router/embed/lm_head at higher precision.
 QUANTIZED_DIR="$MODEL_PATH"
 
 if [[ ! -d "$QUANTIZED_DIR" ]]; then
-    log "Running K-quant quantization..."
-
-    # Ensure the quantize script exists
-    QUANTIZE_SCRIPT="$CL_DIR/scripts/quantize-mlx.sh"
-    if [[ -d "$CL_DIR" ]]; then
-        QUANTIZE_SCRIPT="$CL_DIR/scripts/quantize-mlx.sh"
-    else
-        QUANTIZE_SCRIPT="./scripts/quantize-mlx.sh"
-    fi
+    log "Running custom affine quantization..."
 
     # Clone custom-llama repo if not present (for the quantize script)
-    if [[ ! -d "$CL_DIR/.git" ]]; then
+    if [[ ! -d "$CL_DIR" ]]; then
         log "Cloning custom-llama repo..."
         git clone "$CUSTOM_LLAMA_REPO" "$CL_DIR"
         git -C "$CL_DIR" checkout "$CUSTOM_LLAMA_REF" 2>/dev/null || true
     fi
 
-    # Run quantization
-    bash "$QUANTIZE_SCRIPT" \
+    # Run quantization using mlx-lm's built-in quantize with custom preset
+    python3 "$CL_DIR/scripts/quantize-mlx.sh" \
         --input "$MLX_FP16_DIR" \
         --output "$QUANTIZED_DIR" \
         --kv-bits "$MLX_KV_BITS"
