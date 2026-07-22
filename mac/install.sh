@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 #
-# One-line installer for the Bonsai-27B MLX server on a MacBook
-# (Apple Silicon). Installs the model, then a LaunchAgent that starts the
-# server at login and auto-restarts it on crash (KeepAlive).
+# One-line installer for the Qwen3.6-35B-A3B MLX VLM server on a MacBook
+# (Apple Silicon). Downloads the BF16 GGUF from HF, converts to MLX FP16
+# safetensors, applies K-quant quantization, then installs a LaunchAgent that
+# starts the server at login and auto-restarts it on crash (KeepAlive).
 #
 # Usage (from a GitHub raw URL):
 #   curl -fsSL https://raw.githubusercontent.com/YOURUSER/custom-llama/main/mac/install.sh \
-#     | BONSAI_TOKEN=hf_xxx bash
+#     | bash
 #
-# Vision: enabled by default (ENABLE_VISION=1). On Apple Silicon that requires
-# the ternary (2-bit) 27B MLX build (via mlx-vlm); the 1-bit MLX build is
-# text-only, so pass ENABLE_VISION=0 for the leaner 1-bit text-only build.
+# Key env vars:
+#   HF_TOKEN        — HuggingFace read token (required for model download)
+#   MLX_PORT        — Server port (default: 8081)
+#   MLX_KV_BITS     — KV cache quantization bits (default: 4)
+#   MODEL_PATH      — Custom model path (default: ~/.qwen/models/qwen36-mlx/quantized)
+#   HF_REPO         — HF repo ID for the GGUF (default: llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF)
 #
 # DSpark speculative decoding is intentionally OFF on Apple Silicon: at batch 1
 # the verification pass does not amortize yet, so it is not a speedup here.
@@ -19,28 +23,34 @@ set -euo pipefail
 # ---- Config (override via env) ----------------------------------------------
 CUSTOM_LLAMA_REPO=${CUSTOM_LLAMA_REPO:-https://github.com/YOURUSER/custom-llama.git}
 CUSTOM_LLAMA_REF=${CUSTOM_LLAMA_REF:-main}
-DEMO_REPO=${DEMO_REPO:-https://github.com/PrismML-Eng/Bonsai-demo.git}
-BONSAI_HOME=${BONSAI_HOME:-$HOME/.bonsai}
+QWEN_HOME=${QWEN_HOME:-$HOME/.qwen}
 MLX_PORT=${MLX_PORT:-8081}
+MLX_KV_BITS=${MLX_KV_BITS:-4}
+MODEL_PATH=${MODEL_PATH:-$QWEN_HOME/models/qwen36-mlx/quantized}
+HF_REPO=${HF_REPO:-llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF}
+HF_GGUF_FILE=${HF_GGUF_FILE:-Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-bf16.gguf}
+VENV_NAME=${VENV_NAME:-mlx-venv}
 
-LABEL=com.custom-llama.bonsai-mlx
+LABEL=com.custom-llama.qwen36-mlx
 PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
-CL_DIR="$BONSAI_HOME/custom-llama"
-DEMO_DIR="$BONSAI_HOME/Bonsai-demo"
+CL_DIR="$QWEN_HOME/custom-llama"
+VENV_DIR="$QWEN_HOME/$VENV_NAME"
+MODELS_DIR="$QWEN_HOME/models"
 
-log() { printf '\033[1;32m[bonsai]\033[0m %s\n' "$*"; }
-err() { printf '\033[1;31m[bonsai]\033[0m %s\n' "$*" >&2; }
+log() { printf '\033[1;32m[qwen36]\033[0m %s\n' "$*"; }
+err() { printf '\033[1;31m[qwen36]\033[0m %s\n' "$*" >&2; }
 
 # ---- Preconditions ----------------------------------------------------------
 [[ "$(uname -s)" == "Darwin" ]] || { err "macOS only."; exit 1; }
 [[ "$(uname -m)" == "arm64" ]]  || { err "Apple Silicon required for MLX."; exit 1; }
 
-if [[ -z "${BONSAI_TOKEN:-}" ]]; then
-    err "BONSAI_TOKEN is required (HF read token; the Bonsai-27B repos are private)."
-    err "Re-run:  curl -fsSL <url>/mac/install.sh | BONSAI_TOKEN=hf_xxx bash"
-    exit 1
+if [[ -n "${HF_TOKEN:-}" ]]; then
+    log "Using HF_TOKEN for authenticated downloads."
+else
+    log "No HF_TOKEN set; using anonymous downloads (public repos only)."
 fi
 
+# ---- Xcode CLT check --------------------------------------------------------
 if ! xcode-select -p >/dev/null 2>&1; then
     log "Installing Xcode Command Line Tools..."
     xcode-select --install || true
@@ -48,24 +58,123 @@ if ! xcode-select -p >/dev/null 2>&1; then
     exit 1
 fi
 
-mkdir -p "$BONSAI_HOME" "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
+# ---- Create directories ------------------------------------------------------
+mkdir -p "$QWEN_HOME" "$HOME/Library/LaunchAgents" "$HOME/Library/Logs" "$MODELS_DIR"
 
-# ---- Vision family selection ------------------------------------------------
-# Image input on Apple Silicon requires the ternary (2-bit) 27B MLX build served
-# via mlx-vlm; the 1-bit MLX build is text-only. ENABLE_VISION=1 provisions the
-# ternary model + mlx-vlm venv so vision works at runtime, and is baked into the
-# LaunchAgent so run-mlx-server.sh serves it.
-case "${ENABLE_VISION:-1}" in
-    0|false|no|off) ENABLE_VISION=0 ;;
-    *)              ENABLE_VISION=1 ;;
-esac
-if [[ "$ENABLE_VISION" == "1" ]]; then
-    SETUP_FAMILY=ternary
-    SETUP_MLX_VLM=1
-    log "Vision enabled: provisioning the ternary 2-bit 27B MLX build + mlx-vlm (the 1-bit MLX build is text-only)."
+# ---- Python + venv setup ----------------------------------------------------
+if ! command -v python3 &>/dev/null; then
+    err "python3 not found. Install Python 3.11+ before running."
+    exit 1
+fi
+
+PYTHON_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+log "Python version: $PYTHON_VER"
+
+if [[ ! -d "$VENV_DIR" ]]; then
+    log "Creating virtual environment at $VENV_DIR..."
+    python3 -m venv "$VENV_DIR"
+fi
+
+# shellcheck disable=SC1091
+source "$VENV_DIR/bin/activate"
+
+# Upgrade pip first, then install MLX stack
+log "Upgrading pip..."
+pip install --upgrade pip setuptools wheel
+
+log "Installing MLX stack (mlx-kquant, mlx-lm[torch], mlx-vlm[torch])..."
+pip install mlx-kquant "mlx-lm[torch]" "mlx-vlm[torch]"
+
+# Pin MLX version compatible with mlx-kquant
+log "Pinning mlx==0.31.2 (compatible with mlx-kquant)..."
+pip install "mlx==0.31.2"
+
+log "MLX stack installed successfully."
+
+# ---- Download BF16 GGUF from HuggingFace ------------------------------------
+GGUF_DST="$MODELS_DIR/$HF_GGUF_FILE"
+
+if [[ ! -f "$GGUF_DST" ]]; then
+    log "Downloading BF16 GGUF from HF repo: $HF_REPO"
+    log "File: $HF_GGUF_FILE"
+
+    # Use huggingface-cli to download the GGUF file
+    if ! command -v huggingface-cli &>/dev/null; then
+        log "Installing huggingface-cli..."
+        pip install huggingface-cli
+    fi
+
+    log "Downloading model files..."
+    if [[ -n "${HF_TOKEN:-}" ]]; then
+        huggingface-cli download \
+            --token "$HF_TOKEN" \
+            "$HF_REPO" \
+            "$HF_GGUF_FILE" \
+            --local-dir "$MODELS_DIR" \
+            --local-dir-use-symlinks false
+    else
+        huggingface-cli download \
+            "$HF_REPO" \
+            "$HF_GGUF_FILE" \
+            --local-dir "$MODELS_DIR" \
+            --local-dir-use-symlinks false
+    fi
+
+    if [[ ! -f "$GGUF_DST" ]]; then
+        err "Download failed: $GGUF_DST not found."
+        exit 1
+    fi
+    log "Downloaded: $GGUF_DST"
 else
-    SETUP_FAMILY=bonsai
-    SETUP_MLX_VLM=0
+    log "GGUF already exists at $GGUF_DST, skipping download."
+fi
+
+# ---- Convert BF16 GGUF to MLX FP16 safetensors --------------------------------
+MLX_FP16_DIR="$MODELS_DIR/qwen36-mlx"
+
+if [[ ! -d "$MLX_FP16_DIR" ]]; then
+    log "Converting GGUF to MLX FP16 safetensors..."
+    mkdir -p "$MLX_FP16_DIR"
+
+    python3 -m mlx_lm.convert \
+        --model "$GGUF_DST" \
+        --mlx-path "$MLX_FP16_DIR"
+
+    log "Conversion complete: $MLX_FP16_DIR"
+else
+    log "MLX FP16 safetensors already exist at $MLX_FP16_DIR, skipping conversion."
+fi
+
+# ---- Quantize with K-quant policy --------------------------------------------
+QUANTIZED_DIR="$MODEL_PATH"
+
+if [[ ! -d "$QUANTIZED_DIR" ]]; then
+    log "Running K-quant quantization..."
+
+    # Ensure the quantize script exists
+    QUANTIZE_SCRIPT="$CL_DIR/scripts/quantize-mlx.sh"
+    if [[ -d "$CL_DIR" ]]; then
+        QUANTIZE_SCRIPT="$CL_DIR/scripts/quantize-mlx.sh"
+    else
+        QUANTIZE_SCRIPT="./scripts/quantize-mlx.sh"
+    fi
+
+    # Clone custom-llama repo if not present (for the quantize script)
+    if [[ ! -d "$CL_DIR/.git" ]]; then
+        log "Cloning custom-llama repo..."
+        git clone "$CUSTOM_LLAMA_REPO" "$CL_DIR"
+        git -C "$CL_DIR" checkout "$CUSTOM_LLAMA_REF" 2>/dev/null || true
+    fi
+
+    # Run quantization
+    bash "$QUANTIZE_SCRIPT" \
+        --input "$MLX_FP16_DIR" \
+        --output "$QUANTIZED_DIR" \
+        --kv-bits "$MLX_KV_BITS"
+
+    log "Quantization complete: $QUANTIZED_DIR"
+else
+    log "Quantized model already exists at $QUANTIZED_DIR, skipping quantization."
 fi
 
 # ---- Fetch our wrappers + plist (this repo) ---------------------------------
@@ -80,31 +189,22 @@ else
     git -C "$CL_DIR" checkout "$CUSTOM_LLAMA_REF" 2>/dev/null || true
 fi
 
-# ---- Fetch Bonsai-demo and run setup (MLX 27B) ------------------------------
-if [[ ! -d "$DEMO_DIR/.git" ]]; then
-    log "Cloning Bonsai-demo..."
-    git clone "$DEMO_REPO" "$DEMO_DIR"
-fi
-
-log "Running Bonsai-demo setup (MLX, family=$SETUP_FAMILY 27B). Downloads several GB and builds the MLX fork..."
-(
-    cd "$DEMO_DIR"
-    BONSAI_FAMILY="$SETUP_FAMILY" \
-    BONSAI_MODEL=27B \
-    BONSAI_MLX_VLM="$SETUP_MLX_VLM" \
-    BONSAI_OPENWEBUI=0 \
-    BONSAI_CODE_INTERPRETER=0 \
-    BONSAI_TOKEN="$BONSAI_TOKEN" \
-    ./setup.sh
-)
-
 # ---- Render + install the LaunchAgent ---------------------------------------
 log "Installing LaunchAgent ($LABEL)..."
-sed -e "s|__REPO__|$CL_DIR|g" \
-    -e "s|__HOME__|$HOME|g" \
-    -e "s|__MLX_PORT__|$MLX_PORT|g" \
-    -e "s|__ENABLE_VISION__|$ENABLE_VISION|g" \
-    "$CL_DIR/mac/com.custom-llama.bonsai-mlx.plist.template" > "$PLIST_DST"
+# Escape & and \ for sed safety (paths may contain these characters)
+sed_escape() { printf '%s\n' "$1" | sed 's/[&\\/|]/\\&/g'; }
+CL_DIR_ESC=$(sed_escape "$CL_DIR")
+HOME_ESC=$(sed_escape "$HOME")
+MLX_PORT_ESC=$(sed_escape "$MLX_PORT")
+MODEL_PATH_ESC=$(sed_escape "$MODEL_PATH")
+VENV_BIN_ESC=$(sed_escape "$VENV_DIR/bin")
+
+sed -e "s|__REPO__|$CL_DIR_ESC|g" \
+    -e "s|__HOME__|$HOME_ESC|g" \
+    -e "s|__MLX_PORT__|$MLX_PORT_ESC|g" \
+    -e "s|__MODEL_PATH__|$MODEL_PATH_ESC|g" \
+    -e "s|__VENV_BIN__|$VENV_BIN_ESC|g" \
+    "$CL_DIR/mac/com.custom-llama.qwen36-mlx.plist.template" > "$PLIST_DST"
 
 # (Re)load cleanly.
 launchctl bootout   "gui/$(id -u)/$LABEL" 2>/dev/null || true
@@ -114,5 +214,6 @@ launchctl kickstart -k "gui/$(id -u)/$LABEL" || true
 
 log "Done."
 log "MLX server: http://localhost:$MLX_PORT/v1  (auto-starts at login, auto-restarts on crash)"
-log "Logs: ~/Library/Logs/bonsai-mlx.out.log  and  ~/Library/Logs/bonsai-mlx.err.log"
+log "Logs: ~/Library/Logs/qwen36-mlx.out.log  and  ~/Library/Logs/qwen36-mlx.err.log"
+log "Model: $QUANTIZED_DIR"
 log "Uninstall: bash $CL_DIR/mac/uninstall.sh"

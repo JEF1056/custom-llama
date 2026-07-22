@@ -30,7 +30,7 @@
 # First run:
 #   docker compose up -d --build
 #
-# The CUDA server and router share the bonsai-net bridge network. The router
+# The CUDA server and router share the qwen-net bridge network. The router
 # reaches the CUDA server at http://server:8080/v1 without exposing any
 # additional host ports. The router waits for the CUDA server to be healthy
 # before starting (depends_on + condition: service_healthy).
@@ -63,7 +63,7 @@ services:
       - qwen36-data:/workspace
       - ./docker/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
     networks:
-      - bonsai-net
+      - qwen-net
     # Raises the locked-memory ceiling so --mlock (docker/.env's USE_MLOCK=1)
     # can actually lock the model into RAM if enabled; harmless/no-op if
     # USE_MLOCK stays at its default of 0.
@@ -112,7 +112,7 @@ services:
       - qwen36-models:/models
       - ./scripts:/scripts:ro
     networks:
-      - bonsai-net
+      - qwen-net
     restart: "no"
 
   # One-shot job: the full Phase 2 pipeline (download Unsloth BF16 shards ->
@@ -139,7 +139,7 @@ services:
       - qwen36-models:/models
       - ./scripts:/scripts:ro
     networks:
-      - bonsai-net
+      - qwen-net
     deploy:
       resources:
         reservations:
@@ -173,7 +173,7 @@ services:
       - qwen36-models:/models
       - ./scripts:/scripts:ro
     networks:
-      - bonsai-net
+      - qwen-net
     restart: "no"
 
   # CPU-only server — same weights volume, no GPU required.
@@ -210,7 +210,7 @@ services:
       - qwen36-data:/workspace
       - ./docker/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
     networks:
-      - bonsai-net
+      - qwen-net
     ulimits:
       memlock:
         soft: -1
@@ -225,20 +225,20 @@ services:
 
   router:
     image: ghcr.io/berriai/litellm:main-stable
-    container_name: bonsai-router
+    container_name: qwen-router
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     ports:
       - "${ROUTER_PORT:-4000}:4000"
     env_file: ./router/.env
     environment:
       # Override CUDA_BACKEND_URL to use the Docker service name so the router
-      # reaches the CUDA server over the shared bonsai-net bridge without
+      # reaches the CUDA server over the shared qwen-net bridge without
       # requiring the host IP to be set in router/.env.
       CUDA_BACKEND_URL: http://server:8080/v1
     volumes:
       - ./router/config.yaml:/app/config.yaml:ro
     networks:
-      - bonsai-net
+      - qwen-net
     depends_on:
       server:
         condition: service_healthy
@@ -265,7 +265,7 @@ services:
     volumes:
       - crawler_storage:/app/storage
     networks:
-      - bonsai-net
+      - qwen-net
 
   flaresolverr:
     image: 21hsmw/flaresolverr:nodriver
@@ -275,10 +275,10 @@ services:
       - LOG_LEVEL=info
       - TZ=UTC
     networks:
-      - bonsai-net
+      - qwen-net
 
 networks:
-  bonsai-net:
+  qwen-net:
     driver: bridge
 
 volumes:

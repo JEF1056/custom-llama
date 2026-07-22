@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  LaunchAgent for the Bonsai-27B (1-bit) MLX server.
-  Placeholders (__REPO__, __HOME__, __MLX_PORT__) are filled in by install.sh.
+  LaunchAgent for the Qwen3.6-35B-A3B MLX VLM server.
+  Placeholders (__REPO__, __HOME__, __MLX_PORT__, __MODEL_PATH__) are filled in by install.sh.
   RunAtLoad starts it at login; KeepAlive restarts it if it ever exits.
 -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.custom-llama.bonsai-mlx</string>
+    <string>com.custom-llama.qwen36-mlx</string>
 
     <key>ProgramArguments</key>
     <array>
@@ -20,14 +20,14 @@
     <dict>
         <key>HOME</key>
         <string>__HOME__</string>
-        <key>BONSAI_HOME</key>
-        <string>__HOME__/.bonsai</string>
+        <key>QWEN_HOME</key>
+        <string>__HOME__/.qwen</string>
         <key>MLX_PORT</key>
         <string>__MLX_PORT__</string>
-        <key>ENABLE_VISION</key>
-        <string>__ENABLE_VISION__</string>
+        <key>MODEL_PATH</key>
+        <string>__MODEL_PATH__</string>
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>__VENV_BIN__:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
 
     <key>RunAtLoad</key>
@@ -40,9 +40,9 @@
     <integer>10</integer>
 
     <key>StandardOutPath</key>
-    <string>__HOME__/Library/Logs/bonsai-mlx.out.log</string>
+    <string>__HOME__/Library/Logs/qwen36-mlx.out.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/Library/Logs/bonsai-mlx.err.log</string>
+    <string>__HOME__/Library/Logs/qwen36-mlx.err.log</string>
 
     <key>ProcessType</key>
     <string>Interactive</string>

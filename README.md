@@ -112,19 +112,19 @@ The CUDA server requires an NVIDIA GPU. For MacBooks with Apple Silicon, use the
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/YOURUSER/custom-llama/main/mac/install.sh \
-  | BONSAI_TOKEN=hf_xxx bash
+  | HF_TOKEN=hf_xxx bash
 ```
 
-Replace `YOURUSER` with your GitHub account and `hf_xxx` with your Hugging Face read token (required — Bonsai-27B repos are private).
+Replace `YOURUSER` with your GitHub account and `hf_xxx` with your Hugging Face read token.
 
 This installs:
-- The MLX model (ternary 2-bit for vision, or 1-bit text-only)
+- The MLX model (Qwen3.6-35B-A3B with native vision)
 - A **LaunchAgent** that starts the server at login and auto-restarts on crash
 
 **After install:**
 - **Server:** `http://localhost:8081/v1`
-- **Logs:** `~/Library/Logs/bonsai-mlx.out.log` / `.err.log`
-- **Uninstall:** `bash ~/.bonsai/custom-llama/mac/uninstall.sh`
+- **Logs:** `~/Library/Logs/qwen36-mlx.out.log` / `.err.log`
+- **Uninstall:** `bash ~/.qwen/custom-llama/mac/uninstall.sh`
 
 ---
 

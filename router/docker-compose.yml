@@ -11,7 +11,7 @@
 services:
   litellm:
     image: ghcr.io/berriai/litellm:main-stable
-    container_name: bonsai-router
+    container_name: qwen-router
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     ports:
       - "4000:4000"

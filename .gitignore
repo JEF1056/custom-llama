@@ -1,4 +1,4 @@
-# Local env files hold secrets (BONSAI_TOKEN); never commit them.
+# Local env files hold secrets (HF_TOKEN, LITELLM_MASTER_KEY); never commit them.
 .env
 *.env
 !.env.example

@@ -1,4 +1,4 @@
-# Migration plan: ditch 1-bit Bonsai, serve Qwen3.6-35B-A3B on stock ik_llama.cpp
+# Migration plan: ditch 1-bit Qwen3.6-27B, serve Qwen3.6-35B-A3B on stock ik_llama.cpp
 
 Status: **IMPLEMENTED (Phases 1, 3, 4, 5 as code; Phase 2 as scripts; Phases 6-7
 run against a bring-up quant on real hardware — see
@@ -113,7 +113,7 @@ from raw HF safetensors via a from-scratch converter.
 
 ## 1. Goal
 
-Replace the current Bonsai-27B (1-bit, TurboQuant+ fork + DSpark) stack with:
+Replace the current Qwen3.6-27B (1-bit, TurboQuant+ fork + DSpark) stack with:
 
 - **Stock `ik_llama.cpp`** (ikawrakow/ik_llama.cpp, `main`) as the only inference engine.
 - **`Qwen/Qwen3.6-35B-A3B`** (hybrid MoE: gated delta-net + attention, with MTP heads),
@@ -344,7 +344,7 @@ this trades a tiny wikitext-PPL increase for better downstream accuracy and lowe
     `llama-server`, `llama-quantize`, `llama-imatrix`.
   - CUDA 12.x base (ik_llama's supported/tested CUDA line) — verify vs the `cu12` images.
 - Update `docker/docker-compose.yml` and root `docker-compose.yml`: image/service names
-  (`bonsai-cuda` -> `qwen36-cuda` or similar), build args.
+  (`qwen36-cuda` or similar), build args.
 
 ### Phase 2 — Weights pipeline (source: Unsloth's pre-converted GGUF, per section 0 item 4 — not a from-scratch HF conversion)
 - Add `scripts/` (in custom-llama) to:
@@ -403,7 +403,7 @@ this trades a tiny wikitext-PPL increase for better downstream accuracy and lowe
     force matmuls onto the CPU (repacked k-quants have no CUDA row-interleaved kernel) ->
     slower prefill. Keep the non-interleaved CUDA quants (`iq4_ks`/`iq3_k`/...) and full
     `-ngl`. (`-rtr` would only make sense in a CPU/hybrid `-ot ...exps=CPU` config.)
-- Rewrite `docker/.env` + `docker/.env.example`: drop all DSpark/Bonsai knobs; add
+- Rewrite `docker/.env` + `docker/.env.example`: drop all DSpark/Qwen3.6-27B knobs; add
   `HF_REPO`, `HF_FILE`, `MMPROJ_FILE`, `KV_TYPE(_K/_V)`, `KV_HADAMARD`, `ENABLE_MTP`,
   `ENABLE_VISION`, `CTX`, `CACHE_RAM_MIB`, `N_PARALLEL`, sampling.
 
@@ -412,7 +412,7 @@ this trades a tiny wikitext-PPL increase for better downstream accuracy and lowe
   actual tensor list); parameterize `NUM_LAYERS` and edge width.
 
 ### Phase 5 — Router & docs
-- `router/config.yaml`: rename `bonsai-27b` -> `qwen3.6-35b` (keep CUDA + Mac deployments,
+- `router/config.yaml`: rename `qwen3.6-27b` -> `qwen3.6-35b` (keep CUDA + Mac deployments,
   latency routing). Keep LiteLLM (native router skipped per req 9).
 - Rewrite `README.md` for the new stack; keep `docs/dspark-integration-plan.md` as history.
 
@@ -502,5 +502,5 @@ this trades a tiny wikitext-PPL increase for better downstream accuracy and lowe
 
 ## 7. Explicitly out of scope / dropped
 
-- 1-bit Bonsai (Q1_0), the TurboQuant+ fork, DSpark drafter, and all DSpark env/flags.
+- 1-bit Qwen3.6-27B (Q1_0), the TurboQuant+ fork, DSpark drafter, and all DSpark env/flags.
 - Native `llama.cpp` router `.ini` mode (not in ik_llama; requirement 9 skipped).
