@@ -249,6 +249,34 @@ services:
       retries: 5
     restart: unless-stopped
 
+  websearch-crawler:
+    image: laituanmanh/websearch-crawler:latest
+    container_name: websearch-api
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - LOG_LEVEL=info
+      - FLARESOLVERR_URL=http://flaresolverr:8191/v1
+    depends_on:
+      - flaresolverr
+    volumes:
+      - crawler_storage:/app/storage
+    networks:
+      - bonsai-net
+
+  flaresolverr:
+    image: 21hsmw/flaresolverr:nodriver
+    container_name: flaresolverr
+    restart: unless-stopped
+    environment:
+      - LOG_LEVEL=info
+      - TZ=UTC
+    networks:
+      - bonsai-net
+
 networks:
   bonsai-net:
     driver: bridge
@@ -256,3 +284,4 @@ networks:
 volumes:
   qwen36-data:
   qwen36-models:
+  crawler_storage:

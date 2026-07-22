@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Benchmark short-context and long-context (130k+ token) generation across a
-few different prompt "types" (code, creative writing, Q&A/factual, and
-document summarization) against a running llama-server instance.
+"""Benchmark short-context and long-context (130k+ token) generation across
+prompt types (code, creative, QA, summarization) against a llama-server.
 
-Usage:
-    python3 bench_prompt_types.py [--base http://localhost:8081] [--long] [--short]
+Usage: python3 bench_prompt_types.py [--base http://localhost:8081] [--long] [--short]
 """
 import argparse
 import json
@@ -105,8 +103,7 @@ PROMPT_TYPES = {
     },
 }
 
-LONG_TARGET_CHARS = 750000  # sized to clear 130k+ tokens even for low
-                             # tokens-per-char prose (summarization/qa/creative)
+LONG_TARGET_CHARS = 750000  # ~130k+ tokens even for low tokens-per-char prose
 
 
 def post(base, path, payload, timeout=3600):

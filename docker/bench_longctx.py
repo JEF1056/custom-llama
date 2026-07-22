@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Long-context benchmark: sends a ~130k-token prompt and reports timings."""
 import json, time, urllib.request
 
 BASE = "http://localhost:8080"
@@ -26,7 +27,7 @@ while sum(len(c) for c in chunks) < 520000:  # ~130k tokens of English
     i += 1
 prompt = "".join(chunks) + "\n\nBriefly summarize the passage above in one sentence."
 
-# Exact token count from the server tokenizer.
+# Token count from the server tokenizer.
 tok = post("/tokenize", {"content": prompt})
 n_tok = len(tok["tokens"]) if isinstance(tok, dict) else len(tok)
 print(f"prompt tokens = {n_tok}")

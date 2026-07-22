@@ -13,9 +13,9 @@
 # idempotent: curl -C - resumes/no-ops on an already-complete file.
 set -euo pipefail
 
-HF_REPO=${HF_REPO:-unsloth/Qwen3.6-35B-A3B-GGUF}
-BRINGUP_FILE=${BRINGUP_FILE:-Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf}
-MMPROJ_SRC_FILE=${MMPROJ_SRC_FILE:-mmproj-BF16.gguf}
+HF_REPO=${HF_REPO:-llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF}
+BRINGUP_FILE=${BRINGUP_FILE:-Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q4_K_M.gguf}
+MMPROJ_SRC_FILE=${MMPROJ_SRC_FILE:-Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-mmproj-BF16.gguf}
 DEST_DIR=${DEST_DIR:-/models}
 GGUF_FILE=${GGUF_FILE:-qwen36-bringup.gguf}
 MMPROJ_FILE=${MMPROJ_FILE:-mmproj-BF16.gguf}

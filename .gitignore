@@ -2,3 +2,8 @@
 .env
 *.env
 !.env.example
+.agents/
+
+# Python bytecode
+__pycache__/
+*.pyc

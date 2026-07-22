@@ -126,10 +126,7 @@ if [[ -n "$REPETITION_CONTEXT_SIZE" ]]; then
     SAMPLING_ARGS="$SAMPLING_ARGS --repetition-context-size $REPETITION_CONTEXT_SIZE"
 fi
 
-# start_mlx_server.sh forwards extra args to the MLX server.
-exec ./scripts/start_mlx_server.sh \
-    --host "$MLX_HOST" \
-    --port "$MLX_PORT" \
-    ${KV_BITS_ARG} \
-    ${SAMPLING_ARGS} \
-    ${EXTRA_ARGS:-}
+# start_mlx_server.sh was removed; update this script to invoke the MLX server directly.
+# TODO: Replace with the actual MLX server invocation, e.g.:
+# python3 -m mlx_lm.server --host "$MLX_HOST" --port "$MLX_PORT" \
+#     ${KV_BITS_ARG} ${SAMPLING_ARGS} ${EXTRA_ARGS:-}

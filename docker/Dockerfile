@@ -106,12 +106,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         python3 \
         python3-pip \
-    && pip3 install --no-cache-dir --break-system-packages 'huggingface_hub[cli]' \
+    && pip3 install --no-cache-dir --break-system-packages 'huggingface_hub[cli]' numpy \
     && rm -rf /var/lib/apt/lists/*
 
 # Server binary + quantize/imatrix tools (used by scripts/ for the offline
 # weights pipeline) + all ggml/llama shared objects, kept together.
 COPY --from=build /src/build/bin/ /opt/iqllama/bin/
+# GGUF imatrix converter — needed to convert Unsloth's GGUF-format imatrix to
+# the binary DAT format expected by ik_llama.cpp's llama-quantize --imatrix.
+COPY --from=build /src/convert_imatrix_gguf_to_dat.py /opt/iqllama/
+# Fix 1: counts[0] on a 0-d array raises TypeError; flat[0] works for any shape.
+# Fix 2: len(entry.values) returns only the first dim for MoE tensors; .size gives total elements.
+RUN sed -i \
+    -e 's/entry\.counts\[0\]/entry.counts.flat[0]/' \
+    -e 's/len(entry\.values)/entry.values.size/' \
+    /opt/iqllama/convert_imatrix_gguf_to_dat.py
+COPY --from=build /src/gguf-py/ /opt/iqllama/gguf-py/
 ENV PATH="/opt/iqllama/bin:${PATH}" \
     LD_LIBRARY_PATH="/opt/iqllama/bin"
 

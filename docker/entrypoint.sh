@@ -50,86 +50,56 @@ CACHE_RAM_MIB=${CACHE_RAM_MIB:-8192}
 # 100K+ context); raise it only for concurrent serving of shorter sequences.
 N_PARALLEL=${N_PARALLEL:-1}
 
-# Model-loading memory behavior. Since the model is fully GPU-offloaded
-# (NGL=999), these mainly affect load-time staging/host-RAM residency of the
-# GGUF's pages, not steady-state decode throughput - but can help avoid the
-# OS silently paging out host-side buffers (KV/MTP staging, mmap'd file
-# pages) under memory pressure.
-#   DISABLE_MMAP=1 (--no-mmap): read the whole GGUF into RAM up front instead
-#     of mmap'ing it (slower/more RAM at load, but avoids later page faults
-#     if the file cache gets evicted under host memory pressure).
-#   USE_MLOCK=1 (--mlock): lock the model's resident RAM pages so the OS can
-#     never swap/evict them. Needs the container to have enough locked-memory
-#     ulimit (docker run --ulimit memlock=-1:-1, or an equivalent Compose
-#     ulimits entry) - without it, llama-server will fail to mlock and error
-#     out or warn depending on build; test before enabling in production.
-# Both default OFF (mmap is normally fine and enables faster/lower-RAM load).
+# Model-loading memory behavior. Since the model is fully GPU-offloaded (NGL=999),
+# these mainly affect load-time staging, not steady-state decode throughput.
+#   DISABLE_MMAP=1 (--no-mmap): read the whole GGUF into RAM up front instead of
+#     mmap'ing it (avoids later page faults if the file cache gets evicted).
+#   USE_MLOCK=1 (--mlock): lock resident RAM pages so the OS can never swap them.
+#     Needs --ulimit memlock=-1:-1; without it, llama-server may error/warn.
+# Both default OFF (mmap is normally faster and lower-RAM).
 DISABLE_MMAP=${DISABLE_MMAP:-0}
 USE_MLOCK=${USE_MLOCK:-0}
 
-# Physical batch size (-ub): the max number of tokens processed together in
-# one GPU pass during prompt processing. Larger values raise prompt-processing
-# throughput (more parallel work per kernel launch) at the cost of more VRAM
-# for compute/activation buffers; generation (token-by-token decode) speed is
-# essentially unaffected by this value. Empirically swept on a single RTX 3090
-# with the ~13GB IQ3_XXS bring-up quant (see docs/qwen36-bench-results.md):
-#   ub=256:  ~15.8GB used, ~1818 tok/s prompt processing
-#   ub=512:  ~16.1GB used, ~2580 tok/s (ik_llama.cpp default)
-#   ub=1024: ~16.6GB used, ~3192 tok/s  <- chosen default: +24% pp throughput
-#            over the stock default for only +3% VRAM, leaving ~8GB headroom
-#            for a larger production quant.
-#   ub=2048: ~17.7GB used, ~3567 tok/s (diminishing returns per extra VRAM)
-# Raise toward 2048 if serving a smaller quant with VRAM to spare; lower
-# toward 256 if a larger quant leaves little headroom.
+# Physical batch size (-ub): max tokens processed per GPU pass during prompt
+# processing. Larger values raise pp throughput (more parallel work per kernel)
+# at the cost of VRAM for compute buffers; generation speed is unaffected.
+# Swept on RTX 3090 with ~13GB bring-up quant (see qwen36-bench-results.md):
+#   ub=256:  ~15.8GB, ~1818 tok/s  |  ub=512:  ~16.1GB, ~2580 tok/s (default)
+#   ub=1024: ~16.6GB, ~3192 tok/s  |  ub=2048: ~17.7GB, ~3567 tok/s (diminishing)
+# 1024 chosen: +24% pp throughput over default for only +3% VRAM, ~8GB headroom.
+# Raise toward 2048 for smaller quant with spare VRAM; lower toward 256 for larger.
 UBATCH_SIZE=${UBATCH_SIZE:-1024}
 
 # Vision (multimodal). Qwen3.6-35B-A3B ships a Qwen3-VL-lineage vision tower as
-# a separate mmproj GGUF (ik_llama's examples/mtmd/clip.cpp has a complete
-# PROJECTOR_TYPE_QWEN3VL implementation). Enabled by default; set
-# ENABLE_VISION=0 for a leaner text-only server that skips the mmproj entirely.
+# a separate mmproj GGUF (ik_llama's examples/mtmd/clip.cpp has a full
+# PROJECTOR_TYPE_QWEN3VL implementation). Enabled by default; set 0 for text-only.
 ENABLE_VISION=${ENABLE_VISION:-1}
 MMPROJ_FILE=${MMPROJ_FILE:-mmproj-BF16.gguf}
 
 # MTP self-speculative decoding (DeepSeek-V3-style single trailing MTP layer,
 # baked into the same GGUF - no separate draft model file needed). Enabled by
-# default; set ENABLE_MTP=0 to disable. MTP_N_MAX is the max number of
-# speculative tokens proposed per round; MTP_P_MIN is the minimum acceptance
-# probability threshold (0.0 = accept greedily-consistent tokens only).
+# default. MTP_N_MAX = max speculative tokens per round; MTP_P_MIN = minimum
+# acceptance probability (0.0 = accept greedily-consistent tokens only).
 ENABLE_MTP=${ENABLE_MTP:-1}
 MTP_N_MAX=${MTP_N_MAX:-4}
 MTP_P_MIN=${MTP_P_MIN:-0.0}
-# Optionally requantize the MTP output head independently of the main output
-# tensor (e.g. a higher-precision head raises draft acceptance). Empty = use
-# whatever precision the GGUF already baked in for the MTP head.
+# Optionally requantize the MTP output head independently (e.g. higher-precision
+# head raises draft acceptance). Empty = use GGUF's baked-in precision.
 MTP_REQUANTIZE_OUTPUT_TYPE=${MTP_REQUANTIZE_OUTPUT_TYPE:-}
 
 # Optional n-gram lookup drafter, chained as a first (fast/free) speculative
-# stage ahead of MTP (ik_llama.cpp's --spec-type supports a two-stage chain,
-# e.g. `--spec-type ngram-mod:... --spec-type mtp:...`). It costs no extra
-# model inference - just string matching against the existing context/cache -
-# so it's a pure win whenever the response contains repeated or templated
-# spans (long-document summarization, code, boilerplate) that a plain n-gram
-# match can propose for free, leaving MTP to handle the harder/novel spans.
+# stage ahead of MTP (`--spec-type ngram-mod:... --spec-type mtp:...`). Costs no
+# extra model inference - just string matching against context - so it's a pure
+# win on repeated/templated spans (long docs, code, boilerplate), leaving MTP
+# for harder/novel spans.
 #
-# **ROOT-CAUSED, not just observed (this build, examples/server/server-
-# context.cpp)**: when `mmproj` is loaded, that file explicitly whitelists
-# ONLY two speculative configs: zero stages, or exactly one stage of type
-# MTP (`spec_stages.empty() || (spec_stages.size()==1 &&
-# spec_stages.front().type==COMMON_SPECULATIVE_TYPE_MTP)`). Anything else -
-# including our ngram-mod+mtp 2-stage chain - fails that check, and the
-# `else` branch doesn't just skip the extra stage: it clears ALL stages
-# (`stages.clear(); has_mtp=false;`), which is why MTP itself stopped
-# working too, not just ngram. This is a deliberate upstream restriction
-# (likely because the mtmd/vision-embeddings codepath has only been wired
-# up against single-stage MTP, which already needs special embeddings
-# handling - see `llama_set_embeddings` right below this check in that
-# file), not something fixable from this entrypoint/Dockerfile. Default is
-# therefore OFF (ENABLE_NGRAM=0) so vision+MTP keeps working out of the
-# box. Only set ENABLE_NGRAM=1 on a text-only deployment (ENABLE_VISION=0) -
-# and note
-# ENABLE_VISION=0 currently hits ITS OWN pre-existing bug in this build
-# (`error: unknown argument: --no-mmproj`), so verify that path separately
-# before relying on the ngram+MTP combo.
+# ROOT CAUSE: when `mmproj` is loaded, `server-context.cpp` whitelists ONLY
+# zero stages or exactly one MTP stage. A two-stage chain fails that check,
+# and the `else` branch clears ALL stages (`stages.clear(); has_mtp=false;`),
+# disabling MTP too. This is a deliberate upstream restriction (mtmd/vision
+# only wired for single-stage MTP). Default OFF (ENABLE_NGRAM=0) so vision+MTP
+# works. Only enable on text-only (ENABLE_VISION=0) - note that path has its
+# own bug (`--no-mmproj` unrecognized) in this build.
 ENABLE_NGRAM=${ENABLE_NGRAM:-0}
 NGRAM_TYPE=${NGRAM_TYPE:-ngram-mod}
 NGRAM_N_MAX=${NGRAM_N_MAX:-64}
@@ -151,16 +121,14 @@ REPEAT_PENALTY=${REPEAT_PENALTY:-1.0}
 PRESERVE_THINKING=${PRESERVE_THINKING:-1}
 
 # --- Weights -----------------------------------------------------------------
-# Two ways to source the model, controlled by MODEL_SOURCE:
-#   local (default) - our in-house "262K-Balanced" GGUF (docs/
-#                      iqllama-migration-plan.md Phase 2/4), produced offline by
-#                      scripts/quantize.sh and mounted read-only under /models.
-#   hf              - pull a public GGUF straight from Hugging Face via -hf/-hff
-#                      (e.g. Unsloth's pre-converted quant) - useful for bring-up
-#                      / smoke-testing the engine before our recipe is ready.
+# MODEL_SOURCE controls how the model is sourced:
+#   local (default) - our in-house "262K-Balanced" GGUF (Phase 2/4), produced by
+#                      scripts/quantize.sh, mounted read-only under /models.
+#   hf              - pull a public GGUF from Hugging Face via -hf/-hff (e.g.
+#                      llmfan46's abliterated Qwen3.6 quant) for bring-up/smoke-tests.
 MODEL_SOURCE=${MODEL_SOURCE:-local}
 GGUF_FILE=${GGUF_FILE:-qwen36-262k-balanced.gguf}
-HF_REPO=${HF_REPO:-unsloth/Qwen3.6-35B-A3B-MTP-GGUF}
+HF_REPO=${HF_REPO:-llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF}
 HF_FILE=${HF_FILE:-}
 export HF_TOKEN=${QWEN_TOKEN:-${HF_TOKEN:-}}
 # Persist downloaded weights so restarts never re-download. Under docker compose
@@ -209,8 +177,8 @@ case "${MODEL_SOURCE,,}" in
         MODEL_PATH="/models/${GGUF_FILE}"
         if [[ ! -f "$MODEL_PATH" ]]; then
             err "MODEL_SOURCE=local but $MODEL_PATH is missing."
-            err "Run scripts/quantize.sh (see docs/iqllama-migration-plan.md Phase 2)"
-            err "to produce it, or set MODEL_SOURCE=hf for a public bring-up quant."
+            err "Run scripts/quantize.sh (see migration plan Phase 2) to produce it,"
+            err "or set MODEL_SOURCE=hf for a public bring-up quant."
             exit 1
         fi
         log "Model source: local $MODEL_PATH"
@@ -243,7 +211,7 @@ if [[ "$VISION_ON" == "1" ]]; then
         MMPROJ_PATH="/models/${MMPROJ_FILE}"
         if [[ ! -f "$MMPROJ_PATH" ]]; then
             err "ENABLE_VISION=1 but $MMPROJ_PATH is missing; set ENABLE_VISION=0"
-            err "or place the mmproj GGUF alongside the model (see Phase 2)."
+            err "or place the mmproj GGUF alongside the model."
             exit 1
         fi
         SERVER_ARGS+=(--mmproj "$MMPROJ_PATH")

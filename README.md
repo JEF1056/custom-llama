@@ -184,17 +184,14 @@ The quantization scripts can also be run directly outside of Docker:
 # 1. Download source GGUF (requires `hf` CLI, ~70 GB disk)
 ./scripts/download-source-gguf.sh
 
-# 2. Compute custom imatrix (requires a diverse corpus file)
-./scripts/compute-imatrix.sh
-
-# 3. Quantize to production GGUF
+# 2. Quantize to production GGUF
 ./scripts/quantize.sh
 ```
 
-Or use the Unsloth-provided imatrix instead of computing your own:
+Or use the Unsloth-provided imatrix (shipped with the source GGUF) instead of computing your own:
 
 ```bash
-SKIP_OWN_IMATRIX=1 ./scripts/quantize.sh
+# The downloaded imatrix_unsloth.dat is used automatically by quantize.sh.
 ```
 
 ---
