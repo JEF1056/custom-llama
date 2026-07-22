@@ -98,26 +98,24 @@ if [[ ! -f "$GGUF_DST" ]]; then
     log "Downloading BF16 GGUF from HF repo: $HF_REPO"
     log "File: $HF_GGUF_FILE"
 
-    # Use huggingface-cli to download the GGUF file
-    if ! command -v huggingface-cli &>/dev/null; then
-        log "Installing huggingface-cli..."
-        pip install huggingface-cli
+    # Use hf CLI to download the GGUF file
+    if ! command -v hf &>/dev/null; then
+        log "Installing hf CLI..."
+        pip install huggingface-hub
     fi
 
     log "Downloading model files..."
     if [[ -n "${HF_TOKEN:-}" ]]; then
-        huggingface-cli download \
+        hf download \
             --token "$HF_TOKEN" \
             "$HF_REPO" \
             "$HF_GGUF_FILE" \
-            --local-dir "$MODELS_DIR" \
-            --local-dir-use-symlinks false
+            --local-dir "$MODELS_DIR"
     else
-        huggingface-cli download \
+        hf download \
             "$HF_REPO" \
             "$HF_GGUF_FILE" \
-            --local-dir "$MODELS_DIR" \
-            --local-dir-use-symlinks false
+            --local-dir "$MODELS_DIR"
     fi
 
     if [[ ! -f "$GGUF_DST" ]]; then
