@@ -28,7 +28,7 @@ MLX_PORT=${MLX_PORT:-8081}
 MLX_KV_BITS=${MLX_KV_BITS:-4}
 MODEL_PATH=${MODEL_PATH:-$QWEN_HOME/models/qwen36-mlx/quantized}
 HF_REPO=${HF_REPO:-llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF}
-HF_GGUF_FILE=${HF_GGUF_FILE:-Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-bf16.gguf}
+HF_GGUF_FILE=${HF_GGUF_FILE:-Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-BF16.gguf}
 VENV_NAME=${VENV_NAME:-mlx-venv}
 
 LABEL=com.custom-llama.qwen36-mlx
