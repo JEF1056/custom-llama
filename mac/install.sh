@@ -50,36 +50,12 @@ else
     log "No HF_TOKEN set; using anonymous downloads (public repos only)."
 fi
 
-# ---- Xcode CLT + metal compiler check ----------------------------------------
+# ---- Xcode CLT check --------------------------------------------------------
 if ! xcode-select -p >/dev/null 2>&1; then
     log "Installing Xcode Command Line Tools..."
     xcode-select --install || true
     err "Complete the Xcode CLT install dialog, then re-run this script."
     exit 1
-fi
-
-# mlx-kquant requires the Metal shader compiler (part of full Xcode, not CLT)
-if ! xcrun -find metal &>/dev/null; then
-    log "Metal compiler not found — installing full Xcode..."
-    # Try to install Xcode via the App Store (mas) if available, otherwise prompt
-    if command -v mas &>/dev/null; then
-        log "Installing Xcode via Mac App Store..."
-        mas install 497799835 || true
-    else
-        log "mas not found. Opening App Store to install Xcode..."
-        open -a AppStore 2>/dev/null || true
-        err "Install Xcode from the App Store, then re-run this script."
-        err "mlx-kquant requires the Metal compiler which is included in full Xcode."
-        exit 1
-    fi
-    # Wait for Xcode to finish installing
-    sleep 10
-    if ! xcrun -find metal &>/dev/null; then
-        err "Metal compiler still not found after Xcode install attempt."
-        err "Please ensure Xcode is fully installed and launch it once to accept the license."
-        exit 1
-    fi
-    log "Metal compiler found. Continuing."
 fi
 
 # ---- Create directories ------------------------------------------------------
