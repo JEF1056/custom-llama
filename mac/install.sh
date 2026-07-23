@@ -13,8 +13,8 @@
 #   HF_TOKEN        — HuggingFace read token (required for model download)
 #   MLX_PORT        — Server port (default: 8081)
 #   MLX_KV_BITS     — KV cache quantization bits (default: 4)
-#   MODEL_PATH      — Custom model path (default: ~/.qwen/models/qwen36-mlx/quantized)
-#   HF_REPO         — HF repo ID for the GGUF (default: llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF)
+#   MODEL_PATH      — Custom model path (default: ~/.qwen/models/qwen36-mlx)
+#   HF_REPO         — HF repo ID for the model (default: llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved)
 #
 # DSpark speculative decoding is intentionally OFF on Apple Silicon: at batch 1
 # the verification pass does not amortize yet, so it is not a speedup here.
@@ -26,9 +26,8 @@ CUSTOM_LLAMA_REF=${CUSTOM_LLAMA_REF:-main}
 QWEN_HOME=${QWEN_HOME:-$HOME/.qwen}
 MLX_PORT=${MLX_PORT:-8081}
 MLX_KV_BITS=${MLX_KV_BITS:-4}
-MODEL_PATH=${MODEL_PATH:-$QWEN_HOME/models/qwen36-mlx/quantized}
-HF_REPO=${HF_REPO:-llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF}
-HF_GGUF_FILE=${HF_GGUF_FILE:-Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-BF16.gguf}
+MODEL_PATH=${MODEL_PATH:-$QWEN_HOME/models/qwen36-mlx}
+HF_REPO=${HF_REPO:-llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved}
 VENV_NAME=${VENV_NAME:-mlx-venv}
 
 LABEL=com.custom-llama.qwen36-mlx
@@ -91,84 +90,29 @@ pip install "mlx==0.31.2"
 
 log "MLX stack installed successfully."
 
-# ---- Download BF16 GGUF from HuggingFace ------------------------------------
-GGUF_DST="$MODELS_DIR/$HF_GGUF_FILE"
+# ---- Convert HF repo to MLX safetensors + quantize ----------------------------
+MLX_DIR="$MODELS_DIR/qwen36-mlx"
 
-if [[ ! -f "$GGUF_DST" ]]; then
-    log "Downloading BF16 GGUF from HF repo: $HF_REPO"
-    log "File: $HF_GGUF_FILE"
+if [[ ! -d "$MLX_DIR" ]]; then
+    log "Converting HF repo to MLX safetensors and quantizing..."
 
-    # Use hf CLI to download the GGUF file
-    if ! command -v hf &>/dev/null; then
-        log "Installing hf CLI..."
-        pip install huggingface-hub
-    fi
+    # Use mlx_vlm.convert to convert the model from Hugging Face to MLX safetensors
+    # and quantize it in one step. This includes the vision tower parameters.
+    python3 -m mlx_vlm.convert \
+        --hf-path "$HF_REPO" \
+        --mlx-path "$MLX_DIR" \
+        --dtype bfloat16 \
+        --quantize \
+        --q-mode affine \
+        --quant-predicate mixed_2_6 \
+        ${HF_TOKEN:+--token "$HF_TOKEN"}
 
-    log "Downloading model files..."
-    if [[ -n "${HF_TOKEN:-}" ]]; then
-        hf download \
-            --token "$HF_TOKEN" \
-            "$HF_REPO" \
-            "$HF_GGUF_FILE" \
-            --local-dir "$MODELS_DIR"
-    else
-        hf download \
-            "$HF_REPO" \
-            "$HF_GGUF_FILE" \
-            --local-dir "$MODELS_DIR"
-    fi
-
-    if [[ ! -f "$GGUF_DST" ]]; then
-        err "Download failed: $GGUF_DST not found."
-        exit 1
-    fi
-    log "Downloaded: $GGUF_DST"
+    log "Conversion and quantization complete: $MLX_DIR"
 else
-    log "GGUF already exists at $GGUF_DST, skipping download."
+    log "MLX model already exists at $MLX_DIR, skipping conversion."
 fi
 
-# ---- Convert BF16 GGUF to MLX FP16 safetensors --------------------------------
-MLX_FP16_DIR="$MODELS_DIR/qwen36-mlx"
-
-if [[ ! -d "$MLX_FP16_DIR" ]]; then
-    log "Converting GGUF to MLX FP16 safetensors..."
-    mkdir -p "$MLX_FP16_DIR"
-
-    python3 -m mlx_lm.convert \
-        --model "$GGUF_DST" \
-        --mlx-path "$MLX_FP16_DIR"
-
-    log "Conversion complete: $MLX_FP16_DIR"
-else
-    log "MLX FP16 safetensors already exist at $MLX_FP16_DIR, skipping conversion."
-fi
-
-# ---- Quantize with custom affine quantization ----------------------------------
-# Uses mlx-lm's built-in affine quantization with a custom preset matching
-# the K-quant recipe: edge experts Q4, middle experts Q3, attention Q5,
-# shared expert Q8, router/embed/lm_head at higher precision.
-QUANTIZED_DIR="$MODEL_PATH"
-
-if [[ ! -d "$QUANTIZED_DIR" ]]; then
-    log "Running custom affine quantization..."
-
-    # Clone custom-llama repo if not present (for the quantize script)
-    if [[ ! -d "$CL_DIR" ]]; then
-        log "Cloning custom-llama repo..."
-        git clone "$CUSTOM_LLAMA_REPO" "$CL_DIR"
-        git -C "$CL_DIR" checkout "$CUSTOM_LLAMA_REF" 2>/dev/null || true
-    fi
-
-    # Run quantization using mlx-lm's built-in quantize with custom preset
-    python3 "$CL_DIR/scripts/quantize-mlx.sh" \
-        --input "$MLX_FP16_DIR" \
-        --output "$QUANTIZED_DIR" \
-        --kv-bits "$MLX_KV_BITS"
-
-    log "Quantization complete: $QUANTIZED_DIR"
-else
-    log "Quantized model already exists at $QUANTIZED_DIR, skipping quantization."
-fi
+QUANTIZED_DIR="$MLX_DIR"
 
 # ---- Fetch our wrappers + plist (this repo) ---------------------------------
 if [[ -d "$CL_DIR/.git" ]]; then
