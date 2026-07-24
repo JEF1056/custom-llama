@@ -19,6 +19,30 @@ model_list:
       api_base: http://ml-1-wsl:8080/v1
       api_key: sk-noauth
 
+  - model_name: qwen3.6-35b
+    litellm_params:
+      model: openai/qwen3.6-35b
+      api_base: http://ml-1:8081/v1
+      api_key: sk-noauth
+
+  - model_name: qwen3.6-35b
+    litellm_params:
+      model: openai/qwen3.6-35b
+      api_base: http://ml-2:8081/v1
+      api_key: sk-noauth
+
+  - model_name: qwen3.6-35b
+    litellm_params:
+      model: openai/qwen3.6-35b
+      api_base: http://ml-3:8081/v1
+      api_key: sk-noauth
+
+  - model_name: qwen3.6-35b
+    litellm_params:
+      model: openai/qwen3.6-35b
+      api_base: http://ml-4:8081/v1
+      api_key: sk-noauth
+
 router_settings:
   # Send each request to the deployment with the lowest observed latency.
   routing_strategy: latency-based-routing
