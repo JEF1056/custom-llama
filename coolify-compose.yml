@@ -1,0 +1,81 @@
+# Coolify-compatible compose for the LiteLLM router + CUDA server.
+# Deploy via Coolify: Project → Add Service → Docker Compose → point to this file.
+#
+# Coolify handles:
+#   - Git push → auto rebuild + redeploy
+#   - Environment variables via the UI
+#   - Persistent volumes for weights
+#   - Health checks + auto-restart
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        BUILD_MODE: git
+        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/JEF1056/ik_llama.cpp.git}
+        LLAMA_REF: ${LLAMA_REF:-ngram-mtp-vision-chain}
+        CUDA_ARCH: ${CUDA_ARCH:-86}
+    image: custom-llama/qwen36-cuda:latest
+    container_name: server
+    env_file: ./docker/.env
+    environment:
+      LLAMA_CACHE: /models
+    ports:
+      - "${LLAMA_PORT:-8080}:8080"
+    volumes:
+      - qwen36-models:/models
+      - qwen36-data:/workspace
+      - ./docker/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+    networks:
+      - qwen-net
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 1800s
+    restart: unless-stopped
+
+  router:
+    image: ghcr.io/berriai/litellm:main-stable
+    container_name: qwen-router
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    ports:
+      - "${ROUTER_PORT:-4000}:4000"
+    env_file: ./router/.env
+    environment:
+      CUDA_BACKEND_URL: http://server:8080/v1
+    volumes:
+      - ./router/config.yaml:/app/config.yaml:ro
+    networks:
+      - qwen-net
+    depends_on:
+      server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:4000/health/liveliness"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+networks:
+  qwen-net:
+    driver: bridge
+
+volumes:
+  qwen36-models:
+  qwen36-data:
