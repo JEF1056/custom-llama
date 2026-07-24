@@ -15,25 +15,25 @@
 model_list:
   - model_name: qwen3.6-35b
     litellm_params:
-      model: openai/qwen3.6-35b
+      model: openai//models/qwen36-262k-balanced.gguf
       api_base: http://ml-1-wsl:8080/v1
       api_key: sk-noauth
 
   - model_name: qwen3.6-35b
     litellm_params:
-      model: openai/qwen3.6-35b
+      model: openai/llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved
       api_base: http://ml-2:8081/v1
       api_key: sk-noauth
 
   - model_name: qwen3.6-35b
     litellm_params:
-      model: openai/qwen3.6-35b
+      model: openai/llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved
       api_base: http://ml-3:8081/v1
       api_key: sk-noauth
 
   - model_name: qwen3.6-35b
     litellm_params:
-      model: openai/qwen3.6-35b
+      model: openai/llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved
       api_base: http://ml-4:8081/v1
       api_key: sk-noauth
 
