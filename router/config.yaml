@@ -19,7 +19,7 @@ model_list:
       api_base: http://ml-1-wsl:8080/v1
       api_key: sk-noauth
 
- - model_name: qwen3.6-35b
+  - model_name: qwen3.6-35b
     litellm_params:
       model: openai/qwen3.6-35b
       api_base: http://ml-2:8081/v1
