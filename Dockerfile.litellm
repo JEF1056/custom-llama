@@ -1,0 +1,6 @@
+FROM ghcr.io/berriai/litellm:main-stable
+
+WORKDIR /app
+COPY router/config.yaml /app/config.yaml
+
+EXPOSE 4000
