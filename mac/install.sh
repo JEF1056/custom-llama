@@ -13,6 +13,7 @@
 #   HF_TOKEN        — HuggingFace read token (required for model download)
 #   MLX_PORT        — Server port (default: 8081)
 #   MLX_KV_BITS     — KV cache quantization bits (default: 4)
+#   MLX_MAX_KV_SIZE — Max KV cache size in tokens (default: 65536)
 #   MODEL_PATH      — Custom model path (default: ~/.qwen/models/qwen36-mlx)
 #   HF_REPO         — HF repo ID for the model (default: llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved)
 #
@@ -26,6 +27,7 @@ CUSTOM_LLAMA_REF=${CUSTOM_LLAMA_REF:-main}
 QWEN_HOME=${QWEN_HOME:-$HOME/.qwen}
 MLX_PORT=${MLX_PORT:-8081}
 MLX_KV_BITS=${MLX_KV_BITS:-4}
+MLX_MAX_KV_SIZE=${MLX_MAX_KV_SIZE:-229376}
 MODEL_PATH=${MODEL_PATH:-$QWEN_HOME/models/qwen36-mlx}
 HF_REPO=${HF_REPO:-llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved}
 VENV_NAME=${VENV_NAME:-mlx-venv}
@@ -134,12 +136,14 @@ CL_DIR_ESC=$(sed_escape "$CL_DIR")
 HOME_ESC=$(sed_escape "$HOME")
 MLX_PORT_ESC=$(sed_escape "$MLX_PORT")
 MODEL_PATH_ESC=$(sed_escape "$MODEL_PATH")
+MLX_MAX_KV_SIZE_ESC=$(sed_escape "$MLX_MAX_KV_SIZE")
 VENV_BIN_ESC=$(sed_escape "$VENV_DIR/bin")
 
 sed -e "s|__REPO__|$CL_DIR_ESC|g" \
     -e "s|__HOME__|$HOME_ESC|g" \
     -e "s|__MLX_PORT__|$MLX_PORT_ESC|g" \
     -e "s|__MODEL_PATH__|$MODEL_PATH_ESC|g" \
+    -e "s|__MLX_MAX_KV_SIZE__|$MLX_MAX_KV_SIZE_ESC|g" \
     -e "s|__VENV_BIN__|$VENV_BIN_ESC|g" \
     "$CL_DIR/mac/com.custom-llama.qwen36-mlx.plist.template" > "$PLIST_DST"
 

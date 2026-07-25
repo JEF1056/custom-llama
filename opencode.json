@@ -2,15 +2,53 @@
   "$schema": "https://opencode.ai/config.json",
   "plugin": ["github:JEF1056/harness"],
   "provider": {
-    "litellm": {
+    "bifrost": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "litellm",
+      "name": "bifrost",
       "options": {
-        "baseURL": "http://localhost:4000/v1"
+        "baseURL": "http://coolify:8080/v1",
+        "apiKey": "bifrost-master-key"
       },
       "models": {
         "qwen3.6-35b": {
-          "name": "Qwen3.6-35B-A3B (LiteLLM)",
+          "name": "Qwen3.6-35B-A3B (Bifrost)",
+          "tools": true,
+          "attachment": true,
+          "limit": {
+            "context": 229376,
+            "output": 8192
+          }
+        }
+      }
+    },
+    "llama-remote": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "llama-remote",
+       "options": {
+          "baseURL": "http://ml-2:8081/v1",
+          "apiKey": "sk-noauth"
+        },
+       "models": {
+          "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved": {
+            "name": "Qwen3.6-35B-A3B 262K-Remote",
+          "tools": true,
+          "attachment": true,
+          "limit": {
+            "context": 229376,
+            "output": 8192
+          }
+        }
+      }
+    },
+    "llama-local": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "llama-local",
+      "options": {
+        "baseURL": "http://localhost:8080/v1"
+      },
+      "models": {
+        "qwen36-262k-local": {
+          "name": "Qwen3.6-35B-A3B 262K-Local",
           "tools": true,
           "attachment": true,
           "limit": {
@@ -21,7 +59,7 @@
       }
     }
   },
-  "model": "litellm/qwen3.6-35b",
+  "model": "bifrost/qwen3.6-35b",
   "mcp": {
     "websearch": {
       "type": "local",

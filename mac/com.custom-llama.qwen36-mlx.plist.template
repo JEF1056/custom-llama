@@ -16,7 +16,7 @@
         <string>__REPO__/mac/run-mlx-server.sh</string>
     </array>
 
-    <key>EnvironmentVariables</key>
+   <key>EnvironmentVariables</key>
     <dict>
         <key>HOME</key>
         <string>__HOME__</string>
@@ -26,6 +26,8 @@
         <string>__MLX_PORT__</string>
         <key>MODEL_PATH</key>
         <string>__MODEL_PATH__</string>
+        <key>MLX_MAX_KV_SIZE</key>
+        <string>229376</string>
         <key>PATH</key>
         <string>__VENV_BIN__:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>

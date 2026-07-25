@@ -35,6 +35,12 @@ export APC_ENABLED=${APC_ENABLED:-1}
 # to keep a full-precision KV cache.
 MLX_KV_BITS=${MLX_KV_BITS:-4}
 
+# ---- KV cache size limit ------------------------------------------------------
+# Cap the KV cache to prevent OOM on long-context requests. 64K tokens at
+# 4-bit ≈ 2-3 GB of KV cache, keeping total memory well within 48 GB.
+# Set MLX_MAX_KV_SIZE= (empty) to disable the limit (default: 65536).
+MLX_MAX_KV_SIZE=${MLX_MAX_KV_SIZE:-229376}
+
 # ---- Sampling params ----------------------------------------------------------
 # Default sampling params (clients may override per request). A modest
 # temperature keeps output consistent. Set any to empty to leave the MLX
@@ -59,6 +65,12 @@ if [[ -n "$MLX_KV_BITS" ]]; then
     KV_BITS_ARG="--kv-bits $MLX_KV_BITS"
 fi
 
+# ---- Build max KV size argument -----------------------------------------------
+MAX_KV_SIZE_ARG=""
+if [[ -n "$MLX_MAX_KV_SIZE" ]]; then
+    MAX_KV_SIZE_ARG="--max-kv-size $MLX_MAX_KV_SIZE"
+fi
+
 # ---- Build extra args ---------------------------------------------------------
 EXTRA_ARGS=""
 
@@ -67,11 +79,20 @@ EXTRA_ARGS=""
 # / reasoning behavior).
 EXTRA_ARGS="$EXTRA_ARGS --enable-thinking"
 
+# ---- Build prefill step size argument -----------------------------------------
+# Smaller prefill steps reduce peak memory during long-context processing,
+# avoiding Metal command buffer OOM (30 GB limit). Default: 1024.
+MLX_PREFILL_STEP_SIZE=${MLX_PREFILL_STEP_SIZE:-1024}
+PRELOAD_ARGS=""
+if [[ -n "$MLX_PREFILL_STEP_SIZE" ]]; then
+    PRELOAD_ARGS="--prefill-step-size $MLX_PREFILL_STEP_SIZE"
+fi
+
 # ---- Launch the server --------------------------------------------------------
 echo "[qwen36] Starting mlx_vlm.server"
 echo "[qwen36] Model: $MODEL_PATH"
 echo "[qwen36] Host: $MLX_HOST  Port: $MLX_PORT"
-echo "[qwen36] KV bits: $MLX_KV_BITS  APC: $APC_ENABLED"
+echo "[qwen36] KV bits: $MLX_KV_BITS  Max KV size: $MLX_MAX_KV_SIZE  Prefill step: $MLX_PREFILL_STEP_SIZE  APC: $APC_ENABLED"
 echo "[qwen36] Sampling defaults: temp=$TEMP top_p=$TOP_P top_k=$TOP_K min_p=$MIN_P"
 echo "[qwen36] Repetition penalty: $REPETITION_PENALTY  Presence penalty: $PRESENCE_PENALTY"
 echo "[qwen36] Thinking: enabled"
@@ -83,4 +104,6 @@ python3 -m mlx_vlm.server \
     --port "$MLX_PORT" \
     --model "$MODEL_PATH" \
     $KV_BITS_ARG \
+    $MAX_KV_SIZE_ARG \
+    $PRELOAD_ARGS \
     $EXTRA_ARGS
