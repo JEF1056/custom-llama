@@ -1,78 +1,60 @@
-# DEV compose — builds and runs the CUDA server locally.
+# Docker compose — CUDA server with dev/prod build profiles.
 #
-# Default (BUILD_MODE=local): builds from an external host checkout of our
-# JEF1056/ik_llama.cpp fork (default path: /home/jfan/ik_llama.cpp, override
-# via LLAMA_LOCAL_PATH), referenced through Docker's "llama-src" named build
-# context (additional_contexts below) - no in-repo copy needed. That fork
-# carries a patch (branch ngram-mtp-vision-chain) allowing an n-gram lookup
-# drafter to chain alongside MTP even when the vision tower is loaded (see
-# docs/iqllama-migration-plan.md and repo memory for the investigation).
-#   BUILD_MODE=local LLAMA_LOCAL_PATH=/path/to/ik_llama.cpp docker compose up -d --build
+# BUILD_MODE (default: git) clones our JEF1056/ik_llama.cpp fork's
+# ngram-mtp-vision-chain branch (LLAMA_REPO/LLAMA_REF below) during the
+# image build - a patch on top of stock ikawrakow/ik_llama.cpp allowing an
+# n-gram lookup drafter to chain alongside MTP even when the vision tower is
+# loaded (stock ik_llama.cpp silently disables ALL speculative decoding in
+# that combination - see docs/iqllama-migration-plan.md and repo memory for
+# the full investigation). Override LLAMA_REPO/LLAMA_REF to build stock
+# upstream ikawrakow/ik_llama.cpp@main instead, or set BUILD_MODE=local to
+# build from an external host checkout via a named build context.
 #
-# Stock upstream (BUILD_MODE=git): clones LLAMA_REPO at LLAMA_REF instead.
-#   BUILD_MODE=git docker compose up -d --build
-#
-#   cp .env.example .env   # set QWEN_TOKEN, tune CTX / KV_TYPE etc.
-#   docker compose up -d --build
+# Profiles:
+#   docker compose up -d --build          # GPU server (dev or prod)
+#   docker compose --profile dev up -d    # GPU server (dev build)
+#   docker compose --profile prod up -d   # GPU server (prod build)
+#   docker compose --profile cpu up -d    # CPU-only server
+#   docker compose --profile prep run     # Full Phase 2 weights pipeline (GPU)
+#   docker compose --profile prep-cpu run # Full Phase 2 weights pipeline (CPU)
 #
 # .env and entrypoint.sh changes take effect on the next `docker compose up -d`
 # with no rebuild. Only Dockerfile, build-arg, or fork-checkout changes require
 # `--build`.
 #
-# /models must hold the offline-produced GGUF (see docs/
-# iqllama-migration-plan.md Phase 2 / scripts/quantize.sh) unless MODEL_SOURCE=hf.
-#
-# Weights are SHARED with the prod stack (../docker-compose.yml): this compose
-# attaches to the same `custom-llama_qwen36-models` / `custom-llama_qwen36-data`
-# named volumes as external volumes, rather than creating separate dev copies
-# (those volumes must already exist, i.e. the prod stack must have been
-# started at least once). That means whatever GGUF the prod stack already
-# downloaded/quantized is immediately usable here (no re-download), and vice
-# versa - but also means running both stacks at once will contend for the
-# same GPU/model file. The host port defaults to DEV_PORT (8081), distinct
-# from prod's 8080, so both CAN run simultaneously without a port collision.
-# Two opt-in one-shot jobs can (re)populate the shared volume, gated behind
-# Compose profiles so plain `docker compose up` never triggers a multi-GB
-# download:
-#   docker compose --profile bringup run --rm model-bringup-dev
-#   docker compose --profile prep    run --rm model-prep-dev
+# Weights live in the qwen36-models NAMED VOLUME, not in the image, so they
+# survive `docker compose up -d --force-recreate` / image rebuilds (only
+# `docker compose down -v` or `docker volume rm` clears them).
 #
 # Requires the NVIDIA Container Toolkit on the host.
+
 services:
-  qwen36-cuda-dev:
+  # GPU server — default profile (runs without --profile flag)
+  server:
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        BUILD_MODE: ${BUILD_MODE:-local}
-        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/ikawrakow/ik_llama.cpp.git}
-        LLAMA_REF: ${LLAMA_REF:-main}
+        BUILD_MODE: ${BUILD_MODE:-git}
+        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/JEF1056/ik_llama.cpp.git}
+        LLAMA_REF: ${LLAMA_REF:-ngram-mtp-vision-chain}
         CUDA_ARCH: ${CUDA_ARCH:-86}
         CUDA_VERSION: ${CUDA_VERSION:-13.3.0}
       additional_contexts:
         llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
-    image: custom-llama/qwen36-cuda:dev
-    container_name: qwen36-cuda-dev
+    image: custom-llama/qwen36-cuda:${BUILD_MODE:-git}
+    container_name: server
     env_file: .env
     environment:
       LLAMA_CACHE: /models
     ports:
-      # Distinct default host port from prod's LLAMA_PORT (8080) since both
-      # stacks share the same docker/.env (and thus the same internal PORT),
-      # so they'd otherwise collide if run simultaneously. Override DEV_PORT
-      # to change; the container's internal port is unaffected.
-      - "${DEV_PORT:-8081}:8080"
+      - "${LLAMA_PORT:-8080}:8080"
     volumes:
-      # Model weights: SHARED with the prod stack (see header comment) via
-      # the external qwen36-models/qwen36-data volumes - not separate dev
-      # copies. Persists across restarts; cleared only by
-      # `docker volume rm custom-llama_qwen36-models` (affects prod too).
       - qwen36-models:/models
       - qwen36-data:/workspace
-      # Live-mount the entrypoint so edits take effect without a rebuild.
       - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
-    # Raises the locked-memory ceiling so --mlock (.env's USE_MLOCK=1) can
-    # actually lock the model into RAM if enabled; harmless/no-op otherwise.
+    networks:
+      - qwen-net
     ulimits:
       memlock:
         soft: -1
@@ -92,36 +74,29 @@ services:
       start_period: 1800s
     restart: unless-stopped
 
-  # CPU-only server — same weights volume, no GPU required.
-  # Useful on developer laptops or hosts without an NVIDIA GPU.
-  # Profile-gated so it doesn't start alongside the GPU server by default:
-  #   docker compose --profile cpu up -d qwen36-cpu-dev
-  #   docker compose --profile cpu up -d --build  # (re-)build first)
-  # Port defaults to CPU_DEV_PORT (8082) so it can run alongside the GPU dev
-  # server on 8081 if needed.
-  qwen36-cpu-dev:
+  # CPU-only server — profile-gated so it doesn't start alongside GPU by default
+  server-cpu:
     build:
       context: .
       dockerfile: Dockerfile.cpu
       args:
-        BUILD_MODE: ${BUILD_MODE:-local}
-        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/ikawrakow/ik_llama.cpp.git}
-        LLAMA_REF: ${LLAMA_REF:-main}
+        BUILD_MODE: ${BUILD_MODE:-git}
+        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/JEF1056/ik_llama.cpp.git}
+        LLAMA_REF: ${LLAMA_REF:-ngram-mtp-vision-chain}
       additional_contexts:
         llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
-    image: custom-llama/qwen36-cpu:dev
-    container_name: qwen36-cpu-dev
+    image: custom-llama/qwen36-cpu:${BUILD_MODE:-git}
+    container_name: server-cpu
     profiles: ["cpu"]
     env_file: .env
     environment:
       LLAMA_CACHE: /models
-      # CPU-only: disable GPU-specific features unconditionally.
       NGL: "0"
       FLASH_ATTN: "off"
       KV_HADAMARD: "0"
       ENABLE_MTP: "0"
     ports:
-      - "${CPU_DEV_PORT:-8082}:8080"
+      - "${CPU_PORT:-8083}:8080"
     volumes:
       - qwen36-models:/models
       - qwen36-data:/workspace
@@ -138,49 +113,25 @@ services:
       start_period: 300s
     restart: unless-stopped
 
-  # One-shot: fetch a single public pre-quantized GGUF + mmproj for fast
-  # bring-up (see the prod docker-compose.yml's model-bringup for details).
-  #   docker compose --profile bringup run --rm model-bringup-dev
-  model-bringup-dev:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        BUILD_MODE: ${BUILD_MODE:-local}
-        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/ikawrakow/ik_llama.cpp.git}
-        LLAMA_REF: ${LLAMA_REF:-main}
-        CUDA_ARCH: ${CUDA_ARCH:-86}
-      additional_contexts:
-        llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
-    image: custom-llama/qwen36-cuda:dev
-    container_name: qwen36-model-bringup-dev
-    profiles: ["bringup"]
-    entrypoint: ["/bin/bash", "/scripts/download-bringup.sh"]
-    env_file: .env
-    volumes:
-      - qwen36-models:/models
-      - ../scripts:/scripts:ro
-    restart: "no"
-
   # One-shot: full Phase 2 pipeline (BF16 download -> imatrix -> quantize).
-  # Needs GPU for the imatrix pass (see the prod docker-compose.yml's
-  # model-prep for details).
-  #   docker compose --profile prep run --rm model-prep-dev
-  model-prep-dev:
+  # Needs GPU for the imatrix pass. Writes into qwen36-models.
+  #   docker compose --profile prep run --rm model-prep
+  model-prep:
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        BUILD_MODE: ${BUILD_MODE:-local}
-        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/ikawrakow/ik_llama.cpp.git}
-        LLAMA_REF: ${LLAMA_REF:-main}
+        BUILD_MODE: ${BUILD_MODE:-git}
+        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/JEF1056/ik_llama.cpp.git}
+        LLAMA_REF: ${LLAMA_REF:-ngram-mtp-vision-chain}
         CUDA_ARCH: ${CUDA_ARCH:-86}
       additional_contexts:
         llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
-    image: custom-llama/qwen36-cuda:dev
-    container_name: qwen36-model-prep-dev
+    image: custom-llama/qwen36-cuda:${BUILD_MODE:-git}
+    container_name: model-prep
     profiles: ["prep"]
     entrypoint: ["/bin/bash", "/scripts/prepare-weights.sh"]
+    env_file: .env
     volumes:
       - qwen36-models:/models
       - ../scripts:/scripts:ro
@@ -193,23 +144,20 @@ services:
               capabilities: [gpu]
     restart: "no"
 
-  # One-shot: same pipeline as model-prep-dev but running entirely on CPU.
-  # No NVIDIA toolkit or GPU reservation needed.  NGL=0 forces CPU for the
-  # imatrix step from the start.  imatrix on CPU is slow but produces the
-  # same output.  Run explicitly:
-  #   docker compose --profile prep-cpu run --rm model-prep-cpu-dev
-  model-prep-cpu-dev:
+  # One-shot: same pipeline as model-prep but running entirely on CPU.
+  #   docker compose --profile prep-cpu run --rm model-prep-cpu
+  model-prep-cpu:
     build:
       context: .
       dockerfile: Dockerfile.cpu
       args:
-        BUILD_MODE: ${BUILD_MODE:-local}
-        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/ikawrakow/ik_llama.cpp.git}
-        LLAMA_REF: ${LLAMA_REF:-main}
+        BUILD_MODE: ${BUILD_MODE:-git}
+        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/JEF1056/ik_llama.cpp.git}
+        LLAMA_REF: ${LLAMA_REF:-ngram-mtp-vision-chain}
       additional_contexts:
         llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
-    image: custom-llama/qwen36-cpu:dev
-    container_name: qwen36-model-prep-cpu-dev
+    image: custom-llama/qwen36-cpu:${BUILD_MODE:-git}
+    container_name: model-prep-cpu
     profiles: ["prep-cpu"]
     entrypoint: ["/bin/bash", "/scripts/prepare-weights.sh"]
     environment:
@@ -219,13 +167,10 @@ services:
       - ../scripts:/scripts:ro
     restart: "no"
 
+networks:
+  qwen-net:
+    driver: bridge
+
 volumes:
-  # External: these are the SAME volumes created/owned by the prod stack's
-  # docker-compose.yml (project name "custom-llama"), attached here by their
-  # literal Docker volume name so dev and prod share one copy of the weights.
   qwen36-data:
-    external: true
-    name: custom-llama_qwen36-data
   qwen36-models:
-    external: true
-    name: custom-llama_qwen36-models
