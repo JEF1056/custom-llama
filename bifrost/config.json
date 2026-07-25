@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.getbifrost.ai/schema",
   "providers": {
-    "openai": {
+    "vllm": {
       "keys": [
         {
           "name": "ml-1-wsl-cuda",
