@@ -122,6 +122,25 @@ RUN sed -i \
     -e 's/len(entry\.values)/entry.values.size/' \
     /opt/iqllama/convert_imatrix_gguf_to_dat.py
 COPY --from=build /src/gguf-py/ /opt/iqllama/gguf-py/
+RUN printf "%s\n" \
+    "filepath = '/opt/iqllama/gguf-py/gguf/constants.py'" \
+    "with open(filepath, \"r\") as f: lines = f.readlines()" \
+    "in_enum = False; seen_keys = set(); new_lines = []" \
+    "for line in lines:" \
+    "    if line.startswith(\"class MODEL_TENSOR\"): in_enum = True" \
+    "    elif in_enum and line.startswith(\"class \"): in_enum = False" \
+    "    elif in_enum and not line.startswith(\" \") and line.strip() and not line.strip().startswith(\"#\"): in_enum = False" \
+    "    if in_enum:" \
+    "        stripped = line.strip()" \
+    "        if stripped and not stripped.startswith(\"#\"):" \
+    "            parts = stripped.split(\"=\")" \
+    "            if len(parts) >= 2 and \"auto()\" in parts[1]:" \
+    "                key = parts[0].strip()" \
+    "                if key in seen_keys: continue" \
+    "                seen_keys.add(key)" \
+    "    new_lines.append(line)" \
+    "with open(filepath, \"w\") as f: f.writelines(new_lines)" \
+    > /tmp/patch_constants.py && python3 /tmp/patch_constants.py && rm /tmp/patch_constants.py
 ENV PATH="/opt/iqllama/bin:${PATH}" \
     LD_LIBRARY_PATH="/opt/iqllama/bin"
 
