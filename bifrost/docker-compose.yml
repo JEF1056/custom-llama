@@ -52,19 +52,7 @@ services:
     networks:
       - bifrost-net
 
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    container_name: cloudflared
-    restart: unless-stopped
-    command: tunnel --no-autoupdate run
-    environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
-    depends_on:
-      - bifrost
-    networks:
-      - bifrost-net
-
-networks:
+ networks:
   bifrost-net:
     driver: bridge
 
