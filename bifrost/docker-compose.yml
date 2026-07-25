@@ -7,7 +7,7 @@ services:
     ports:
       - "${BIFROST_PORT:-4000}:8080"
     volumes:
-      - ./data:/app/data
+      - bifrost-data:/app/data
     environment:
       - APP_PORT=8080
       - APP_HOST=0.0.0.0
@@ -69,4 +69,5 @@ networks:
     driver: bridge
 
 volumes:
+  bifrost-data:
   crawler_storage:
