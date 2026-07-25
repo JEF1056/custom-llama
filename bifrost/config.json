@@ -5,47 +5,42 @@
       "keys": [
         {
           "name": "ml-1-wsl-cuda",
-          "value": "sk-noauth",
-          "models": ["qwen3.6-35b"],
+          "value": "",
+          "models": ["*"],
           "weight": 0.25,
-          "openai_key_config": {
-            "url": "http://ml-1-wsl:8080/v1"
+          "vllm_key_config": {
+            "url": "http://ml-1-wsl:8080",
+            "model_name": "/models/qwen36-262k-balanced.gguf"
           }
         },
         {
           "name": "ml-2-mlx",
-          "value": "sk-noauth",
-          "models": ["qwen3.6-35b"],
+          "value": "",
+          "models": ["*"],
           "weight": 0.25,
-          "aliases": {
-            "qwen3.6-35b": "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved"
-          },
-          "openai_key_config": {
-            "url": "http://ml-2:8081/v1"
+          "vllm_key_config": {
+            "url": "http://ml-2:8081",
+            "model_name": "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved"
           }
         },
         {
           "name": "ml-3-mlx",
-          "value": "sk-noauth",
-          "models": ["qwen3.6-35b"],
+          "value": "",
+          "models": ["*"],
           "weight": 0.25,
-          "aliases": {
-            "qwen3.6-35b": "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved"
-          },
-          "openai_key_config": {
-            "url": "http://ml-3:8081/v1"
+          "vllm_key_config": {
+            "url": "http://ml-3:8081",
+            "model_name": "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved"
           }
         },
         {
           "name": "ml-4-mlx",
-          "value": "sk-noauth",
-          "models": ["qwen3.6-35b"],
+          "value": "",
+          "models": ["*"],
           "weight": 0.25,
-          "aliases": {
-            "qwen3.6-35b": "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved"
-          },
-          "openai_key_config": {
-            "url": "http://ml-4:8081/v1"
+          "vllm_key_config": {
+            "url": "http://ml-4:8081",
+            "model_name": "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved"
           }
         }
       ],
@@ -63,7 +58,7 @@
         "provider_configs": [
           {
             "provider": "vllm",
-            "allowed_models": ["qwen3.6-35b"],
+            "allowed_models": ["*"],
             "weight": 1.0
           }
         ]
