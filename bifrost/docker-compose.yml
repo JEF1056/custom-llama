@@ -52,7 +52,7 @@ services:
     networks:
       - bifrost-net
 
-  networks:
+networks:
   bifrost-net:
     driver: bridge
 
