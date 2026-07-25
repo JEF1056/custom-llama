@@ -70,6 +70,17 @@
       }
     ]
   },
+  "mcp": {
+    "client_configs": [
+      {
+        "name": "websearch",
+        "connection_type": "http",
+        "connection_string": "http://websearch-api:3001/mcp",
+        "is_ping_available": true,
+        "tools_to_execute": ["*"]
+      }
+    ]
+  },
   "config_store": {
     "enabled": true,
     "type": "sqlite",

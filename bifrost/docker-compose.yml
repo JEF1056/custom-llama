@@ -1,0 +1,60 @@
+version: "3.8"
+
+services:
+  bifrost:
+    image: maximhq/bifrost:latest
+    container_name: bifrost
+    ports:
+      - "${BIFROST_PORT:-8080}:8080"
+    volumes:
+      - ./config.json:/app/data/config.json:ro
+      - ./data:/app/data
+    environment:
+      - APP_PORT=8080
+      - APP_HOST=0.0.0.0
+      - LOG_LEVEL=${BIFROST_LOG_LEVEL:-info}
+      - LOG_STYLE=json
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - bifrost-net
+
+  websearch-crawler:
+    image: laituanmanh/websearch-crawler:latest
+    container_name: websearch-api
+    restart: unless-stopped
+    ports:
+      - "${WEBSEARCH_PORT:-3001}:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - LOG_LEVEL=info
+      - FLARESOLVERR_URL=http://flaresolverr:8191/v1
+    depends_on:
+      - flaresolverr
+    volumes:
+      - crawler_storage:/app/storage
+    networks:
+      - bifrost-net
+
+  flaresolverr:
+    image: 21hsmw/flaresolverr:nodriver
+    container_name: flaresolverr
+    restart: unless-stopped
+    environment:
+      - LOG_LEVEL=info
+      - TZ=UTC
+    networks:
+      - bifrost-net
+
+networks:
+  bifrost-net:
+    driver: bridge
+
+volumes:
+  crawler_storage:
