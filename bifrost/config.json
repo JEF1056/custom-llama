@@ -62,7 +62,7 @@
         "id": "bifrost-master-key",
         "provider_configs": [
           {
-            "provider": "openai",
+            "provider": "vllm",
             "allowed_models": ["qwen3.6-35b"],
             "weight": 1.0
           }
