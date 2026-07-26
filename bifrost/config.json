@@ -8,9 +8,6 @@
           "value": "",
           "models": ["qwen3.6-35b"],
           "weight": 0.25,
-          "aliases": {
-            "qwen3.6-35b": "qwen3.6-35b"
-          },
           "vllm_key_config": {
             "url": "http://ml-1-wsl.mango-tone.ts.net:8080",
             "model_name": "qwen3.6-35b"
