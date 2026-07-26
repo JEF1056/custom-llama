@@ -4,14 +4,14 @@
   "provider": {
     "router": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "vllm-router",
+      "name": "ollam",
       "options": {
         "baseURL": "http://coolify:4000/v1",
         "apiKey": "router-master-key"
       },
       "models": {
         "qwen3.6-35b": {
-          "name": "Qwen3.6-35B-A3B (vLLM Router)",
+          "name": "Qwen3.6-35B-A3B (Olla)",
           "tools": true,
           "attachment": true,
           "limit": {
@@ -70,10 +70,10 @@
         "MAX_SEARCH_RESULT": "5"
       }
     },
-    "router": {
+    "ollam": {
       "type": "remote",
       "enabled": true,
-      "url": "http://100.81.0.46:4000/mcp",
+      "url": "http://100.81.0.46:40114/olla/anthropic/v1/messages",
       "headers": {
         "Authorization": "Bearer router-master-key"
       }
