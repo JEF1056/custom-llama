@@ -41,9 +41,9 @@ model_registry:
   type: "memory"
   enable_unifier: true
   routing_strategy:
-    type: "strict"
+    type: "optimistic"
     options:
-      fallback_behavior: "compatible_only"
+      fallback_behavior: "all"
   unification:
     enabled: true
     stale_threshold: 24h
