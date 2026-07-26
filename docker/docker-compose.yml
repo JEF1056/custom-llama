@@ -47,6 +47,7 @@ services:
     env_file: .env
     environment:
       LLAMA_CACHE: /models
+      MODEL_NAME: qwen3.6-35b
     ports:
       - "${LLAMA_PORT:-8080}:8080"
     volumes:
