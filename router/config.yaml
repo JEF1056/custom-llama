@@ -1,62 +1,64 @@
-version: "1"
+server:
+  host: "0.0.0.0"
+  port: 40114
+  write_timeout: 0s
 
-# API listener configuration
-listeners:
-  - name: default
-    port: 8888
-    host: "0.0.0.0"
+proxy:
+  engine: "olla"
+  profile: "auto"
+  load_balancer: "priority"
+  response_timeout: 15m
+  read_timeout: 10m
 
-# Backend LLM providers (migrated from Bifrost)
-# Model names per backend from opencode.json:
-#   llama-local  (ml-1-wsl)  -> qwen36-262k-local
-#   llama-remote (ml-2,3,4) -> /Users/jfan/.qwen/models/qwen36-mlx
-providers:
-  - name: ml-1-wsl-cuda
-    api_base: http://100.118.67.28:8080/v1
-    model_name: qwen36-262k-local
-    weight: 1.0
-
-  - name: ml-2-mlx
-    api_base: http://100.77.84.65:8081/v1
-    model_name: /Users/jfan/.qwen/models/qwen36-mlx
-    weight: 1.0
-
-  - name: ml-3-mlx
-    api_base: http://100.93.207.60:8081/v1
-    model_name: /Users/jfan/.qwen/models/qwen36-mlx
-    weight: 1.0
-
-  - name: ml-4-mlx
-    api_base: http://100.66.209.104:8081/v1
-    model_name: /Users/jfan/.qwen/models/qwen36-mlx
-    weight: 0.5
-
-# Routing decisions
-routing:
-  decisions:
-    - name: default
-      description: "Route to available backends with semantic session stickiness"
-      sticky_session: true
-      signals:
-        - type: embedding
-          configuration:
-            enabled: true
-            model: BAAI/bge-large-en-v1.5
-      plugins:
-        - type: semantic-cache
-          configuration:
-            enabled: true
-            similarity_threshold: 0.92
-            ttl_seconds: 3600
-
-# Router-wide defaults
-global:
-  embedding_model: BAAI/bge-large-en-v1.5
-  cache_type: redis
-  cache_addr: redis:6379
-  healthcheck_interval: 30
-  healthcheck_timeout: 5
-  circuit_breaker:
+discovery:
+  type: "static"
+  model_discovery:
     enabled: true
-    failure_threshold: 3
-    recovery_timeout: 30
+    interval: 5m
+  static:
+    endpoints:
+      - url: "http://100.118.67.28:8080"
+        name: "ml-1-wsl-cuda"
+        type: "llamacpp"
+        priority: 100
+
+      - url: "http://100.77.84.65:8081"
+        name: "ml-2-mlx"
+        type: "vllm-mlx"
+        priority: 100
+
+      - url: "http://100.93.207.60:8081"
+        name: "ml-3-mlx"
+        type: "vllm-mlx"
+        priority: 100
+
+      - url: "http://100.66.209.104:8081"
+        name: "ml-4-mlx"
+        type: "vllm-mlx"
+        priority: 50
+
+model_registry:
+  type: "memory"
+  enable_unifier: true
+  routing_strategy:
+    type: "strict"
+    options:
+      fallback_behavior: "compatible_only"
+  unification:
+    enabled: true
+    stale_threshold: 24h
+    cleanup_interval: 10m
+  model_aliases:
+    - name: "qwen3.6-35b"
+      aliases:
+        - "qwen36-262k-local"
+        - "/Users/jfan/.qwen/models/qwen36-mlx"
+
+translators:
+  anthropic:
+    enabled: true
+    passthrough_enabled: true
+
+logging:
+  level: "info"
+  format: "json"

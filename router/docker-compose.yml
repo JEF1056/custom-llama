@@ -1,37 +1,16 @@
 version: "3.8"
 
 services:
-  redis:
-    image: redis/redis-stack:latest
-    container_name: router-redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis-data:/data
-    networks:
-      - router-net
-
-  vllm-sr:
+  ollam:
     build: ./
-    container_name: vllm-sr
+    container_name: ollam
     restart: unless-stopped
     ports:
-      - "4000:8888"  # API (OpenAI-compatible)
-      - "8700:8700"  # Dashboard
-      - "9190:9190"  # Prometheus metrics
+      - "4000:40114"  # API (OpenAI-compatible)
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
-    depends_on:
-      - redis
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
- 
     networks:
       - router-net
-
-volumes:
-  redis-data:
 
 networks:
   router-net:
