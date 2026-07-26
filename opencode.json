@@ -4,9 +4,9 @@
   "provider": {
     "router": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "ollam",
+      "name": "olla",
       "options": {
-        "baseURL": "http://coolify:4000/v1",
+        "baseURL": "http://coolify:4000/olla/proxy/v1",
         "apiKey": "router-master-key"
       },
       "models": {
