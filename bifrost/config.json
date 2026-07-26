@@ -16,7 +16,6 @@
         {
           "name": "ml-2-mlx",
           "value": "",
-          "models": ["qwen3.6-35b"],
           "weight": 0.25,
           "vllm_key_config": {
             "url": "http://ml-2.mango-tone.ts.net:8081",
@@ -26,7 +25,6 @@
         {
           "name": "ml-3-mlx",
           "value": "",
-          "models": ["qwen3.6-35b"],
           "weight": 0.25,
           "vllm_key_config": {
             "url": "http://ml-3.mango-tone.ts.net:8081",
@@ -36,7 +34,6 @@
         {
           "name": "ml-4-mlx",
           "value": "",
-          "models": ["qwen3.6-35b"],
           "weight": 0.25,
           "vllm_key_config": {
             "url": "http://ml-4.mango-tone.ts.net:8081",
