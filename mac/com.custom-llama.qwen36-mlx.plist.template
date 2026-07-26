@@ -13,7 +13,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>__REPO__/mac/run-mlx-server.sh</string>
+        <string>__REPO__/mac/launch-mlx-server.sh</string>
     </array>
 
    <key>EnvironmentVariables</key>
@@ -28,6 +28,8 @@
         <string>__MODEL_PATH__</string>
         <key>MLX_MAX_KV_SIZE</key>
         <string>229376</string>
+        <key>VENV_DIR</key>
+        <string>__VENV_DIR__</string>
         <key>PATH</key>
         <string>__VENV_BIN__:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>

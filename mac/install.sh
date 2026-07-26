@@ -106,8 +106,17 @@ if [[ ! -d "$MLX_DIR" ]]; then
         --dtype bfloat16 \
         --quantize \
         --q-mode affine \
-        --quant-predicate mixed_2_6 \
+        --quant-predicate mixed_3_4 \
         ${HF_TOKEN:+--token "$HF_TOKEN"}
+
+    # Clean up the HuggingFace cache to reclaim disk space (~10-30 GB).
+    # The converted MLX safetensors are already saved; the HF cache is no
+    # longer needed. Set HF_CACHE_CLEANUP=0 to skip this step.
+    if [[ "${HF_CACHE_CLEANUP:-1}" == "1" ]]; then
+        log "Cleaning up HuggingFace cache..."
+        rm -rf "$HOME/.cache/huggingface" 2>/dev/null || true
+        log "HF cache removed."
+    fi
 
     log "Conversion and quantization complete: $MLX_DIR"
 else
@@ -137,6 +146,7 @@ HOME_ESC=$(sed_escape "$HOME")
 MLX_PORT_ESC=$(sed_escape "$MLX_PORT")
 MODEL_PATH_ESC=$(sed_escape "$MODEL_PATH")
 MLX_MAX_KV_SIZE_ESC=$(sed_escape "$MLX_MAX_KV_SIZE")
+VENV_DIR_ESC=$(sed_escape "$VENV_DIR")
 VENV_BIN_ESC=$(sed_escape "$VENV_DIR/bin")
 
 sed -e "s|__REPO__|$CL_DIR_ESC|g" \
@@ -144,6 +154,7 @@ sed -e "s|__REPO__|$CL_DIR_ESC|g" \
     -e "s|__MLX_PORT__|$MLX_PORT_ESC|g" \
     -e "s|__MODEL_PATH__|$MODEL_PATH_ESC|g" \
     -e "s|__MLX_MAX_KV_SIZE__|$MLX_MAX_KV_SIZE_ESC|g" \
+    -e "s|__VENV_DIR__|$VENV_DIR_ESC|g" \
     -e "s|__VENV_BIN__|$VENV_BIN_ESC|g" \
     "$CL_DIR/mac/com.custom-llama.qwen36-mlx.plist.template" > "$PLIST_DST"
 
