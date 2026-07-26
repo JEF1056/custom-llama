@@ -106,7 +106,7 @@ if [[ ! -d "$MLX_DIR" ]]; then
         --dtype bfloat16 \
         --quantize \
         --q-mode affine \
-        --quant-predicate mixed_3_4 \
+        --quant-predicate mixed_4_8 \
         ${HF_TOKEN:+--token "$HF_TOKEN"}
 
     # Clean up the HuggingFace cache to reclaim disk space (~10-30 GB).

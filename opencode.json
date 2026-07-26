@@ -69,6 +69,14 @@
         "API_URL": "http://localhost:3001",
         "MAX_SEARCH_RESULT": "5"
       }
+    },
+    "bifrost": {
+      "type": "remote",
+      "enabled": true,
+      "url": "http://100.81.0.46:4000/mcp",
+      "headers": {
+        "Authorization": "Bearer bifrost-master-key"
+      }
     }
   }
 }

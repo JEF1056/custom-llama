@@ -33,7 +33,7 @@ export APC_ENABLED=${APC_ENABLED:-1}
 # ---- KV cache quantization ----------------------------------------------------
 # 4-bit uniform, the MLX analogue of llama.cpp q4_0. Set MLX_KV_BITS= (empty)
 # to keep a full-precision KV cache.
-MLX_KV_BITS=${MLX_KV_BITS:-4}
+MLX_KV_BITS=${MLX_KV_BITS:-3}
 
 # ---- KV cache size limit ------------------------------------------------------
 # Cap the KV cache to prevent OOM on long-context requests. 64K tokens at
@@ -77,7 +77,7 @@ EXTRA_ARGS=""
 # Enable thinking mode if the model supports it (--enable-thinking is a
 # mlx_vlm.server flag that activates the model's native chain-of-thought
 # / reasoning behavior).
-EXTRA_ARGS="$EXTRA_ARGS --enable-thinking"
+EXTRA_ARGS="$EXTRA_ARGS --enable-thinking --kv-quant-scheme turboquant"
 
 # ---- Build prefill step size argument -----------------------------------------
 # Smaller prefill steps reduce peak memory during long-context processing,

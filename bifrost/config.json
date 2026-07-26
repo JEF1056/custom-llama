@@ -69,6 +69,23 @@
       }
     }
   },
+  "vector_store": {
+    "enabled": true,
+    "type": "redis",
+    "config": {
+      "addr": "redis:6379"
+    }
+  },
+  "mcp": {
+    "client_configs": [
+      {
+        "name": "websearch",
+        "connection_type": "http",
+        "connection_string": "http://websearch-crawler:3001",
+        "auth_type": "none"
+      }
+    ]
+  },
   "config_store": {
     "enabled": true,
     "type": "sqlite",
