@@ -41,18 +41,17 @@ model_registry:
   type: "memory"
   enable_unifier: true
   routing_strategy:
-    type: "optimistic"
+    type: "strict"
     options:
-      fallback_behavior: "all"
+      fallback_behavior: "compatible_only"
   unification:
     enabled: true
     stale_threshold: 24h
     cleanup_interval: 10m
-  model_aliases:
-    - name: "qwen3.6-35b"
-      aliases:
-        - "/models/qwen3.6-35b"
-        - "/Users/jfan/.qwen/models/qwen36-mlx"
+    aliases:
+      qwen3.6-35b:
+        - /models/qwen3.6-35b
+        - /Users/jfan/.qwen/models/qwen36-mlx
 
 translators:
   anthropic:
