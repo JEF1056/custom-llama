@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.getbifrost.ai/schema",
   "providers": {
-    "vllm": {
+    "vllm-cuda": {
       "keys": [
         {
           "name": "ml-1-wsl-cuda",
@@ -12,7 +12,11 @@
             "url": "http://ml-1-wsl.mango-tone.ts.net:8080",
             "model_name": "qwen3.6-35b"
           }
-        },
+        }
+      ]
+    },
+    "vllm-mlx": {
+      "keys": [
         {
           "name": "ml-2-mlx",
           "value": "",
@@ -52,15 +56,14 @@
             "model_name": "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved"
           }
         }
-      ],
-      "network_config": {
-        "max_retries": 3,
-        "retry_backoff_initial": 100,
-        "retry_backoff_max": 2000
-      }
+      ]
     }
   },
   "config_store": {
-    "enabled": false
+    "enabled": true,
+    "type": "sqlite",
+    "config": {
+      "path": "./config.db"
+    }
   }
 }
