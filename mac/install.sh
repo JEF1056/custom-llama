@@ -32,7 +32,7 @@ MODEL_PATH=${MODEL_PATH:-$QWEN_HOME/models/qwen36-mlx}
 HF_REPO=${HF_REPO:-llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved}
 VENV_NAME=${VENV_NAME:-mlx-venv}
 
-LABEL=com.custom-llama.qwen36-mlx
+LABEL=${LABEL:-com.custom-llama.qwen36-mlx}
 PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
 CL_DIR="$QWEN_HOME/custom-llama"
 VENV_DIR="$QWEN_HOME/$VENV_NAME"
@@ -140,6 +140,7 @@ fi
 REQUIRED_FILES=(
     "$CL_DIR/mac/com.custom-llama.qwen36-mlx.plist.template"
     "$CL_DIR/mac/launch-mlx-server.sh"
+    "$CL_DIR/mac/supervisor-mlx-server.sh"
     "$CL_DIR/mac/run-mlx-server.sh"
     "$CL_DIR/mac/uninstall.sh"
 )
@@ -176,6 +177,7 @@ sed -e "s|__REPO__|$CL_DIR_ESC|g" \
     -e "s|__MLX_MAX_KV_SIZE__|$MLX_MAX_KV_SIZE_ESC|g" \
     -e "s|__VENV_DIR__|$VENV_DIR_ESC|g" \
     -e "s|__VENV_BIN__|$VENV_BIN_ESC|g" \
+    -e "s|<string>com\.custom-llama\.qwen36-mlx</string>|<string>$LABEL</string>|g" \
     "$CL_DIR/mac/com.custom-llama.qwen36-mlx.plist.template" > "$PLIST_DST"
 
 # (Re)load cleanly.
@@ -194,7 +196,8 @@ PLIST_SIZE=$(wc -c < "$PLIST_DST")
 log "Plist generated: $PLIST_SIZE bytes"
 
 log "Done."
-log "MLX server: http://localhost:$MLX_PORT/v1  (auto-starts at login, auto-restarts on crash)"
-log "Logs: ~/Library/Logs/qwen36-mlx.out.log  and  ~/Library/Logs/qwen36-mlx.err.log"
+log "MLX server: http://localhost:$MLX_PORT/v1  (always-up via supervisor)"
+log "Logs: ~/Library/Logs/qwen36-mlx.out.log  ~/Library/Logs/qwen36-mlx.err.log"
+log "Supervisor: ~/Library/Logs/qwen36-mlx-supervisor.log"
 log "Model: $QUANTIZED_DIR"
 log "Uninstall: bash $CL_DIR/mac/uninstall.sh"

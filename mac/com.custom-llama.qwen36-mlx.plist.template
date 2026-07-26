@@ -16,7 +16,7 @@
         <string>__REPO__/mac/launch-mlx-server.sh</string>
     </array>
 
-   <key>EnvironmentVariables</key>
+    <key>EnvironmentVariables</key>
     <dict>
         <key>HOME</key>
         <string>__HOME__</string>
