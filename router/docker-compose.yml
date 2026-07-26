@@ -24,6 +24,8 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
     depends_on:
       - redis
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
  
     networks:
       - router-net
