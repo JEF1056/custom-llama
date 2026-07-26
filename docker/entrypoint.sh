@@ -181,8 +181,14 @@ case "${MODEL_SOURCE,,}" in
             err "or set MODEL_SOURCE=hf for a public bring-up quant."
             exit 1
         fi
-        log "Model source: local $MODEL_PATH"
-        SERVER_ARGS+=(-m "$MODEL_PATH")
+        # Create symlink with unified model name for bifrost load balancing
+        MODEL_NAME=${MODEL_NAME:-qwen3.6-35b}
+        MODEL_ALIAS_PATH="/models/${MODEL_NAME}"
+        if [[ ! -L "$MODEL_ALIAS_PATH" ]]; then
+            ln -sf "$MODEL_PATH" "$MODEL_ALIAS_PATH"
+        fi
+        log "Model source: local $MODEL_PATH (alias: $MODEL_ALIAS_PATH)"
+        SERVER_ARGS+=(-m "$MODEL_ALIAS_PATH")
         ;;
 esac
 if [[ -n "${CTX:-}" && "${CTX}" != "0" ]]; then
