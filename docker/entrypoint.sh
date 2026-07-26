@@ -69,6 +69,8 @@ USE_MLOCK=${USE_MLOCK:-0}
 # 1024 chosen: +24% pp throughput over default for only +3% VRAM, ~8GB headroom.
 # Raise toward 2048 for smaller quant with spare VRAM; lower toward 256 for larger.
 UBATCH_SIZE=${UBATCH_SIZE:-1024}
+THREADS=${THREADS:-16}
+THREADS_BATCH=${THREADS_BATCH:-4}
 
 # Vision (multimodal). Qwen3.6-35B-A3B ships a Qwen3-VL-lineage vision tower as
 # a separate mmproj GGUF (ik_llama's examples/mtmd/clip.cpp has a full
@@ -100,11 +102,11 @@ MTP_REQUANTIZE_OUTPUT_TYPE=${MTP_REQUANTIZE_OUTPUT_TYPE:-}
 # only wired for single-stage MTP). Default OFF (ENABLE_NGRAM=0) so vision+MTP
 # works. Only enable on text-only (ENABLE_VISION=0) - note that path has its
 # own bug (`--no-mmproj` unrecognized) in this build.
-ENABLE_NGRAM=${ENABLE_NGRAM:-0}
+ENABLE_NGRAM=${ENABLE_NGRAM:-1}
 NGRAM_TYPE=${NGRAM_TYPE:-ngram-mod}
-NGRAM_N_MAX=${NGRAM_N_MAX:-64}
+NGRAM_N_MAX=${NGRAM_N_MAX:-16}
 NGRAM_N_MIN=${NGRAM_N_MIN:-2}
-NGRAM_SIZE_N=${NGRAM_SIZE_N:-8}
+NGRAM_SIZE_N=${NGRAM_SIZE_N:-1024}
 
 # Sampling defaults. These set the server-side default generation params;
 # clients may still override them per request.
@@ -145,6 +147,8 @@ SERVER_ARGS=(
     -fa "$FLASH_ATTN"
     --jinja
     --parallel "$N_PARALLEL"
+    -t "$THREADS"
+    -tb "$THREADS_BATCH"
     -ub "$UBATCH_SIZE"
     --cache-ram "$CACHE_RAM_MIB"
     --cache-type-k "$KV_TYPE_K"
@@ -181,7 +185,7 @@ case "${MODEL_SOURCE,,}" in
             err "or set MODEL_SOURCE=hf for a public bring-up quant."
             exit 1
         fi
-        # Create symlink with unified model name for bifrost load balancing
+        # Create symlink with unified model name for vllm-router load balancing
         MODEL_NAME=${MODEL_NAME:-qwen3.6-35b}
         MODEL_ALIAS_PATH="/models/${MODEL_NAME}"
         if [[ ! -L "$MODEL_ALIAS_PATH" ]]; then
@@ -263,6 +267,7 @@ if [[ -n "${SLOT_SAVE_PATH:-}" ]]; then
     mkdir -p "$SLOT_SAVE_PATH"
     SERVER_ARGS+=(--slot-save-path "$SLOT_SAVE_PATH")
 fi
+
 # Space-separated extra args for advanced tuning.
 if [[ -n "${EXTRA_ARGS:-}" ]]; then
     # shellcheck disable=SC2206

@@ -2,16 +2,16 @@
   "$schema": "https://opencode.ai/config.json",
   "plugin": ["github:JEF1056/harness"],
   "provider": {
-    "bifrost": {
+    "router": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "bifrost",
+      "name": "vllm-router",
       "options": {
         "baseURL": "http://coolify:4000/v1",
-        "apiKey": "bifrost-master-key"
+        "apiKey": "router-master-key"
       },
       "models": {
         "qwen3.6-35b": {
-          "name": "Qwen3.6-35B-A3B (Bifrost)",
+          "name": "Qwen3.6-35B-A3B (vLLM Router)",
           "tools": true,
           "attachment": true,
           "limit": {
@@ -59,7 +59,7 @@
       }
     }
   },
-  "model": "bifrost//qwen3.6-35b",
+  "model": "router//qwen3.6-35b",
   "mcp": {
     "websearch": {
       "type": "local",
@@ -70,12 +70,12 @@
         "MAX_SEARCH_RESULT": "5"
       }
     },
-    "bifrost": {
+    "router": {
       "type": "remote",
       "enabled": true,
       "url": "http://100.81.0.46:4000/mcp",
       "headers": {
-        "Authorization": "Bearer bifrost-master-key"
+        "Authorization": "Bearer router-master-key"
       }
     }
   }
