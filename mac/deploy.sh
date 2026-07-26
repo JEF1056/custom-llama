@@ -19,6 +19,9 @@ set -euo pipefail
 ALL_HOSTS=(ml-2 ml-3 ml-4)
 HOSTS=("${@:-${ALL_HOSTS[@]}}")
 
+# ---- Enable auto-login flag -------------------------------------------------
+ENABLE_AUTO_LOGIN=${ENABLE_AUTO_LOGIN:-1}
+
 # ---- Port assignment per host -----------------------------------------------
 declare -A PORT_MAP=( [ml-2]=8081 [ml-3]=8082 [ml-4]=8083 )
 
@@ -41,6 +44,29 @@ for host in "${HOSTS[@]}"; do
 done
 
 green "Pre-flight OK: all hosts reachable\n"
+
+# ---- Enable auto-login on each host -----------------------------------------
+if [[ "$ENABLE_AUTO_LOGIN" -eq 1 ]]; then
+    yellow "Enabling auto-login on all hosts..."
+    
+    for host in "${HOSTS[@]}"; do
+        yellow "  $host: Setting auto-login..."
+        ssh "$host" <<SSH_EOF
+# Get the short username from the primary admin account
+USERNAME=\$(defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser)
+if [[ -n "\$USERNAME" ]]; then
+    # Enable auto-login with delayed prompt
+    sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser -string "\$USERNAME"
+    sudo defaults write /Library/Preferences/com.apple.loginwindow RetriesUntilTimeout -int 0
+    echo "  $host: Auto-login enabled for user \$USERNAME"
+else
+    echo "  $host: Could not determine username, skipping auto-login"
+fi
+SSH_EOF
+    done
+    
+    green "  Auto-login configured on all hosts\n"
+fi
 
 # ---- Deploy to each host ----------------------------------------------------
 FAILED=()
@@ -87,6 +113,9 @@ else
     red "Failed hosts: ${FAILED[*]}"
 fi
 echo "==========================================="
+if [[ "$ENABLE_AUTO_LOGIN" -eq 1 ]]; then
+    green "Auto-login enabled: servers will start at login"
+fi
 echo ""
 echo "Ports:"
 for host in "${HOSTS[@]}"; do
