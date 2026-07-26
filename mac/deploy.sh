@@ -2,6 +2,7 @@
 #
 # Deploy the MLX VLM server to multiple MacBooks (ml-2, ml-3, ml-4).
 # Requires passwordless SSH to each host and HF_TOKEN available locally.
+# All servers use the same hardcoded port (8080).
 #
 # Usage:
 #   bash mac/deploy.sh                          # deploy to all hosts
@@ -22,10 +23,8 @@ HOSTS=("${@:-${ALL_HOSTS[@]}}")
 # ---- Enable auto-login flag -------------------------------------------------
 ENABLE_AUTO_LOGIN=${ENABLE_AUTO_LOGIN:-1}
 
-# ---- Port assignment per host -----------------------------------------------
-declare -A PORT_MAP=( [ml-2]=8080 [ml-3]=8080 [ml-4]=8080 )
-
 # ---- Config -----------------------------------------------------------------
+MLX_PORT="8080"
 CUSTOM_LLAMA_REF=${CUSTOM_LLAMA_REF:-hosting}
 MLX_KV_BITS=${MLX_KV_BITS:-4}
 MLX_MAX_KV_SIZE=${MLX_MAX_KV_SIZE:-229376}
@@ -74,16 +73,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
 for host in "${HOSTS[@]}"; do
-    PORT=${PORT_MAP[$host]:-8081}
     LABEL="com.custom-llama.qwen36-mlx.${host}"
 
-    yellow "Deploying to $host (port=$PORT, label=$LABEL)..."
+    yellow "Deploying to $host (port=$MLX_PORT, label=$LABEL)..."
 
     # Create a temporary install wrapper for this host
     TEMP_INSTALL=$(mktemp)
     cat > "$TEMP_INSTALL" <<'INNER_EOF'
 export HF_TOKEN='${HF_TOKEN:-}'
-export MLX_PORT='${PORT}'
+export MLX_PORT='${MLX_PORT}'
 export MLX_KV_BITS='${MLX_KV_BITS}'
 export MLX_MAX_KV_SIZE='${MLX_MAX_KV_SIZE}'
 export CUSTOM_LLAMA_REF='${CUSTOM_LLAMA_REF}'
@@ -96,7 +94,7 @@ INNER_EOF
     # Transfer and run
     if scp "$TEMP_INSTALL" "$host:/tmp/deploy-install.sh" && \
        ssh "$host" "bash /tmp/deploy-install.sh" 2>&1 | tee "/tmp/deploy-${host}.log"; then
-        green "  $host: SUCCESS (http://localhost:${PORT}/v1)\n"
+        green "  $host: SUCCESS (http://localhost:${MLX_PORT}/v1)\n"
     else
         red "  $host: FAILED (see /tmp/deploy-${host}.log)\n"
         FAILED+=("$host")
@@ -119,10 +117,9 @@ fi
 echo ""
 echo "Ports:"
 for host in "${HOSTS[@]}"; do
-    PORT=${PORT_MAP[$host]:-8081}
     if [[ ! " ${FAILED[*]:-} " =~ " ${host} " ]]; then
-        green "  ${host}: http://localhost:${PORT}/v1"
+        green "  ${host}: http://localhost:${MLX_PORT}/v1"
     else
-        red "  ${host}: http://localhost:${PORT}/v1 (deploy failed)"
+        red "  ${host}: http://localhost:${MLX_PORT}/v1 (deploy failed)"
     fi
 done
