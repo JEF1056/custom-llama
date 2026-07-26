@@ -11,10 +11,6 @@ proxy:
   read_timeout: 10m
 
 discovery:
-  type: "static"
-  model_discovery:
-    enabled: true
-    interval: 5m
   static:
     endpoints:
       - url: "http://100.118.67.28:8080"
@@ -24,17 +20,17 @@ discovery:
 
       - url: "http://100.77.84.65:8081"
         name: "ml-2-mlx"
-        type: "llamacpp"
+        type: "openai-compatible"
         priority: 100
 
       - url: "http://100.93.207.60:8081"
         name: "ml-3-mlx"
-        type: "llamacpp"
+        type: "openai-compatible"
         priority: 100
 
       - url: "http://100.66.209.104:8081"
         name: "ml-4-mlx"
-        type: "llamacpp"
+        type: "openai-compatible"
         priority: 50
 
 model_registry:
@@ -48,10 +44,11 @@ model_registry:
     enabled: true
     stale_threshold: 24h
     cleanup_interval: 10m
-    aliases:
-      qwen3.6-35b:
-        - /models/qwen3.6-35b
-        - /Users/jfan/.qwen/models/qwen36-mlx
+
+model_aliases:
+  qwen3.6-35b:
+    - /models/qwen3.6-35b
+    - /Users/jfan/.qwen/models/qwen36-mlx
 
 translators:
   anthropic:
