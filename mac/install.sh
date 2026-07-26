@@ -136,6 +136,27 @@ else
     git clone --branch "$CUSTOM_LLAMA_REF" "$CUSTOM_LLAMA_REPO" "$CL_DIR"
 fi
 
+# ---- Verify required files exist --------------------------------------------
+REQUIRED_FILES=(
+    "$CL_DIR/mac/com.custom-llama.qwen36-mlx.plist.template"
+    "$CL_DIR/mac/launch-mlx-server.sh"
+    "$CL_DIR/mac/run-mlx-server.sh"
+    "$CL_DIR/mac/uninstall.sh"
+)
+MISSING=0
+for f in "${REQUIRED_FILES[@]}"; do
+    if [[ ! -f "$f" ]]; then
+        err "Required file missing: $f"
+        MISSING=1
+    fi
+done
+if [[ "$MISSING" -eq 1 ]]; then
+    err "Repo is missing required mac/ files. Check that CUSTOM_LLAMA_REF='$CUSTOM_LLAMA_REF' points to the correct branch."
+    err "Current branch: $(git -C "$CL_DIR" branch --show-current 2>/dev/null || echo 'unknown')"
+    err "Aborting."
+    exit 1
+fi
+
 # ---- Render + install the LaunchAgent ---------------------------------------
 log "Installing LaunchAgent ($LABEL)..."
 # Escape & and \ for sed safety (paths may contain these characters)
@@ -162,6 +183,15 @@ launchctl bootout   "gui/$(id -u)/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
 launchctl enable    "gui/$(id -u)/$LABEL"
 launchctl kickstart -k "gui/$(id -u)/$LABEL" || true
+
+# ---- Verify plist was generated correctly -----------------------------------
+if [[ ! -s "$PLIST_DST" ]]; then
+    err "LaunchAgent plist is empty or missing: $PLIST_DST"
+    err "This means the server will not start. Check that the template file exists and sed worked correctly."
+    exit 1
+fi
+PLIST_SIZE=$(wc -c < "$PLIST_DST")
+log "Plist generated: $PLIST_SIZE bytes"
 
 log "Done."
 log "MLX server: http://localhost:$MLX_PORT/v1  (auto-starts at login, auto-restarts on crash)"
