@@ -23,7 +23,7 @@ set -euo pipefail
 
 # ---- Config (override via env) ----------------------------------------------
 CUSTOM_LLAMA_REPO=${CUSTOM_LLAMA_REPO:-https://github.com/JEF1056/custom-llama.git}
-CUSTOM_LLAMA_REF=${CUSTOM_LLAMA_REF:-main}
+CUSTOM_LLAMA_REF=${CUSTOM_LLAMA_REF:-hosting}
 QWEN_HOME=${QWEN_HOME:-$HOME/.qwen}
 MLX_PORT=${MLX_PORT:-8081}
 MLX_KV_BITS=${MLX_KV_BITS:-4}
