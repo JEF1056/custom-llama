@@ -8,7 +8,7 @@
 set -euo pipefail
 
 HOST=${1:-localhost}
-MLX_PORT=${MLX_PORT:-8081}
+MLX_PORT=${MLX_PORT:-8080}
 
 if [[ "$HOST" == "localhost" ]]; then
     URL="http://localhost:${MLX_PORT}/v1/models"
