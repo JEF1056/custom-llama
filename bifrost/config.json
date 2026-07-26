@@ -61,10 +61,6 @@
     }
   },
   "config_store": {
-    "enabled": true,
-    "type": "sqlite",
-    "config": {
-      "path": "./config.db"
-    }
+    "enabled": false
   }
 }
