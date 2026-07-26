@@ -129,12 +129,11 @@ QUANTIZED_DIR="$MLX_DIR"
 if [[ -d "$CL_DIR/.git" ]]; then
     log "Updating custom-llama repo..."
     git -C "$CL_DIR" fetch --depth 1 origin "$CUSTOM_LLAMA_REF" 2>/dev/null || true
-    git -C "$CL_DIR" checkout "$CUSTOM_LLAMA_REF" 2>/dev/null || true
+    git -C "$CL_DIR" checkout -B "$CUSTOM_LLAMA_REF" "origin/$CUSTOM_LLAMA_REF" 2>/dev/null || true
     git -C "$CL_DIR" pull --ff-only 2>/dev/null || true
 else
     log "Cloning custom-llama repo..."
-    git clone "$CUSTOM_LLAMA_REPO" "$CL_DIR"
-    git -C "$CL_DIR" checkout "$CUSTOM_LLAMA_REF" 2>/dev/null || true
+    git clone --branch "$CUSTOM_LLAMA_REF" "$CUSTOM_LLAMA_REPO" "$CL_DIR"
 fi
 
 # ---- Render + install the LaunchAgent ---------------------------------------
