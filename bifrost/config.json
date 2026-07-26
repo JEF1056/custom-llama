@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.getbifrost.ai/schema",
   "providers": {
-    "vllm-cuda": {
+    "vllm": {
       "keys": [
         {
           "name": "ml-1-wsl-cuda",
@@ -12,22 +12,15 @@
             "url": "http://ml-1-wsl.mango-tone.ts.net:8080",
             "model_name": "qwen3.6-35b"
           }
-        }
-      ]
-    },
-    "vllm-mlx": {
-      "keys": [
+        },
         {
           "name": "ml-2-mlx",
           "value": "",
           "models": ["qwen3.6-35b"],
           "weight": 0.25,
-          "aliases": {
-            "qwen3.6-35b": "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved"
-          },
           "vllm_key_config": {
             "url": "http://ml-2.mango-tone.ts.net:8081",
-            "model_name": "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved"
+            "model_name": "qwen3.6-35b"
           }
         },
         {
@@ -35,12 +28,9 @@
           "value": "",
           "models": ["qwen3.6-35b"],
           "weight": 0.25,
-          "aliases": {
-            "qwen3.6-35b": "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved"
-          },
           "vllm_key_config": {
             "url": "http://ml-3.mango-tone.ts.net:8081",
-            "model_name": "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved"
+            "model_name": "qwen3.6-35b"
           }
         },
         {
@@ -48,15 +38,17 @@
           "value": "",
           "models": ["qwen3.6-35b"],
           "weight": 0.25,
-          "aliases": {
-            "qwen3.6-35b": "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved"
-          },
           "vllm_key_config": {
             "url": "http://ml-4.mango-tone.ts.net:8081",
-            "model_name": "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved"
+            "model_name": "qwen3.6-35b"
           }
         }
-      ]
+      ],
+      "network_config": {
+        "max_retries": 3,
+        "retry_backoff_initial": 100,
+        "retry_backoff_max": 2000
+      }
     }
   },
   "config_store": {
