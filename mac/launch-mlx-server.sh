@@ -17,6 +17,6 @@ nohup bash "$SUPERVISOR_SCRIPT" \
 
 SUPERVISOR_PID=$!
 echo "[qwen36] Supervisor started (PID: $SUPERVISOR_PID)"
-echo "[qwen36] Server: http://localhost:8081/v1"
+echo "[qwen36] Server: http://localhost:8080/v1"
 echo "[qwen36] Logs: ~/Library/Logs/qwen36-mlx.out.log  ~/Library/Logs/qwen36-mlx.err.log"
 echo "[qwen36] Supervisor: ~/Library/Logs/qwen36-mlx-supervisor.log"

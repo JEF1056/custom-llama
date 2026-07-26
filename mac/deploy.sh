@@ -23,7 +23,7 @@ HOSTS=("${@:-${ALL_HOSTS[@]}}")
 ENABLE_AUTO_LOGIN=${ENABLE_AUTO_LOGIN:-1}
 
 # ---- Port assignment per host -----------------------------------------------
-declare -A PORT_MAP=( [ml-2]=8081 [ml-3]=8082 [ml-4]=8083 )
+declare -A PORT_MAP=( [ml-2]=8080 [ml-3]=8080 [ml-4]=8080 )
 
 # ---- Config -----------------------------------------------------------------
 CUSTOM_LLAMA_REF=${CUSTOM_LLAMA_REF:-hosting}

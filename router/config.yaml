@@ -18,17 +18,17 @@ discovery:
         type: "llamacpp"
         priority: 100
 
-      - url: "http://100.77.84.65:8081"
+      - url: "http://100.77.84.65:8080"
         name: "ml-2-mlx"
         type: "openai-compatible"
         priority: 95
 
-      - url: "http://100.93.207.60:8081"
+      - url: "http://100.93.207.60:8080"
         name: "ml-3-mlx"
         type: "openai-compatible"
         priority: 90
 
-      - url: "http://100.66.209.104:8081"
+      - url: "http://100.66.209.104:8080"
         name: "ml-4-mlx"
         type: "openai-compatible"
         priority: 50

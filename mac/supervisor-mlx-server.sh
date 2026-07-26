@@ -7,7 +7,7 @@ set -euo pipefail
 
 MODEL_PATH="$HOME/.qwen/models/qwen36-mlx/quantized"
 VENV_DIR="$HOME/.qwen/mlx-venv"
-MLX_PORT="8081"
+MLX_PORT="8080"
 MLX_HOST="0.0.0.0"
 LOG_DIR="$HOME/Library/Logs"
 SUPERVISOR_LOG="$LOG_DIR/qwen36-mlx-supervisor.log"

@@ -19,7 +19,7 @@ set -euo pipefail
 CUSTOM_LLAMA_REPO="https://github.com/JEF1056/custom-llama.git"
 CUSTOM_LLAMA_REF="hosting"
 QWEN_HOME="$HOME/.qwen"
-MLX_PORT="8081"
+MLX_PORT="8080"
 MLX_KV_BITS="4"
 MLX_MAX_KV_SIZE="229376"
 MODEL_PATH="$QWEN_HOME/models/qwen36-mlx"
