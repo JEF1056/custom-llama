@@ -4,6 +4,7 @@
   LaunchAgent for the Qwen3.6-35B-A3B MLX VLM server.
   Placeholders (__REPO__, __HOME__, __MLX_PORT__, __MODEL_PATH__) are filled in by install.sh.
   RunAtLoad starts it at login; KeepAlive restarts it if it ever exits.
+  All server values are hardcoded in the scripts — no env vars needed at boot.
 -->
 <plist version="1.0">
 <dict>
@@ -15,24 +16,6 @@
         <string>/bin/bash</string>
         <string>__REPO__/mac/launch-mlx-server.sh</string>
     </array>
-
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>HOME</key>
-        <string>__HOME__</string>
-        <key>QWEN_HOME</key>
-        <string>__HOME__/.qwen</string>
-        <key>MLX_PORT</key>
-        <string>__MLX_PORT__</string>
-        <key>MODEL_PATH</key>
-        <string>__MODEL_PATH__</string>
-        <key>MLX_MAX_KV_SIZE</key>
-        <string>229376</string>
-        <key>VENV_DIR</key>
-        <string>__VENV_DIR__</string>
-        <key>PATH</key>
-        <string>__VENV_BIN__:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-    </dict>
 
     <key>RunAtLoad</key>
     <true/>

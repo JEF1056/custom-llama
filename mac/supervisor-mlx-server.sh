@@ -2,18 +2,18 @@
 #
 # MLX VLM Server Supervisor — ensures the server stays running 24/7.
 # Monitors health via HTTP check; restarts on failure.
-# Called by launch-mlx-server.sh instead of running the server directly.
+# All values are hardcoded — no env var dependencies at boot.
 set -euo pipefail
 
-MODEL_PATH=${MODEL_PATH:-$HOME/.qwen/models/qwen36-mlx/quantized}
-VENV_DIR=${VENV_DIR:-$HOME/.qwen/mlx-venv}
-MLX_PORT=${MLX_PORT:-8081}
-MLX_HOST=${MLX_HOST:-0.0.0.0}
+MODEL_PATH="$HOME/.qwen/models/qwen36-mlx/quantized"
+VENV_DIR="$HOME/.qwen/mlx-venv"
+MLX_PORT="8081"
+MLX_HOST="0.0.0.0"
 LOG_DIR="$HOME/Library/Logs"
 SUPERVISOR_LOG="$LOG_DIR/qwen36-mlx-supervisor.log"
-HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL:-30}  # seconds
-MAX_RESTARTS=${MAX_RESTARTS:-10}
-RESTART_WINDOW=${RESTART_WINDOW:-300}  # 5 minutes
+HEALTH_CHECK_INTERVAL=30  # seconds
+MAX_RESTARTS=10
+RESTART_WINDOW=300  # 5 minutes
 
 log() { printf '[%s] [qwen36-supervisor] %s\n' "$(date '+%H:%M:%S')" "$*" | tee -a "$SUPERVISOR_LOG"; }
 
@@ -47,9 +47,9 @@ start_server() {
             --host '$MLX_HOST' \
             --port $MLX_PORT \
             --model '$MODEL_PATH' \
-            --kv-bits ${MLX_KV_BITS:-3} \
-            --max-kv-size ${MLX_MAX_KV_SIZE:-229376} \
-            --prefill-step-size ${MLX_PREFILL_STEP_SIZE:-1024} \
+            --kv-bits 3 \
+            --max-kv-size 229376 \
+            --prefill-step-size 1024 \
             --enable-thinking --kv-quant-scheme turboquant
     " >> "$LOG_DIR/qwen36-mlx.out.log" 2>>"$LOG_DIR/qwen36-mlx.err.log" &
     

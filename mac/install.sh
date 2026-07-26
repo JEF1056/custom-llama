@@ -9,28 +9,22 @@
 #   curl -fsSL https://raw.githubusercontent.com/JEF1056/custom-llama/main/mac/install.sh \
 #     | bash
 #
-# Key env vars:
+# Env vars (only these):
 #   HF_TOKEN        — HuggingFace read token (required for model download)
-#   MLX_PORT        — Server port (default: 8081)
-#   MLX_KV_BITS     — KV cache quantization bits (default: 4)
-#   MLX_MAX_KV_SIZE — Max KV cache size in tokens (default: 65536)
-#   MODEL_PATH      — Custom model path (default: ~/.qwen/models/qwen36-mlx)
-#   HF_REPO         — HF repo ID for the model (default: llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved)
+#   LABEL           — LaunchAgent label (default: com.custom-llama.qwen36-mlx)
 #
-# DSpark speculative decoding is intentionally OFF on Apple Silicon: at batch 1
-# the verification pass does not amortize yet, so it is not a speedup here.
 set -euo pipefail
 
-# ---- Config (override via env) ----------------------------------------------
-CUSTOM_LLAMA_REPO=${CUSTOM_LLAMA_REPO:-https://github.com/JEF1056/custom-llama.git}
-CUSTOM_LLAMA_REF=${CUSTOM_LLAMA_REF:-hosting}
-QWEN_HOME=${QWEN_HOME:-$HOME/.qwen}
-MLX_PORT=${MLX_PORT:-8081}
-MLX_KV_BITS=${MLX_KV_BITS:-4}
-MLX_MAX_KV_SIZE=${MLX_MAX_KV_SIZE:-229376}
-MODEL_PATH=${MODEL_PATH:-$QWEN_HOME/models/qwen36-mlx}
-HF_REPO=${HF_REPO:-llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved}
-VENV_NAME=${VENV_NAME:-mlx-venv}
+# ---- Config (hardcoded) -----------------------------------------------------
+CUSTOM_LLAMA_REPO="https://github.com/JEF1056/custom-llama.git"
+CUSTOM_LLAMA_REF="hosting"
+QWEN_HOME="$HOME/.qwen"
+MLX_PORT="8081"
+MLX_KV_BITS="4"
+MLX_MAX_KV_SIZE="229376"
+MODEL_PATH="$QWEN_HOME/models/qwen36-mlx"
+HF_REPO="llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved"
+VENV_NAME="mlx-venv"
 
 LABEL=${LABEL:-com.custom-llama.qwen36-mlx}
 PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
@@ -111,12 +105,10 @@ if [[ ! -d "$MLX_DIR" ]]; then
 
     # Clean up the HuggingFace cache to reclaim disk space (~10-30 GB).
     # The converted MLX safetensors are already saved; the HF cache is no
-    # longer needed. Set HF_CACHE_CLEANUP=0 to skip this step.
-    if [[ "${HF_CACHE_CLEANUP:-1}" == "1" ]]; then
-        log "Cleaning up HuggingFace cache..."
-        rm -rf "$HOME/.cache/huggingface" 2>/dev/null || true
-        log "HF cache removed."
-    fi
+    # longer needed.
+    log "Cleaning up HuggingFace cache..."
+    rm -rf "$HOME/.cache/huggingface" 2>/dev/null || true
+    log "HF cache removed."
 
     log "Conversion and quantization complete: $MLX_DIR"
 else
@@ -164,19 +156,9 @@ log "Installing LaunchAgent ($LABEL)..."
 sed_escape() { printf '%s\n' "$1" | sed 's/[&\\/|]/\\&/g'; }
 CL_DIR_ESC=$(sed_escape "$CL_DIR")
 HOME_ESC=$(sed_escape "$HOME")
-MLX_PORT_ESC=$(sed_escape "$MLX_PORT")
-MODEL_PATH_ESC=$(sed_escape "$MODEL_PATH")
-MLX_MAX_KV_SIZE_ESC=$(sed_escape "$MLX_MAX_KV_SIZE")
-VENV_DIR_ESC=$(sed_escape "$VENV_DIR")
-VENV_BIN_ESC=$(sed_escape "$VENV_DIR/bin")
 
 sed -e "s|__REPO__|$CL_DIR_ESC|g" \
     -e "s|__HOME__|$HOME_ESC|g" \
-    -e "s|__MLX_PORT__|$MLX_PORT_ESC|g" \
-    -e "s|__MODEL_PATH__|$MODEL_PATH_ESC|g" \
-    -e "s|__MLX_MAX_KV_SIZE__|$MLX_MAX_KV_SIZE_ESC|g" \
-    -e "s|__VENV_DIR__|$VENV_DIR_ESC|g" \
-    -e "s|__VENV_BIN__|$VENV_BIN_ESC|g" \
     -e "s|<string>com\.custom-llama\.qwen36-mlx</string>|<string>$LABEL</string>|g" \
     "$CL_DIR/mac/com.custom-llama.qwen36-mlx.plist.template" > "$PLIST_DST"
 
