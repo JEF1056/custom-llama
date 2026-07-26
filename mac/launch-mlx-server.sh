@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 #
-# Wrapper for the MLX VLM server: launches run-mlx-server.sh in a new
-# Terminal window so the user can see the server output at startup.
-# Invoked by the LaunchAgent on login / auto-restart.
+# Wrapper for the MLX VLM server: launches run-mlx-server.sh as a background
+# service. Invoked by the LaunchAgent on login / auto-restart.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_SCRIPT="$SCRIPT_DIR/run-mlx-server.sh"
+MODEL_PATH="${MODEL_PATH:-$HOME/.qwen/models/qwen36-mlx}"
+VENV_DIR="${VENV_DIR:-$HOME/.qwen/mlx-venv}"
 
-# Build the command to run inside the Terminal window.
-# We cd into the model directory (as run-mlx-server.sh expects) and launch
-# the server, keeping the window open when the server exits.
-CMD="cd \"${MODEL_PATH:-$HOME/.qwen/models/qwen36-mlx}\" && exec bash -c \"source $VENV_DIR/bin/activate && exec $SERVER_SCRIPT\""
+# Run the server in the background, redirecting output to logs
+cd "$MODEL_PATH"
+nohup bash -c "source $VENV_DIR/bin/activate && exec $SERVER_SCRIPT" \
+    >> "$HOME/Library/Logs/qwen36-mlx.out.log" 2>&1 &
 
-open -a Terminal.app --args -c "$CMD"
+echo "[qwen36] Server started in background (PID: $!)"
+echo "[qwen36] Logs: ~/Library/Logs/qwen36-mlx.out.log  ~/Library/Logs/qwen36-mlx.err.log"

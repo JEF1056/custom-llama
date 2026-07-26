@@ -7,9 +7,9 @@
           "name": "ml-1-wsl-cuda",
           "value": "",
           "models": ["qwen3.6-35b"],
-          "weight": 0.4,
+          "weight": 0.25,
           "vllm_key_config": {
-            "url": "http://ml-1-wsl.mango-tone.ts.net:8080",
+            "url": "http://100.118.67.28:8080",
             "model_name": "qwen3.6-35b"
           }
         },
@@ -17,7 +17,7 @@
           "name": "ml-2-mlx",
           "value": "",
           "models": ["qwen3.6-35b"],
-          "weight": 0.4,
+          "weight": 0.25,
           "aliases": {
             "qwen3.6-35b": {
               "model_id": "/Users/jfan/.qwen/models/qwen36-mlx",
@@ -25,7 +25,7 @@
             }
           },
           "vllm_key_config": {
-            "url": "http://ml-2.mango-tone.ts.net:8081",
+            "url": "http://100.77.84.65:8081",
             "model_name": "qwen3.6-35b"
           }
         },
@@ -33,7 +33,7 @@
           "name": "ml-3-mlx",
           "value": "",
           "models": ["qwen3.6-35b"],
-          "weight": 0.1,
+          "weight": 0.25,
           "aliases": {
             "qwen3.6-35b": {
               "model_id": "/Users/jfan/.qwen/models/qwen36-mlx",
@@ -41,7 +41,7 @@
             }
           },
           "vllm_key_config": {
-            "url": "http://ml-3.mango-tone.ts.net:8081",
+            "url": "http://100.93.207.60:8081",
             "model_name": "qwen3.6-35b"
           }
         },
@@ -49,7 +49,7 @@
           "name": "ml-4-mlx",
           "value": "",
           "models": ["qwen3.6-35b"],
-          "weight": 0.1,
+          "weight": 0.25,
           "aliases": {
             "qwen3.6-35b": {
               "model_id": "/Users/jfan/.qwen/models/qwen36-mlx",
@@ -57,7 +57,7 @@
             }
           },
           "vllm_key_config": {
-            "url": "http://ml-4.mango-tone.ts.net:8081",
+            "url": "http://100.66.209.104:8081",
             "model_name": "qwen3.6-35b"
           }
         }
@@ -74,6 +74,154 @@
     "type": "redis",
     "config": {
       "addr": "redis:6379"
+    }
+  },
+  "governance": {
+    "routing_rules": [
+      {
+        "id": "equal-weight-round-robin",
+        "name": "Equal weight routing with sticky sessions",
+        "description": "Route to all vllm providers with equal weight; sticky session by session ID for prompt caching",
+        "enabled": true,
+        "cel_expression": "true",
+        "targets": [
+          {
+            "provider": "vllm",
+            "provider_key_name": "ml-1-wsl-cuda",
+            "weight": 0.25
+          },
+          {
+            "provider": "vllm",
+            "provider_key_name": "ml-2-mlx",
+            "weight": 0.25
+          },
+          {
+            "provider": "vllm",
+            "provider_key_name": "ml-3-mlx",
+            "weight": 0.25
+          },
+          {
+            "provider": "vllm",
+            "provider_key_name": "ml-4-mlx",
+            "weight": 0.25
+          }
+        ],
+        "fallbacks": ["ml-1-wsl-cuda", "ml-2-mlx", "ml-3-mlx", "ml-4-mlx"],
+        "scope": "global",
+        "priority": 10
+      }
+    ],
+    "load_balancer_config": {
+      "enabled": true,
+      "direction_selection_enabled": true,
+      "route_selection_enabled": true,
+      "append_fallbacks_to_pinned": true,
+      "reroute_failed_directions": true,
+      "prune_failed_fallbacks": true
+    },
+    "circuit_breaker_config": {
+      "policies": [
+        {
+          "name": "ml-1-wsl-cuda-circuit-breaker",
+          "enabled": true,
+          "primary_provider": "vllm",
+          "primary_model": "qwen3.6-35b",
+          "primary_key_ids": [],
+          "fallback_provider": "vllm",
+          "fallback_model": "qwen3.6-35b",
+          "condition": {
+            "operator": "OR",
+            "signals": [
+              {
+                "source": "response_header",
+                "header_name": "X-Error",
+                "header_contains": "true"
+              },
+              {
+                "source": "response_header",
+                "header_name": "Retry-After"
+              }
+            ]
+          },
+          "default_cooldown": "30s",
+          "cooldown_header": "Retry-After"
+        },
+        {
+          "name": "ml-2-mlx-circuit-breaker",
+          "enabled": true,
+          "primary_provider": "vllm",
+          "primary_model": "qwen3.6-35b",
+          "primary_key_ids": [],
+          "fallback_provider": "vllm",
+          "fallback_model": "qwen3.6-35b",
+          "condition": {
+            "operator": "OR",
+            "signals": [
+              {
+                "source": "response_header",
+                "header_name": "X-Error",
+                "header_contains": "true"
+              },
+              {
+                "source": "response_header",
+                "header_name": "Retry-After"
+              }
+            ]
+          },
+          "default_cooldown": "30s",
+          "cooldown_header": "Retry-After"
+        },
+        {
+          "name": "ml-3-mlx-circuit-breaker",
+          "enabled": true,
+          "primary_provider": "vllm",
+          "primary_model": "qwen3.6-35b",
+          "primary_key_ids": [],
+          "fallback_provider": "vllm",
+          "fallback_model": "qwen3.6-35b",
+          "condition": {
+            "operator": "OR",
+            "signals": [
+              {
+                "source": "response_header",
+                "header_name": "X-Error",
+                "header_contains": "true"
+              },
+              {
+                "source": "response_header",
+                "header_name": "Retry-After"
+              }
+            ]
+          },
+          "default_cooldown": "30s",
+          "cooldown_header": "Retry-After"
+        },
+        {
+          "name": "ml-4-mlx-circuit-breaker",
+          "enabled": true,
+          "primary_provider": "vllm",
+          "primary_model": "qwen3.6-35b",
+          "primary_key_ids": [],
+          "fallback_provider": "vllm",
+          "fallback_model": "qwen3.6-35b",
+          "condition": {
+            "operator": "OR",
+            "signals": [
+              {
+                "source": "response_header",
+                "header_name": "X-Error",
+                "header_contains": "true"
+              },
+              {
+                "source": "response_header",
+                "header_name": "Retry-After"
+              }
+            ]
+          },
+          "default_cooldown": "30s",
+          "cooldown_header": "Retry-After"
+        }
+      ]
     }
   },
   "mcp": {

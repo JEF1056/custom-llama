@@ -6,7 +6,7 @@
       "npm": "@ai-sdk/openai-compatible",
       "name": "bifrost",
       "options": {
-        "baseURL": "http://100.81.0.46:4000/v1",
+        "baseURL": "http://coolify:4000/v1",
         "apiKey": "bifrost-master-key"
       },
       "models": {
