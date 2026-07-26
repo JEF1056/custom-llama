@@ -6,7 +6,6 @@
         {
           "name": "ml-1-wsl-cuda",
           "value": "",
-          "models": ["qwen3.6-35b"],
           "weight": 0.25,
           "aliases": {
             "qwen3.6-35b": "/models/qwen36-262k-balanced.gguf"
@@ -19,7 +18,6 @@
         {
           "name": "ml-2-mlx",
           "value": "",
-          "models": ["qwen3.6-35b"],
           "weight": 0.25,
           "aliases": {
             "qwen3.6-35b": "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved"
@@ -32,7 +30,6 @@
         {
           "name": "ml-3-mlx",
           "value": "",
-          "models": ["qwen3.6-35b"],
           "weight": 0.25,
           "aliases": {
             "qwen3.6-35b": "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved"
@@ -45,7 +42,6 @@
         {
           "name": "ml-4-mlx",
           "value": "",
-          "models": ["qwen3.6-35b"],
           "weight": 0.25,
           "aliases": {
             "qwen3.6-35b": "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved"
