@@ -6,7 +6,7 @@
 # starts the server at login and auto-restarts it on crash (KeepAlive).
 #
 # Usage (from a GitHub raw URL):
-#   curl -fsSL https://raw.githubusercontent.com/YOURUSER/custom-llama/main/mac/install.sh \
+#   curl -fsSL https://raw.githubusercontent.com/JEF1056/custom-llama/main/mac/install.sh \
 #     | bash
 #
 # Key env vars:
@@ -22,7 +22,7 @@
 set -euo pipefail
 
 # ---- Config (override via env) ----------------------------------------------
-CUSTOM_LLAMA_REPO=${CUSTOM_LLAMA_REPO:-https://github.com/YOURUSER/custom-llama.git}
+CUSTOM_LLAMA_REPO=${CUSTOM_LLAMA_REPO:-https://github.com/JEF1056/custom-llama.git}
 CUSTOM_LLAMA_REF=${CUSTOM_LLAMA_REF:-main}
 QWEN_HOME=${QWEN_HOME:-$HOME/.qwen}
 MLX_PORT=${MLX_PORT:-8081}
