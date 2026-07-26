@@ -24,17 +24,17 @@ discovery:
 
       - url: "http://100.77.84.65:8081"
         name: "ml-2-mlx"
-        type: "vllm-mlx"
+        type: "llamacpp"
         priority: 100
 
       - url: "http://100.93.207.60:8081"
         name: "ml-3-mlx"
-        type: "vllm-mlx"
+        type: "llamacpp"
         priority: 100
 
       - url: "http://100.66.209.104:8081"
         name: "ml-4-mlx"
-        type: "vllm-mlx"
+        type: "llamacpp"
         priority: 50
 
 model_registry:
@@ -51,7 +51,7 @@ model_registry:
   model_aliases:
     - name: "qwen3.6-35b"
       aliases:
-        - "qwen36-262k-local"
+        - "/models/qwen3.6-35b"
         - "/Users/jfan/.qwen/models/qwen36-mlx"
 
 translators:
