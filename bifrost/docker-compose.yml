@@ -4,25 +4,24 @@ services:
   bifrost:
     build: ./
     container_name: bifrost
-    ports:
-      - "${BIFROST_PORT:-4000}:8080"
+    network_mode: host
     volumes:
+      - ./config.json:/app/data/config.json:ro
       - bifrost-data:/app/data
     environment:
-      - APP_PORT=8080
+      - APP_PORT=4000
       - APP_HOST=0.0.0.0
       - LOG_LEVEL=${BIFROST_LOG_LEVEL:-info}
       - LOG_STYLE=json
       - BIFROST_SKIP_WRITE_CHECK=1
+      - BIFROST_PRICING_URL=https://getbifrost.ai/pricing.json
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:4000/"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 15s
-    networks:
-      - bifrost-net
 
   websearch-crawler:
     image: laituanmanh/websearch-crawler:latest
