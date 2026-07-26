@@ -8,6 +8,9 @@
           "value": "",
           "models": ["qwen3.6-35b"],
           "weight": 0.25,
+          "aliases": {
+            "qwen3.6-35b": "qwen3.6-35b"
+          },
           "vllm_key_config": {
             "url": "http://ml-1-wsl.mango-tone.ts.net:8080",
             "model_name": "qwen3.6-35b"
@@ -18,9 +21,12 @@
           "value": "",
           "models": ["qwen3.6-35b"],
           "weight": 0.25,
+          "aliases": {
+            "qwen3.6-35b": "/Users/jfan/.qwen/models/qwen36-mlx"
+          },
           "vllm_key_config": {
             "url": "http://ml-2.mango-tone.ts.net:8081",
-            "model_name": "qwen3.6-35b"
+            "model_name": "/Users/jfan/.qwen/models/qwen36-mlx"
           }
         },
         {
@@ -28,9 +34,12 @@
           "value": "",
           "models": ["qwen3.6-35b"],
           "weight": 0.25,
+          "aliases": {
+            "qwen3.6-35b": "/Users/jfan/.qwen/models/qwen36-mlx"
+          },
           "vllm_key_config": {
             "url": "http://ml-3.mango-tone.ts.net:8081",
-            "model_name": "qwen3.6-35b"
+            "model_name": "/Users/jfan/.qwen/models/qwen36-mlx"
           }
         },
         {
@@ -38,9 +47,12 @@
           "value": "",
           "models": ["qwen3.6-35b"],
           "weight": 0.25,
+          "aliases": {
+            "qwen3.6-35b": "/Users/jfan/.qwen/models/qwen36-mlx"
+          },
           "vllm_key_config": {
             "url": "http://ml-4.mango-tone.ts.net:8081",
-            "model_name": "qwen3.6-35b"
+            "model_name": "/Users/jfan/.qwen/models/qwen36-mlx"
           }
         }
       ],
