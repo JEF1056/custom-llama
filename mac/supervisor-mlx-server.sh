@@ -5,7 +5,7 @@
 # All values are hardcoded — no env var dependencies at boot.
 set -euo pipefail
 
-MODEL_PATH="$HOME/.qwen/models/qwen36-mlx/quantized"
+MODEL_PATH="$HOME/.qwen/models/qwen36-mlx"
 VENV_DIR="$HOME/.qwen/mlx-venv"
 MLX_PORT="8080"
 MLX_HOST="0.0.0.0"

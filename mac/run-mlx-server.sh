@@ -5,7 +5,7 @@
 set -euo pipefail
 
 # ---- Model path -------------------------------------------------------------
-MODEL_PATH="$HOME/.qwen/models/qwen36-mlx/quantized"
+MODEL_PATH="$HOME/.qwen/models/qwen36-mlx"
 
 if [[ ! -d "$MODEL_PATH" ]]; then
     echo "[qwen36] ERROR: Model directory not found: $MODEL_PATH" >&2
