@@ -6,7 +6,7 @@ server:
 proxy:
   engine: "olla"
   profile: "auto"
-  load_balancer: "priority"
+  load_balancer: "least-connections"
   response_timeout: 15m
   read_timeout: 10m
 
