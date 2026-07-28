@@ -50,7 +50,7 @@ start_server() {
             --kv-bits 4 \
             --max-kv-size 229376 \
             --prefill-step-size 1024 \
-            --enable-thinking --kv-quant-scheme int4
+            --enable-thinking --kv-quant-scheme uniform
     " >> "$LOG_DIR/qwen36-mlx.out.log" 2>>"$LOG_DIR/qwen36-mlx.err.log" &
     
     SERVER_PID=$!

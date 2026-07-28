@@ -27,7 +27,7 @@ MAX_KV_SIZE_ARG="--max-kv-size 229376"
 PRELOAD_ARGS="--prefill-step-size 1024"
 
 # ---- Build extra args ---------------------------------------------------------
-EXTRA_ARGS="--enable-thinking --kv-quant-scheme int4"
+EXTRA_ARGS="--enable-thinking --kv-quant-scheme uniform"
 
 # ---- Launch the server --------------------------------------------------------
 echo "[qwen36] Starting mlx_vlm.server"
