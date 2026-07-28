@@ -47,10 +47,10 @@ start_server() {
             --host '$MLX_HOST' \
             --port $MLX_PORT \
             --model '$MODEL_PATH' \
-            --kv-bits 3 \
+            --kv-bits 4 \
             --max-kv-size 229376 \
             --prefill-step-size 1024 \
-            --enable-thinking --kv-quant-scheme turboquant
+            --enable-thinking --kv-quant-scheme int4
     " >> "$LOG_DIR/qwen36-mlx.out.log" 2>>"$LOG_DIR/qwen36-mlx.err.log" &
     
     SERVER_PID=$!
