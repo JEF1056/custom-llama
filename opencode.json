@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["github:JEF1056/harness"],
+  "plugin": ["github:JEF1056/harness", "./plugin/sticky-header"],
   "provider": {
     "router": {
       "npm": "@ai-sdk/openai-compatible",
@@ -61,22 +61,10 @@
   },
   "model": "router//qwen3.6-35b",
   "mcp": {
-    "websearch": {
-      "type": "local",
-      "enabled": true,
-      "command": ["npx", "websearch-mcp"],
-      "environment": {
-        "API_URL": "http://localhost:3001",
-        "MAX_SEARCH_RESULT": "5"
-      }
-    },
-    "ollam": {
+    "mcp-search-server": {
       "type": "remote",
       "enabled": true,
-      "url": "http://100.81.0.46:40114/olla/anthropic/v1/messages",
-      "headers": {
-        "Authorization": "Bearer router-master-key"
-      }
+      "url": "http://localhost:3100/"
     }
   }
 }
