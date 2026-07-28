@@ -120,6 +120,7 @@ REPEAT_PENALTY=${REPEAT_PENALTY:-1.0}
 # Preserve thinking. When on (default), prior assistant turns keep their <think>
 # reasoning blocks when the conversation is re-rendered, instead of the template
 # stripping them from every turn before the last user query. Set 0 to strip.
+REASONING_BUDGET=${REASONING_BUDGET:-4096}
 PRESERVE_THINKING=${PRESERVE_THINKING:-1}
 
 # --- Weights -----------------------------------------------------------------

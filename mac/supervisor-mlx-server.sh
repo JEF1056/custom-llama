@@ -41,16 +41,28 @@ start_server() {
     log "Starting mlx_vlm.server (port=$MLX_PORT, model=$MODEL_PATH)"
     
     cd "$MODEL_PATH"
+    export APC_ENABLED=1
+    export APC_NUM_BLOCKS=2048
+    export APC_BLOCK_SIZE=16
+    export APC_DISK_PATH="$HOME/.cache/mlx-vlm/caching"
+    export APC_DISK_MAX_GB=0
+    export APC_DISK_SHARD_MAX_BLOCKS=256
+    export APC_MAX_POOL_TENSORS=450000
+    export APC_LAYER_MAJOR_MEMORY_MIN_TOKENS=50000
+    export APC_HASH=fast
+    mkdir -p "$APC_DISK_PATH"
+
     nohup bash -c "
         source '$VENV_DIR/bin/activate'
         exec python3 -m mlx_vlm.server \
             --host '$MLX_HOST' \
             --port $MLX_PORT \
             --model '$MODEL_PATH' \
-            --kv-bits 4 \
+            --draft-model z-lab/Qwen3.6-35B-A3B-DFlash \
+            --kv-bits 4.2 \
             --max-kv-size 229376 \
             --prefill-step-size 1024 \
-            --enable-thinking --kv-quant-scheme uniform
+            --thinking-budget 4096 --enable-thinking --kv-quant-scheme turboquant
     " >> "$LOG_DIR/qwen36-mlx.out.log" 2>>"$LOG_DIR/qwen36-mlx.err.log" &
     
     SERVER_PID=$!

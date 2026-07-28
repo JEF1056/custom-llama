@@ -10,7 +10,7 @@
 #
 # Env vars:
 #   HF_TOKEN          — HuggingFace token
-#   MLX_KV_BITS       — KV cache quantization bits (default: 4)
+#   MLX_KV_BITS       — KV cache quantization bits (default: 4.2, TurboQuant: 4-bit keys, 2-bit values)
 #   MLX_MAX_KV_SIZE   — max KV cache size (default: 229376)
 #   CUSTOM_LLAMA_REF  — branch/commit to deploy from (default: hosting)
 #
@@ -26,7 +26,7 @@ ENABLE_AUTO_LOGIN=${ENABLE_AUTO_LOGIN:-1}
 # ---- Config -----------------------------------------------------------------
 MLX_PORT="8080"
 CUSTOM_LLAMA_REF=${CUSTOM_LLAMA_REF:-hosting}
-MLX_KV_BITS=${MLX_KV_BITS:-4}
+MLX_KV_BITS=${MLX_KV_BITS:-4.2}
 MLX_MAX_KV_SIZE=${MLX_MAX_KV_SIZE:-229376}
 
 # ---- Colors -----------------------------------------------------------------
