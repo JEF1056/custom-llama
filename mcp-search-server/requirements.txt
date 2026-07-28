@@ -1,0 +1,41 @@
+# Core MCP — 1.9.0+ required for FastMCP.streamable_http_app() (Streamable HTTP transport)
+mcp>=1.9.0
+
+# HTTP Server (for SSE transport and CORS)
+fastapi>=0.100.0
+uvicorn>=0.23.0
+
+# Browser Automation
+# patchright is a CDP-patched, drop-in replacement for Playwright that closes
+# the Runtime.enable / init-script / command-flag leaks vanilla Playwright +
+# stealth plugins cannot. It supersedes both playwright and playwright-stealth.
+patchright>=1.52.0
+
+# Web Scraping
+beautifulsoup4>=4.12.0
+httpx>=0.25.0
+html2text>=2024.2.26
+
+# Search Engines
+ddgs>=1.0.0
+
+# Data Validation
+pydantic>=2.0.0
+
+# Async HTTP
+aiohttp>=3.9.0
+
+# Caching (optional)
+redis>=5.0.0
+
+# Configuration
+python-dotenv>=1.0.0
+
+# Timezone database (slim base images lack system zoneinfo; needed by time_now)
+tzdata>=2024.1
+
+# Math and computation (code_run sandbox)
+sympy>=1.12.0
+numpy>=1.24.0
+pandas>=2.0.0
+matplotlib>=3.7.0
