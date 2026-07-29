@@ -81,7 +81,7 @@ log "Upgrading pip..."
 pip install --upgrade pip setuptools wheel
 
 log "Installing MLX stack (mlx-lm[torch], mlx-vlm from xy-kv-bits branch)..."
-pip install "mlx-lm[torch]" "git+https://github.com/JEF1056/mlx-vlm.git@$MLX_VLM_REF#egg=mlx-vlm[torch]"
+pip install "mlx-lm[torch]" "mlx-vlm[torch] @ git+https://github.com/JEF1056/mlx-vlm.git@$MLX_VLM_REF"
 
 # Pin MLX version
 log "Pinning mlx==0.31.2..."
