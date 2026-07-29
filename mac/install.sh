@@ -17,7 +17,9 @@ set -euo pipefail
 
 # ---- Config (hardcoded) -----------------------------------------------------
 CUSTOM_LLAMA_REPO="https://github.com/JEF1056/custom-llama.git"
-CUSTOM_LLAMA_REF="hosting"
+CUSTOM_LLAMA_REF="hosting-xy-kv-bits"
+CUSTOM_LLAMA_MLX_VLM_REPO="https://github.com/JEF1056/mlx-vlm.git"
+CUSTOM_LLAMA_MLX_VLM_REF="xy-kv-bits"
 QWEN_HOME="$HOME/.qwen"
 MLX_PORT="8080"
 MLX_KV_BITS="4.2"
@@ -25,6 +27,7 @@ MLX_MAX_KV_SIZE="229376"
 MODEL_PATH="$QWEN_HOME/models/qwen36-mlx"
 HF_REPO="llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved"
 VENV_NAME="mlx-venv"
+MLX_VLM_REF="xy-kv-bits"
 
 LABEL=${LABEL:-com.custom-llama.qwen36-mlx}
 PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
@@ -77,124 +80,14 @@ source "$VENV_DIR/bin/activate"
 log "Upgrading pip..."
 pip install --upgrade pip setuptools wheel
 
-log "Installing MLX stack (mlx-lm[torch], mlx-vlm[torch])..."
-pip install "mlx-lm[torch]" "mlx-vlm[torch]==0.6.7"
+log "Installing MLX stack (mlx-lm[torch], mlx-vlm from xy-kv-bits branch)..."
+pip install "mlx-lm[torch]" "git+https://github.com/JEF1056/mlx-vlm.git@$MLX_VLM_REF#egg=mlx-vlm[torch]"
 
 # Pin MLX version
 log "Pinning mlx==0.31.2..."
 pip install "mlx==0.31.2"
 
-log "MLX stack installed successfully."
-
-# ---- Patch turboquant.py for X.Y kv-bits format (e.g., 4.2 = 4-bit keys, 2-bit values)
-log "Patching turboquant.py for 4.2 kv-bits support..."
-TURBOQUANT_FILE="$VENV_DIR/lib/python$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages/mlx_vlm/turboquant.py"
-
-if [[ -f "$TURBOQUANT_FILE" ]]; then
-    # Backup original
-    cp "$TURBOQUANT_FILE" "$TURBOQUANT_FILE.bak"
-    
-    # Apply patch: update _validate_bits and _ensure_codecs to support X.Y format
-    python3 -c "
-import sys
-with open('$TURBOQUANT_FILE', 'r') as f:
-    content = f.read()
-
-old_validate = '''def _validate_bits(bits: float) -> float:
-    bits = float(bits)
-    if bits < 1:
-        raise ValueError(\"TurboQuant requires kv_bits >= 1.\")
-    rounded = round(bits * 2) / 2
-    if not math.isclose(bits, rounded, abs_tol=1e-6):
-        raise ValueError(
-            f\"TurboQuant currently supports integer and .5 bit-widths, got {bits}.\"
-        )
-    return rounded'''
-
-new_validate = '''def _validate_bits(bits) -> float:
-    if isinstance(bits, str) and '.' in bits:
-        parts = bits.split('.')
-        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-            key_b = int(parts[0])
-            val_b = int(parts[1])
-            if key_b < 1 or val_b < 1:
-                raise ValueError(f\"TurboQuant requires kv_bits >= 1, got {bits}.\")
-            return float(f\"{key_b}.{val_b}\")
-    
-    bits = float(bits)
-    if bits < 1:
-        raise ValueError(\"TurboQuant requires kv_bits >= 1.\")
-    rounded = round(bits * 2) / 2
-    if not math.isclose(bits, rounded, abs_tol=1e-6):
-        raise ValueError(
-            f\"TurboQuant currently supports integer, .5, and X.Y bit-widths (e.g., 4.2 for 4-bit keys, 2-bit values), got {bits}.\"
-        )
-    return rounded'''
-
-content = content.replace(old_validate, new_validate)
-
-old_ensure = '''    def _ensure_codecs(self, keys: mx.array, values: mx.array):
-        if self.key_codec is None:
-            # For fractional bits (e.g. 3.5), use lower bits for keys and higher
-            # for values instead of SplitCodec. Both stay as fast integer codecs
-            # with single-tile kernel support. Values benefit more from extra bits.
-            key_bits = (
-                math.floor(self.bits)
-                if not math.isclose(self.bits, round(self.bits), abs_tol=1e-6)
-                else self.bits
-            )
-            self.key_codec = _build_codec(keys, key_bits, mode=\"mse\", seed=self.seed)
-        if self.value_codec is None:
-            val_bits = (
-                math.ceil(self.bits)
-                if not math.isclose(self.bits, round(self.bits), abs_tol=1e-6)
-                else self.bits
-            )
-            self.value_codec = _build_codec(
-                values, val_bits, mode=\"mse\", seed=self.seed + 1
-            )'''
-
-new_ensure = '''    def _ensure_codecs(self, keys: mx.array, values: mx.array):
-        if self.key_codec is None:
-            bits_str = str(self.bits)
-            if '.' in bits_str:
-                parts = bits_str.split('.')
-                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit() and len(parts[1]) == 1:
-                    key_bits = int(parts[0])
-                    val_bits = int(parts[1])
-                else:
-                    key_bits = math.floor(self.bits)
-                    val_bits = math.ceil(self.bits)
-            else:
-                key_bits = self.bits
-                val_bits = self.bits
-            self.key_codec = _build_codec(keys, key_bits, mode=\"mse\", seed=self.seed)
-        if self.value_codec is None:
-            bits_str = str(self.bits)
-            if '.' in bits_str:
-                parts = bits_str.split('.')
-                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit() and len(parts[1]) == 1:
-                    val_bits = int(parts[1])
-                else:
-                    val_bits = math.ceil(self.bits)
-            else:
-                val_bits = self.bits
-            self.value_codec = _build_codec(
-                values, val_bits, mode=\"mse\", seed=self.seed + 1
-            )'''
-
-content = content.replace(old_ensure, new_ensure)
-
-with open('$TURBOQUANT_FILE', 'w') as f:
-    f.write(content)
-
-print('Patch applied successfully')
-"
-    
-    log "turboquant.py patched for 4.2 kv-bits support"
-else
-    err "turboquant.py not found at $TURBOQUANT_FILE"
-fi
+log "MLX stack installed successfully (X.Y kv-bits supported natively)."
 
 # ---- Convert HF repo to MLX safetensors + quantize ----------------------------
 MLX_DIR="$MODELS_DIR/qwen36-mlx"
