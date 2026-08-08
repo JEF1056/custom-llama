@@ -24,7 +24,8 @@ classifiers = [
 ]
 
 dependencies = [
-    "mcp>=1.9.0",  # 1.9.0+ required for FastMCP.streamable_http_app()
+    "fastmcp>=3.0.0",  # FastMCP high-level server API
+    "mcp>=1.24.0,<2.0",  # Core MCP SDK (fastmcp depends on mcp>=1.24.0,<2.0)
     "patchright>=1.52.0",  # CDP-patched, undetected drop-in for Playwright
     "beautifulsoup4>=4.12.0",
     "httpx>=0.25.0",

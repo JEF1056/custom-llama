@@ -18,7 +18,7 @@ MLX_HOST="0.0.0.0"
 MLX_PORT="8080"
 
 # ---- Build KV bits argument ---------------------------------------------------
-KV_BITS_ARG="--kv-bits 4.2"
+KV_BITS_ARG="--kv-bits 4"
 
 # ---- Build max KV size argument -----------------------------------------------
 MAX_KV_SIZE_ARG="--max-kv-size 229376"
@@ -27,7 +27,7 @@ MAX_KV_SIZE_ARG="--max-kv-size 229376"
 PRELOAD_ARGS="--prefill-step-size 1024"
 
 # ---- Build extra args ---------------------------------------------------------
-EXTRA_ARGS="--enable-thinking --thinking-budget 4096 --kv-quant-scheme turboquant"
+EXTRA_ARGS="--enable-thinking --thinking-budget 4096"
 
 # ---- DFlash speculative decoding ----------------------------------------------
 DRAFT_MODEL_ARG="--draft-model z-lab/Qwen3.6-35B-A3B-DFlash"
@@ -36,7 +36,7 @@ DRAFT_MODEL_ARG="--draft-model z-lab/Qwen3.6-35B-A3B-DFlash"
 echo "[qwen36] Starting mlx_vlm.server"
 echo "[qwen36] Model: $MODEL_PATH"
 echo "[qwen36] Host: $MLX_HOST  Port: $MLX_PORT"
-echo "[qwen36] KV bits: 4.2 (TurboQuant: 4-bit keys, 2-bit values)  Max KV size: 229376  Prefill step: 1024"
+echo "[qwen36] KV bits: 4  Max KV size: 229376  Prefill step: 1024"
 echo "[qwen36] Thinking: enabled"
 echo "[qwen36] APC: enabled  (blocks=2048  disk=$HOME/.cache/mlx-vlm/caching)"
 echo "[qwen36] DFlash: enabled (z-lab/Qwen3.6-35B-A3B-DFlash)"

@@ -3,8 +3,8 @@
 import logging
 from typing import Annotated
 
-from mcp.server import FastMCP
-from mcp.server.fastmcp import Context
+from fastmcp import FastMCP
+from fastmcp.server import Context
 from pydantic import Field
 
 from src.config import settings

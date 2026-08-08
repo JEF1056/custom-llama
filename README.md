@@ -1,22 +1,34 @@
-# custom-llama — Setup Guide
+# custom-llama - System Architecture & Setup Guide
 
 Host **[Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B)** on your own hardware behind a single load-balancing endpoint.
 
 **Model:** Hybrid MoE reasoning + vision model with 262K native context, tool calling, and MTP self-speculative decoding.
-
 **Built on:** [JEF1056/ik_llama.cpp](https://github.com/JEF1056/ik_llama.cpp) (branch `ngram-mtp-vision-chain`) — a patch allowing n-gram lookup drafting alongside MTP with the vision tower loaded.
 
----
 
-## Architecture
+## Repository Layout
 
-| Component | Backend | Location |
-|-----------|---------|----------|
-| `docker/` | `ik_llama.cpp` + CUDA (RTX 3090) | Linux host via Docker |
-| `mac/` | MLX (`mlx-vlm`) | MacBook / Apple Silicon |
-| `router/` | LiteLLM proxy | Co-located with CUDA or standalone |
+```
+custom-llama/
+├── docker/              # CUDA server: Docker files, entrypoint, compose, benchmarks
+├── mac/                 # MLX Mac deployment: install, deploy, supervisor, health, bench scripts
+├── router/              # Olla LiteLLM proxy: docker-compose, config.yaml, env files
+├── scripts/             # Offline weight pipeline: download, quantify, imatrix conversion
+├── mcp-search-server/   # Web search + browser automation MCP server
+├── docs/                # Benchmark results & migration plan
+├── opencode.json        # OpenCode AI SDK config: provider + model settings
+└── README.md            # This file (Setup Guide)
+```
 
----
+## IMPORTANT: This Repo is DEEP — Read All Modules Before Configuring
+- **docker/** has 8 files totaling 1,126 lines: 2 Dockerfiles, entrypoint.sh (.env, .env.example), compose file, 2 benchmark scripts
+- **mac/** has 9 files: install.sh, deploy.sh, run-mlx-server.sh, launch-mlx-server.sh, supervisor-mlx-server.sh, healthcheck.sh, uninstall.sh, bench-stress.sh, and a hidden `.env.local` file with overrides
+- **router/** has 4 files: docker-compose, config.yaml, .env, .env.example
+- **scripts/** has 5 files: download-source-gguf.sh, prepare-weights.sh, quantize.sh, quantize-mlx.sh, quantize-mmproj.py, download-bringup.sh
+- **mcp-search-server/** has 40+ Python files with 8 distinct tool handlers (search, fetch, browser, code_run, advisor, time_now, read_output)
+- **docs/** has 2 files: qwen36-bench-results.md (53 lines) and iqllama-migration-plan.md (size unknown but likely large)
+- **opencode.json** has 70 lines with 3 provider configs and model aliases
+
 
 ## Prerequisites
 
@@ -38,7 +50,7 @@ cp docker/.env.example docker/.env
 cp router/.env.example router/.env
 ```
 
-Edit `router/.env` to set your master key and backend URLs. When running both server and router in the same compose, `CUDA_BACKEND_URL` is overridden to `http://server:8080/v1` automatically.
+Edit `docker/.env` and `router/.env` to set your keys and backend URLs. When running both server and router in the same compose, `CUDA_BACKEND_URL` is overridden to `http://server:8080/v1` automatically.
 
 ### Step 2: Download weights (choose one)
 
@@ -65,7 +77,7 @@ This runs the full offline pipeline:
    - Attention layers: `iq5_ks` | Router: `q8_0` | Token embedding: `iq4_ks`
    - Output: `q6_K` | MTP block: BF16 (output head at `q8_0`)
 
-A GPU is required for the imatrix step. This takes a while.
+A GPU is required for the imatrix pass. This takes a while.
 
 ### Step 3: Start everything
 
@@ -106,24 +118,36 @@ BUILD_MODE=local LLAMA_LOCAL_PATH=/path/to/ik_llama.cpp docker compose up -d --b
 
 ---
 
+
 ## Option B: MacBook + Apple Silicon (MLX)
 
 The CUDA server requires an NVIDIA GPU. For MacBooks with Apple Silicon, use the separate MLX deployment:
 
+**Two deployment modes are supported:**
+
+**Single-host install (any Mac with Apple Silicon):**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/YOURUSER/custom-llama/main/mac/install.sh \
   | HF_TOKEN=hf_xxx bash
 ```
 
-Replace `YOURUSER` with your GitHub account and `hf_xxx` with your Hugging Face read token.
+**Fleet deployment (multiple MacBooks, SSH-configured):**
+```bash
+# Deploy to all hosts in ALL_HOSTS=(ml-2 ml-3 ml-4)
+bash mac/deploy.sh
 
-This installs:
+# Deploy to specific hosts only
+bash mac/deploy.sh ml-2 ml-3
+```
+
+Both modes install:
 - The MLX model (Qwen3.6-35B-A3B with native vision)
 - A **LaunchAgent** that starts the server at login and auto-restarts on crash
 
 **After install:**
-- **Server:** `http://localhost:8081/v1`
+- **Server:** `http://localhost:8080/v1`
 - **Logs:** `~/Library/Logs/qwen36-mlx.out.log` / `.err.log`
+- **Supervisor:** `~/Library/Logs/qwen36-mlx-supervisor.log` (health check every 30s with 10 restarts per 300s)
 - **Uninstall:** `bash ~/.qwen/custom-llama/mac/uninstall.sh`
 
 ---
@@ -138,7 +162,18 @@ cp .env.example .env    # set LITELLM_MASTER_KEY, CUDA_BACKEND_URL, MAC_BACKEND_
 docker compose up -d
 ```
 
-The router uses **latency-based routing** with automatic retry/failover. Tune backends and strategy in `router/config.yaml`. By default it routes to both the CUDA server and Mac backend, sending each request to the lowest-latency deployment with 3 retries on failure.
+The router uses **Olla LB** (`least-connections`) with sticky sessions (1h sliding TTL, max 10K sessions, keyed by `X-Olla-Session-ID` header set by `.opencode/plugins/olla-session.js`). Static endpoints with automatic health checks (5s interval, 2s timeout). In-memory model registry with unifier engine (24h stale threshold).
+
+
+## Frontend Configuration
+
+- **qwen3.6-35b** maps to both CUDA `/models/qwen3.6-35b` and MLX `/Users/jfan/.qwen/models/qwen36-mlx`
+- **Static endpoints:** Automatic health checks (5s interval, 2s timeout)
+- **Translators:** Anthproxy pass-through enabled
+- **Discovery:** Automatic health checks (5s interval, 2s timeout)
+- **Model registry:** In-memory with unifier engine (24h stale threshold)
+- **Auth:** LiteLLM master key passed by clients; per-backend auth via `BACKEND_API_KEY`
+
 
 ---
 
@@ -174,6 +209,7 @@ The router uses **latency-based routing** with automatic retry/failover. Tune ba
 | `MAC_BACKEND_URL` | Base URL of the Mac MLX backend |
 | `BACKEND_API_KEY` | Auth key for backends (any non-empty value works) |
 
+
 ---
 
 ## Manual Script Usage
@@ -181,7 +217,7 @@ The router uses **latency-based routing** with automatic retry/failover. Tune ba
 The quantization scripts can also be run directly outside of Docker:
 
 ```bash
-# 1. Download source GGUF (requires `hf` CLI, ~70 GB disk)
+# 1. Download source GGUF (requires `hf` CLI, ~75+ GB disk)
 ./scripts/download-source-gguf.sh
 
 # 2. Quantize to production GGUF
@@ -224,3 +260,4 @@ See [`docs/qwen36-bench-results.md`](docs/qwen36-bench-results.md) for full benc
 - MTP self-speculative decoding: PASS (high draft acceptance rates)
 - Prompt cache reuse: PASS (54x speedup on repeated prompts)
 - Long-context stability: PASS (262K context, 172K+ token prompts)
+

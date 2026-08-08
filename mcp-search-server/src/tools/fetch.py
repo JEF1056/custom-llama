@@ -3,8 +3,8 @@
 import logging
 from typing import Annotated
 
-from mcp.server import FastMCP
-from mcp.server.fastmcp import Context
+from fastmcp import FastMCP
+from fastmcp.server import Context
 from pydantic import Field
 
 from src.browser.automation import browser_manager
@@ -75,17 +75,15 @@ def fetch_handler(server: FastMCP) -> None:
             )
 
             # Extract the full, untruncated text for paginated reads
-            full_extractor = ContentExtractor()
-            full_content = full_extractor.extract(html, truncate="never")
-            full_text = full_content["content"]
+            full_text = extractor.extract(html, truncate="never")["content"]
 
             # Filter to specific sections if requested
             if sections:
                 content["content"] = extractor._extract_sections(
                     content["content"], content["headings"], sections
                 )
-                full_text = full_extractor._extract_sections(
-                    full_text, full_content["headings"], sections
+                full_text = extractor._extract_sections(
+                    full_text, content["headings"], sections
                 )
 
             if ctx:

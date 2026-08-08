@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 from typing import Annotated
 from zoneinfo import ZoneInfo
 
-from mcp.server import FastMCP
-from mcp.server.fastmcp import Context
+from fastmcp import FastMCP
+from fastmcp.server import Context
 from pydantic import Field
 
 logger = logging.getLogger(__name__)
@@ -104,11 +104,11 @@ def time_now_handler(server: FastMCP) -> None:
                 "tz_abbreviation": now.strftime("%Z"),
                 "utc_offset": now.strftime("%z"),
                 "unix_timestamp": int(now.timestamp()),
-            }, indent=2)
+            }, separators=(",", ":"))
         except ValueError as e:
-            return json.dumps({"status": "error", "error": str(e)}, indent=2)
+            return json.dumps({"status": "error", "error": str(e)}, separators=(",", ":"))
         except Exception as e:
             logger.error("Time now error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)}, indent=2)
+            return json.dumps({"status": "error", "error": str(e)}, separators=(",", ":"))
 
     logger.info("Registered time_now tool")

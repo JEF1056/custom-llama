@@ -1,10 +1,12 @@
 """Deep search tool for MCP server."""
 
+import asyncio
 import logging
+from dataclasses import dataclass
 from typing import Annotated
 
-from mcp.server import FastMCP
-from mcp.server.fastmcp import Context
+from fastmcp import FastMCP
+from fastmcp.server import Context
 from pydantic import Field
 
 from src.browser.automation import browser_manager
@@ -15,6 +17,63 @@ from src.output_store import output_store
 from src.search.engines import get_search_engine
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SearchResultItem:
+    """Holds extracted content for a single search result."""
+    index: int
+    title: str
+    url: str
+    content: str
+    error: str | None = None
+
+
+def _extract_item_content(url: str, index: int) -> SearchResultItem:
+    """Synchronously extract content from a single URL.
+    
+    Called from thread pool to avoid blocking the event loop during
+    content extraction (html2text conversion, etc.).
+    """
+    try:
+        # We need to run this in the event loop context since it uses async browser APIs.
+        # The caller will use asyncio.to_thread for the outer sync wrapper.
+        import asyncio
+        loop = asyncio.new_event_loop()
+        try:
+            page = loop.run_until_complete(browser_manager.goto(url))
+            html = loop.run_until_complete(browser_manager.get_content(page))
+            loop.run_until_complete(page.close())
+
+            extractor = ContentExtractor()
+            full_text = extractor.extract(html, truncate="never").get("content", "")
+            return SearchResultItem(index=index, title="", url=url, content=full_text, error=None)
+        finally:
+            loop.close()
+    except Exception as e:
+        logger.error("Deep search content extraction error for %s: %s", url, str(e))
+        return SearchResultItem(index=index, title="", url=url, content="", error=str(e))
+
+
+async def _extract_single_result(url: str, index: int) -> SearchResultItem:
+    """Extract content from a single URL using the shared browser manager."""
+    try:
+        page = await browser_manager.goto(url)
+        html = await browser_manager.get_content(page)
+        await page.close()
+
+        extractor = ContentExtractor()
+        full_text = extractor.extract(html, truncate="never").get("content", "")
+        return SearchResultItem(index=index, title="", url=url, content=full_text, error=None)
+    except Exception as e:
+        logger.error("Deep search content extraction error for %s: %s", url, str(e))
+        return SearchResultItem(index=index, title="", url=url, content="", error=str(e))
+
+
+async def _extract_results_parallel(results: list[dict]) -> list[SearchResultItem]:
+    """Extract content from multiple URLs in parallel using asyncio.gather."""
+    tasks = [_extract_single_result(r["url"], i) for i, r in enumerate(results)]
+    return await asyncio.gather(*tasks)
 
 
 def deep_search_handler(server: FastMCP) -> None:
@@ -52,36 +111,40 @@ def deep_search_handler(server: FastMCP) -> None:
 
         parts: list[str] = [f'Deep search: "{query}"']
 
-        # Extract content from top results
+        # Extract content from top results in parallel
         top = search_results[:3]  # Limit to top 3 for deep extraction
-        # Progress total: one step per extracted result plus a final formatting step.
-        progress_total = len(top) + 1
+        
+        # Build heading list first (needed for section filtering later)
+        headings: list[dict] = []
         for i, result in enumerate(top, 1):
             title = result.get("title", "") or "(untitled)"
             url = result.get("url", "")
-            if ctx:
-                await ctx.report_progress(
-                    i - 1, progress_total, f"Reading result {i}/{len(top)}: {title}"
-                )
             heading = f"[{title}]({url})" if url else title
             parts.append(f"{i}. {heading}")
 
-            # Try to extract content from the URL
-            try:
-                page = await browser_manager.goto(url)
-                html = await browser_manager.get_content(page)
+        # Progress: search done, now extracting (1 step for the parallel batch)
+        if ctx:
+            await ctx.report_progress(1, 2, f"Reading {len(top)} result(s)\u2026")
 
-                extractor = ContentExtractor()
-                content = extractor.extract(html, truncate="never")
-                full_text = content.get("content", "")
-                await page.close()
+        # Extract all top results in parallel
+        extracted_items = await _extract_results_parallel(top)
 
+        # Progress total: extraction done + formatting
+        progress_total = 2
+        for item in extracted_items:
+            idx = item.index
+            heading = f"[{top[idx - 1].get('title', '')}]({top[idx - 1].get('url', '')})" if top[idx - 1].get("url") else top[idx - 1].get("title", "(untitled)")
+            
+            if item.error:
+                title = top[idx - 1].get("title", "(untitled)")
+                parts.append(f"_{title}: (failed to extract content)_")
+            else:
                 holder: dict = {}
                 output_store.attach(
                     holder,
                     "content",
-                    full_text,
-                    source=f"deep_search: {url}",
+                    item.content,
+                    source=f"deep_search: {top[idx - 1].get('url', '')}",
                     inline_chars=2000,
                 )
                 content_text = holder.get("content", "") or "_(no content extracted)_"
@@ -90,16 +153,11 @@ def deep_search_handler(server: FastMCP) -> None:
                     parts.append(format_result(content_text, footer=hint))
                 else:
                     parts.append(content_text)
-            except Exception as e:
-                logger.error("Deep search content extraction error for %s: %s", url, str(e))
-                parts.append("_(failed to extract content)_")
             parts.append("")
 
         # Remaining hits as a compact link list
         rest = search_results[3:]
         if rest:
-            if ctx:
-                await ctx.report_progress(len(top), progress_total, "Formatting remaining hits\u2026")
             parts.append("Other results:")
             for result in rest:
                 title = result.get("title", "") or "(untitled)"

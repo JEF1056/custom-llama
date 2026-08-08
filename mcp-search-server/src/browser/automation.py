@@ -104,7 +104,7 @@ class BrowserManager:
     CDP streams and true parallelization of operations.
     """
 
-    MAX_CONCURRENT_BROWSERS = 3  # Concurrent Browser instances; tune based on RAM/CPU
+    MAX_CONCURRENT_BROWSERS = 5  # Concurrent Browser instances; tune based on RAM/CPU
 
     def __init__(self, screenshot_dir: str | None = None):
         """Initialize the browser manager with a browser pool.

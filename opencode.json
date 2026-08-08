@@ -1,6 +1,10 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["github:JEF1056/harness", "./plugin/sticky-header"],
+  "plugin": ["github:JEF1056/harness", ["./plugin/sticky-header", { "headerName": "X-Olla-Session-ID" }]],
+  "tools": {
+    "webfetch": false,
+    "websearch": false
+  },
   "provider": {
     "router": {
       "npm": "@ai-sdk/openai-compatible",
@@ -64,7 +68,7 @@
     "mcp-search-server": {
       "type": "remote",
       "enabled": true,
-      "url": "http://localhost:3100/"
+       "url": "http://localhost:3100/sse"
     }
   }
 }

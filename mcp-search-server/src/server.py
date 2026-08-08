@@ -8,7 +8,7 @@ import os
 import time
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
@@ -17,7 +17,6 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from src.config import settings
-from src.tools.advisor import advisor_handler
 from src.tools.browser import browser_handler
 from src.tools.code_run import code_run_handler
 from src.tools.deep_search import deep_search_handler
@@ -124,23 +123,13 @@ def create_server() -> FastMCP:
     """
     server = FastMCP(
         name="mcp-search-server",
-        host=settings.MCP_SERVER_HOST,
-        port=settings.MCP_SERVER_PORT,
-        streamable_http_path="/",
-        # Stateful (session-backed) Streamable HTTP. Stateless mode cannot stream
-        # server->client progress notifications back during a tool call, so the
-        # UI never receives ctx.report_progress() updates. A persistent session
-        # keeps the per-request SSE response stream open long enough to deliver
-        # them. Safe here: a single server replica, and the UI auto-reconnects on
-        # session expiry (e.g. after a restart).
-        stateless_http=False,
         instructions=(
             "Tools: web search, browser automation (discrete tools), "
-            "page fetch, Python execution, time, and an advisor LLM for reasoning.\n\n"
+            "page fetch, Python execution, and time.\n\n"
             "USE TOOLS PROACTIVELY. Do not answer from memory when a tool can verify. "
             "Search/fetch before stating any fact that may be outdated. Run code instead "
-            "of doing math in your head. Ask the advisor when reasoning gets hard. "
-            "Chain tools freely; a wrong guess costs more than a tool call.\n\n"
+            "of doing math in your head. Chain tools freely; a wrong guess costs more "
+            "than a tool call.\n\n"
             "Which tool when:\n"
             "- Need a fact / find sources -> search (titles+snippets).\n"
             "- Read one known page -> fetch.\n"
@@ -153,16 +142,13 @@ def create_server() -> FastMCP:
             "- Discover what's clickable -> get_interactables() then use returned selectors.\n"
             "- See a page visually (layout, chart, confirm an action) -> browser_screenshot.\n"
             "- Math / parse / transform data (no web) -> code_run.\n"
-            "- Hard reasoning or design decision -> advisor.\n"
             "- Current time / timezone -> time_now.\n"
             "- Continue a previewed long result -> read_output.\n\n"
             "Output format: all tools return compact text. Tool results use `---` as a "
-            "separator between content and metadata footers (pagination hints, interactables "
+            "separator between result content and metadata footers (pagination hints, interactables "
             "counts, etc.). Pagination hints show `read_output(handle=\"...\", offset=N)` "
             "calls you can follow directly.\n\n"
             "Tool guide:\n"
-            "- advisor(context, question): local reasoning LLM. Call early on complex tasks. "
-            "Returns: `[advisor: model]` header + response.\n"
             "- search(query): fast titles+snippets. Returns: `Search: \"...\" — N results` "
             "header + numbered list.\n"
             "- fetch(url): full page text. Returns: `[Title](url)` header + content + "
@@ -180,7 +166,7 @@ def create_server() -> FastMCP:
             "- read_output(handle, offset): paginate through large outputs. "
             "Follow the `read_output(handle=\"...\", offset=N)` in footers. "
             "Keep calling until the footer shows `End:`.\n\n"
-            "Typical chain: advisor → search/fetch (→ read_output if previewed) → code_run → answer."
+            "Typical chain: search/fetch (→ read_output if previewed) → code_run → answer."
         ),
     )
     return server
@@ -192,7 +178,6 @@ def register_tools(server: FastMCP) -> None:
     Args:
         server: The MCP server instance.
     """
-    advisor_handler(server)
     search_handler(server)
     fetch_handler(server)
     deep_search_handler(server)
@@ -431,9 +416,8 @@ async def serve_file_ui(request: Request) -> Response:
 def create_app(server: FastMCP) -> Starlette:
     """Create a Starlette app with SSE and Streamable HTTP transports.
 
-    Exposes three MCP transport endpoints:
+    Exposes two MCP transport endpoints:
       GET  /sse        — SSE stream (legacy SSE transport)
-      POST /messages/  — SSE message handler
       POST /mcp        — Streamable HTTP transport (recommended)
 
     Args:
@@ -445,11 +429,14 @@ def create_app(server: FastMCP) -> Starlette:
     if not settings.MCP_API_KEY:
         logger.warning("MCP_API_KEY is not set — auth is disabled")
 
-    # SSE transport: GET /sse + POST /messages/
-    sse_routes = list(server.sse_app().routes)
+    # Streamable HTTP transport (default in fastmcp 3.x)
+    http_app = server.http_app(transport="streamable-http")
 
-    # Streamable HTTP transport: POST /mcp  (also initialises the session manager)
-    http_routes = list(server.streamable_http_app().routes)
+    # SSE transport
+    sse_app = server.http_app(transport="sse")
+
+    # Merge routes from both apps
+    all_routes = list(http_app.routes) + list(sse_app.routes)
 
     healthcheck_route = Route("/health", endpoint=healthcheck, methods=["GET"])
     # /files exact must come before /files/{filename} so Starlette doesn't greedily match
@@ -459,16 +446,25 @@ def create_app(server: FastMCP) -> Starlette:
     upload_file_route = Route("/api/files/upload", endpoint=upload_file, methods=["POST"])
     delete_file_route = Route("/api/files/{filename}", endpoint=delete_file_api, methods=["DELETE"])
 
+    # fastmcp 3.x requires the lifespan from http_app to be passed to the parent app
+    # so the StreamableHTTPSessionManager task group can be initialized properly
     @contextlib.asynccontextmanager
     async def lifespan(app: Starlette):
-        # StreamableHTTPSessionManager must be running while the server handles requests.
-        async with server.session_manager.run():
-            yield
+        # Start browser pool early for zero-latency first request
+        from src.browser.automation import browser_manager
+        if not browser_manager.is_running:
+            await browser_manager.start()
+        async with http_app.lifespan(app):
+            async with sse_app.lifespan(app):
+                yield
+        # Clean up pooled search clients on shutdown
+        from src.search.engines import close_search_clients
+        await close_search_clients()
 
     app = Starlette(
-        debug=server.settings.debug,
+        debug=True,
         # Explicit routes first so they are matched before the MCP catch-all at "/"
-        routes=[healthcheck_route, file_ui_route, file_route, list_files_route, upload_file_route, delete_file_route] + sse_routes + http_routes,
+        routes=[healthcheck_route, file_ui_route, file_route, list_files_route, upload_file_route, delete_file_route] + all_routes,
         lifespan=lifespan,
     )
     _cors_origins = [o.strip() for o in os.environ.get("MCP_CORS_ORIGINS", "*").split(",") if o.strip()]

@@ -13,11 +13,12 @@ import json
 import logging
 import re
 import time
+from functools import wraps
 from pathlib import Path
 from typing import Annotated
 
-from mcp.server import FastMCP
-from mcp.server.fastmcp import Context
+from fastmcp import FastMCP
+from fastmcp.server import Context
 from mcp.types import ImageContent, TextContent
 from pydantic import Field
 
@@ -141,6 +142,47 @@ async def _interactables_summary(page) -> str:
     if len(visible) > 40:
         lines.append(f"  ... and {len(visible) - 40} more")
     return "\n".join(lines)
+
+
+def _browser_tool(fn):
+    """Decorator for browser tools that share the same session/page lifecycle.
+
+    Handles:
+      - Scoping the session_id to the caller's namespace
+      - Ensuring a page is available via _ensure_page
+      - Reporting progress (0→1)
+      - Catching exceptions and returning formatted errors
+      - Closing the session if it was one-off
+    Subclasses supply the body via ``body(page, scoped_sid, ctx)``.
+    """
+    @wraps(fn)
+    async def wrapper(*args, **kwargs):
+        ctx = kwargs.get("ctx") or (args[2] if len(args) > 2 and hasattr(args[2], "report_progress") else None)
+        # Extract session_id from kwargs or positional args
+        session_id = kwargs.get("session_id")
+        if session_id is None and len(args) > 1:
+            session_id = args[1]
+
+        scoped_sid = _scope_id(ctx, session_id) if session_id else None
+        one_off = session_id is None
+
+        try:
+            if ctx:
+                await ctx.report_progress(0, 1, "Preparing page\u2026")
+            page, scoped_sid = await _ensure_page(scoped_sid)
+            result = await fn(page, scoped_sid, ctx, *args[3:], **{k: v for k, v in kwargs.items() if k != "ctx" and k != "session_id"})
+            if ctx:
+                await ctx.report_progress(1, 1, "Done")
+            return result
+        except Exception as e:
+            logger.error("%s error: %s", fn.__name__, str(e))
+            return f"Error: {str(e)}"
+        finally:
+            if one_off and page is not None:
+                with contextlib.suppress(Exception):
+                    await _get_browser_manager().close_session(scoped_sid)
+
+    return wrapper
 
 
 def browser_handler(server: FastMCP) -> None:
