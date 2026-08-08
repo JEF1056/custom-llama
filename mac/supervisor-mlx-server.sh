@@ -50,6 +50,7 @@ start_server() {
     export APC_MAX_POOL_TENSORS=450000
     export APC_LAYER_MAJOR_MEMORY_MIN_TOKENS=50000
     export APC_HASH=fast
+    export APC_EXACT_CACHE_ENTRIES=10
     mkdir -p "$APC_DISK_PATH"
 
     nohup bash -c "
@@ -59,10 +60,10 @@ start_server() {
             --port $MLX_PORT \
             --model '$MODEL_PATH' \
             --draft-model z-lab/Qwen3.6-35B-A3B-DFlash \
-            --kv-bits 4.2 \
+            --kv-bits 4 \
             --max-kv-size 229376 \
             --prefill-step-size 1024 \
-            --thinking-budget 4096 --enable-thinking --kv-quant-scheme turboquant
+            --thinking-budget 4096 --enable-thinking
     " >> "$LOG_DIR/qwen36-mlx.out.log" 2>>"$LOG_DIR/qwen36-mlx.err.log" &
     
     SERVER_PID=$!
