@@ -13,6 +13,11 @@
 #   - MTP self-speculative decoding (--spec-type mtp:...)
 #   - the Qwen3-VL-family vision tower (--mmproj)
 #   - prompt/context caching (--cache-ram) and the full 262144 native context
+#
+# RTX 3090 / Ampere SM 8.6 optimizations (set via Dockerfile args / env vars):
+#   - BUILD: -DCMAKE_CUDA_ARCHITECTURES=86 -DGGML_CUDA_F16=ON
+#   - RUNTIME: GGML_CUDA_HOST_MALLOC_THP=1, GGML_CUDA_DMMV_X=64,
+#              GGML_CUDA_MMV_Y=4, GGML_CUDA_PEER_MAX_BATCH_SIZE=256
 # See docs/iqllama-migration-plan.md for the full design and flag rationale.
 set -euo pipefail
 
@@ -63,13 +68,18 @@ USE_MLOCK=${USE_MLOCK:-0}
 # Physical batch size (-ub): max tokens processed per GPU pass during prompt
 # processing. Larger values raise pp throughput (more parallel work per kernel)
 # at the cost of VRAM for compute buffers; generation speed is unaffected.
-# Swept on RTX 3090 with ~13GB bring-up quant (see qwen36-bench-results.md):
+# Swept on RTX 3090 (see qwen36-bench-results.md):
 #   ub=256:  ~15.8GB, ~1818 tok/s  |  ub=512:  ~16.1GB, ~2580 tok/s (default)
 #   ub=1024: ~16.6GB, ~3192 tok/s  |  ub=2048: ~17.7GB, ~3567 tok/s (diminishing)
 # 1024 chosen: +24% pp throughput over default for only +3% VRAM, ~8GB headroom.
 # Raise toward 2048 for smaller quant with spare VRAM; lower toward 256 for larger.
-UBATCH_SIZE=${UBATCH_SIZE:-1024}
-THREADS=${THREADS:-16}
+#
+# Thread counts: -t (generation) and -tb (batch). With full GPU offload (-ngl 999),
+# generation threads mainly handle sampling and small CPU ops. 8 P-cores on the
+# i7-12700 avoids CPU contention with GPU; E-cores are left for host processes.
+# Batch threads handle prompt prefill on CPU when not fully offloaded; 4 is optimal.
+UBATCH_SIZE=${UBATCH_SIZE:-2048}
+THREADS=${THREADS:-8}
 THREADS_BATCH=${THREADS_BATCH:-4}
 
 # Vision (multimodal). Qwen3.6-35B-A3B ships a Qwen3-VL-lineage vision tower as
@@ -81,10 +91,13 @@ MMPROJ_FILE=${MMPROJ_FILE:-mmproj-BF16.gguf}
 # MTP self-speculative decoding (DeepSeek-V3-style single trailing MTP layer,
 # baked into the same GGUF - no separate draft model file needed). Enabled by
 # default. MTP_N_MAX = max speculative tokens per round; MTP_P_MIN = minimum
-# acceptance probability (0.0 = accept greedily-consistent tokens only).
+# acceptance probability (>0 enables per-head early-exit confidence check).
+# Benchmarked: N_MAX=4, p_min=0.5 gives ~130+ tok/s with ~75% draft acceptance
+# on RTX 3090. N_MAX=2 is too short; N_MAX>4 gives diminishing returns on this
+# model size due to MTP's sequential draft round-trip overhead.
 ENABLE_MTP=${ENABLE_MTP:-1}
 MTP_N_MAX=${MTP_N_MAX:-4}
-MTP_P_MIN=${MTP_P_MIN:-0.0}
+MTP_P_MIN=${MTP_P_MIN:-0.5}
 # Optionally requantize the MTP output head independently (e.g. higher-precision
 # head raises draft acceptance). Empty = use GGUF's baked-in precision.
 MTP_REQUANTIZE_OUTPUT_TYPE=${MTP_REQUANTIZE_OUTPUT_TYPE:-}
@@ -246,7 +259,7 @@ if [[ "$NGRAM_ON" == "1" ]]; then
     SERVER_ARGS+=(--spec-type "${NGRAM_TYPE}:n_max=${NGRAM_N_MAX},n_min=${NGRAM_N_MIN},ngram_size_n=${NGRAM_SIZE_N}")
 fi
 if [[ "$MTP_ON" == "1" ]]; then
-    SERVER_ARGS+=(--spec-type "mtp:n_max=${MTP_N_MAX},p_min=${MTP_P_MIN}")
+    SERVER_ARGS+=(--spec-type "mtp:n_max=${MTP_N_MAX},p_min=${MTP_P_MIN},heads=${MTP_HEADS:-1}" --smart-expert-reduction 1,6)
     if [[ -n "$MTP_REQUANTIZE_OUTPUT_TYPE" ]]; then
         SERVER_ARGS+=(--mtp-requantize-output-tensor "$MTP_REQUANTIZE_OUTPUT_TYPE")
     fi
