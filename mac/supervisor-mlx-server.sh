@@ -41,6 +41,7 @@ start_server() {
     log "Starting mlx_vlm.server (port=$MLX_PORT, model=$MODEL_PATH)"
     
     cd "$MODEL_PATH"
+    # APC (Attention Prefix Cache) — eliminates prefill for repeated prompts
     export APC_ENABLED=0
     export APC_NUM_BLOCKS=4096
     export APC_BLOCK_SIZE=16
@@ -51,15 +52,22 @@ start_server() {
     export APC_LAYER_MAJOR_MEMORY_MIN_TOKENS=100000
     export APC_HASH=fast
     export APC_EXACT_CACHE_ENTRIES=20
+    # Vision cache — larger for M4/M5 Pro (48GB)
     export VISION_CACHE_SIZE=50
+    # KV Cache Quantization — quantize from token 0 (not 5000)
+    # 4-bit uniform quantization reduces KV memory by 4x
     export KV_BITS=4
     export KV_QUANT_SCHEME=uniform
     export KV_GROUP_SIZE=64
-    export QUANTIZED_KV_START=5000
+    export QUANTIZED_KV_START=0
+    # Max KV size — tuned for 48GB machine
     export MAX_KV_SIZE=229376
-    export PREFILL_STEP_SIZE=1024
+    # Prefill step size — 4096 reduces kernel launch overhead vs 1024
+    export PREFILL_STEP_SIZE=4096
+    # Speculative decoding config
     export MLX_VLM_DRAFT_BLOCK_SIZE=16
     export MLX_VLM_SPEC_BATCH_COALESCE_MS=0
+    # Generation limits
     export MLX_VLM_MAX_TOKENS=2048
     export MLX_VLM_LOG_PROGRESS_INTERVAL=0
     mkdir -p "$APC_DISK_PATH"
@@ -73,9 +81,9 @@ start_server() {
             --kv-bits 4 \
             --kv-quant-scheme uniform \
             --kv-group-size 64 \
-            --quantized-kv-start 5000 \
+            --quantized-kv-start 0 \
             --max-kv-size 229376 \
-            --prefill-step-size 1024
+            --prefill-step-size 4096
     " >> "$LOG_DIR/qwen36-mlx.out.log" 2>>"$LOG_DIR/qwen36-mlx.err.log" &
     
     SERVER_PID=$!
