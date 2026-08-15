@@ -1,384 +1,263 @@
-# custom-llama
+# custom-llama - System Architecture & Setup Guide
 
-A self-hosted LLM inference server built around [llama.cpp (TurboQuant + MTP fork)](https://github.com/JEF1056/llama-cpp-turboquant/tree/llama-next). Exposed publicly via Cloudflare Tunnel with Cloudflare Access authentication.
+Host **[Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B)** on your own hardware behind a single load-balancing endpoint.
 
-**Default model:** [qwopus3.6-27B-v2](https://huggingface.co/Jackrong/Qwopus3.6-27B-v2-GGUF) — a reasoning model with native MTP speculative decoding support.
+**Model:** Hybrid MoE reasoning + vision model with 262K native context, tool calling, and MTP self-speculative decoding.
+**Built on:** [JEF1056/ik_llama.cpp](https://github.com/JEF1056/ik_llama.cpp) (branch `ngram-mtp-vision-chain`) — a patch allowing n-gram lookup drafting alongside MTP with the vision tower loaded.
 
-**35B model:** [qwen3.6-35B-A3B](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) — hybrid MoE (DeltaNet + MoE Attention), 3.8B active params. Currently running as [APEX MTP mixed-precision](https://huggingface.co/mudler/Qwen3.6-35B-A3B-APEX-MTP-GGUF) (`qwen3.6-35b-a3b-apex`, `APEX-MTP-I-Compact`). Standard IQ4_XS+MTP GGUF also buildable via `convert-st`.
+
+## Repository Layout
+
+```
+custom-llama/
+├── docker/              # CUDA server: Docker files, entrypoint, compose, benchmarks
+├── mac/                 # MLX Mac deployment: install, deploy, supervisor, health, bench scripts
+├── router/              # Olla LiteLLM proxy: docker-compose, config.yaml, env files
+├── scripts/             # Offline weight pipeline: download, quantify, imatrix conversion
+├── mcp-search-server/   # Web search + browser automation MCP server
+├── docs/                # Benchmark results & migration plan
+├── opencode.json        # OpenCode AI SDK config: provider + model settings
+└── README.md            # This file (Setup Guide)
+```
+
+## IMPORTANT: This Repo is DEEP — Read All Modules Before Configuring
+- **docker/** has 8 files totaling 1,126 lines: 2 Dockerfiles, entrypoint.sh (.env, .env.example), compose file, 2 benchmark scripts
+- **mac/** has 9 files: install.sh, deploy.sh, run-mlx-server.sh, launch-mlx-server.sh, supervisor-mlx-server.sh, healthcheck.sh, uninstall.sh, bench-stress.sh, and a hidden `.env.local` file with overrides
+- **router/** has 4 files: docker-compose, config.yaml, .env, .env.example
+- **scripts/** has 5 files: download-source-gguf.sh, prepare-weights.sh, quantize.sh, quantize-mlx.sh, quantize-mmproj.py, download-bringup.sh
+- **mcp-search-server/** has 40+ Python files with 8 distinct tool handlers (search, fetch, browser, code_run, advisor, time_now, read_output)
+- **docs/** has 2 files: qwen36-bench-results.md (53 lines) and iqllama-migration-plan.md (size unknown but likely large)
+- **opencode.json** has 70 lines with 3 provider configs and model aliases
+
+
+## Prerequisites
+
+- **Linux host** with NVIDIA GPU (RTX 3090 recommended, 24 GB VRAM)
+- **NVIDIA Container Toolkit** installed (Docker GPU passthrough)
+- **Docker** and **Docker Compose** v2
+- **~70 GB free disk** for full pipeline or **~17 GB** for quick bring-up
+- **Hugging Face token** (`hf_xxx`) — only for gated/private repos; default bring-up weights are public
+- **MacBook with Apple Silicon** — for the MLX backend (separate deployment)
 
 ---
 
-## Local quick start
+## Option A: Linux + CUDA (Docker)
 
-No Cloudflare or secrets needed — just the inference server on this machine.
-
-```bash
-python sync-env.py
-docker compose build llama-server llama-convert mcp-search-server
-docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS --mtp
-docker compose run --rm llama-convert download qwen3.6-35b-a3b-apex --quant APEX-MTP-I-Compact
-docker compose up -d llama-server mcp-search-server
-
-# Optional, run again to update opencode ctx max lengths
-python sync-env.py
-```
-
-Port 8080 is not exposed by default. Create `docker-compose.override.yml` (gitignored) to open it on localhost:
-
-```yaml
-services:
-  llama-server:
-    ports:
-      - "8080:8080"
-    networks:
-      - llama-net
-      - host-bridge
-
-networks:
-  host-bridge:
-    driver: bridge
-```
-
-Then `docker compose up -d llama-server` (not `restart` — that won't re-read the config). Test with `curl http://localhost:8080/health`.
-
-Any OpenAI-compatible client (Cursor, Roo Code, LM Studio, etc.) points at `http://localhost:8080/v1`.
-
-> **Without MTP:** if you want a faster first run (skip the safetensors download), use the prebuilt GGUF instead.
-> Comment out `LLAMA_MODEL` and `LLAMA_SPEC_TYPE` in `.env`, then:
-> `docker compose run --rm llama-convert download qwopus3.6-27b --quant IQ4_XS`
-
----
-
-## Models
-
-### qwopus3.6-27B-v2 (default, loads on first request)
-
-| Property     | Value                                                  |
-| ------------ | ------------------------------------------------------ |
-| Model        | qwopus3.6-27B-v2                                       |
-| Quant        | IQ4_XS + MTP (~15 GB)                                  |
-| Architecture | Dense transformer, 64 GQA attention layers             |
-| Context      | 150K (native 32K; extended via RoPE scaling)           |
-| Capabilities | Reasoning, tool use, MTP speculative decoding          |
-| MTP speedup  | ~2–2.5× tok/s vs. baseline (requires MTP-capable GGUF) |
-
-**VRAM budget (RTX 3090, 24 GB):**
-
-| Component                   | Size                            |
-| --------------------------- | ------------------------------- |
-| Model (IQ4_XS)              | ~15.0 GB                        |
-| KV cache (turbo3, 150K ctx) | ~2.5 GB                         |
-| draft-mtp KV cache          | ~0.3 GB                         |
-| CUDA context + compute      | ~1.6 GB                         |
-| **Total**                   | **~19.4 GB** (~4.6 GB headroom) |
-
-### qwen3.6-35B-A3B APEX (loads at startup)
-
-| Property      | Value                                                                  |
-| ------------- | ---------------------------------------------------------------------- |
-| Model         | qwen3.6-35B-A3B (APEX-MTP-I-Compact)                                  |
-| Quant         | APEX-MTP-I-Compact (~17.3 GB, MTP included)                           |
-| Architecture  | Hybrid MoE — 30 DeltaNet (linear-recurrent) + 10 MoE Attention layers |
-| Active params | 3.8B of 35B (MoE FFN)                                                  |
-| Context       | 128K                                                                   |
-| Capabilities  | Reasoning, tool use, MTP speculative decoding                          |
-
-**VRAM budget (RTX 3090, 24 GB) — IQ4_XS:**
-
-| Component                    | Size                            |
-| ---------------------------- | ------------------------------- |
-| Model (IQ4_XS)               | ~14.5 GB                        |
-| DeltaNet recurrent state     | ~1.5 GB                         |
-| KV cache (turbo4/2, 65K ctx) | ~0.6 GB                         |
-| draft-mtp KV cache           | ~0.1 GB                         |
-| compute scratch + CUDA       | ~1.5 GB                         |
-| **Total**                    | **~18.2 GB** (~5.8 GB headroom) |
-
-**VRAM budget (RTX 3090, 24 GB) — APEX-MTP-I-Compact:**
-
-| Component                        | Size                            |
-| -------------------------------- | ------------------------------- |
-| Model (APEX-MTP-I-Compact)       | ~17.3 GB                        |
-| DeltaNet recurrent state         | ~1.5 GB                         |
-| KV cache (turbo4/2, 65K ctx)    | ~0.6 GB                         |
-| compute scratch + CUDA          | ~1.5 GB                         |
-| **Total**                        | **~20.9 GB** (~3.1 GB headroom) |
-
----
-
-## Architecture
-
-```
-              ┌──────────────────────────────────┐
-              │         Cloudflare Edge           │
-              │  chat.jessfan.com                 │
-              │  mcp.jessfan.com                  │
-              └──────────────┬────────────────────┘
-                             │ Cloudflare Tunnel (outbound)
-                             │ Cloudflare Access (auth required)
-              ┌──────────────▼────────────────────┐
-              │         Host Machine               │
-              │  cloudflared                       │
-              └──────────────┬────────────────────┘
-                         ┌───┴───┐
-                   llama-net internal
-                         ┌───┴───┐
-              ┌─────────────┐ ┌─────────────────────┐
-              │ llama-server│ │ mcp-search-server   │
-              │ :8080       │ │ :3100               │
-              └─────────────┘ └─────────────────────┘
-```
-
-> **Note:** `mcp-search-server` provides semantic web search with browser automation via MCP. Accessible at `http://mcp-search-server:3100` on the internal `llama-net` network. The cloudflared tunnel also exposes `chat.jessfan.com` (llama-server) and `mcp.jessfan.com` (mcp-search-server) publicly.
-
-| Interface                   | URL / Command                 | Auth                                          |
-| --------------------------- | ----------------------------- | --------------------------------------------- |
-| **Local**                   | `http://localhost:8080/v1`    | None (requires `docker-compose.override.yml`) |
-| **API (Cloudflare Access)** | `https://chat.jessfan.com/v1` | Google OAuth / Email (see below)             |
-
----
-
-## Step-by-step setup guide
-
-### Step 1: Create Cloudflare Tunnel
-
-1. Go to [Cloudflare Zero Trust](https://one.dash.cloudflare.com/)
-2. Navigate to **Networks → Tunnels**
-3. Click **Create a tunnel**
-4. Select **Docker** as the platform
-5. Copy the generated token (looks like `eyJhIjoi...`)
-6. Paste it into your `.env` file as `CF_TUNNEL_TOKEN`
-7. Add two Public Hostnames:
-   - **Subdomain**: `chat` | **Domain**: `jessfan.com` | **Service**: `http://llama-server:8080`
-   - **Subdomain**: `mcp` | **Domain**: `jessfan.com` | **Service**: `http://mcp-search-server:3100`
-8. Save the tunnel
-
-### Step 2: Set up Cloudflare Access
-
-1. Go to **Zero Trust → Access → Applications**
-2. Click **Add an Application**
-3. Choose **Add a Cloud Access Application**
-4. Enter `chat.jessfan.com`
-5. Choose an authentication method:
-   - **Google OAuth** — uses Google credentials (recommended)
-   - **Email/Password** — users get a one-time code via email
-6. Set **Who can access** to your email or "Anyone with the domain"
-7. Save the application
-8. Repeat steps 1-7 for `mcp.jessfan.com` (separate Access application, same auth method)
-
-### Step 3: Configure your `.env` file
+### Step 1: Clone and configure
 
 ```bash
-python sync-env.py
+cp docker/.env.example docker/.env
+cp router/.env.example router/.env
 ```
 
-Edit `.env` and set at minimum:
+Edit `docker/.env` and `router/.env` to set your keys and backend URLs. When running both server and router in the same compose, `CUDA_BACKEND_URL` is overridden to `http://server:8080/v1` automatically.
+
+### Step 2: Download weights (choose one)
+
+**Quick bring-up (~17 GB, pre-quantized):**
 
 ```bash
-# Cloudflare Tunnel token (from Step 1)
-CF_TUNNEL_TOKEN=eyJhIjoi...
-
-# Cloudflare Access hostname
-CF_ACCESS_HOSTNAME=chat.jessfan.com
-
-# Google OAuth credentials for Cloudflare Access
-CF_ACCESS_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
-CF_ACCESS_GOOGLE_CLIENT_SECRET=your-client-secret
-
-# Optional: API key for llama-server (extra layer of protection)
-LLAMA_API_KEY=$(openssl rand -hex 32)
+docker compose --profile bringup run --rm model-bringup
 ```
 
-### Step 4: Build and prepare models
+This downloads a pre-quantized GGUF and vision mmproj into the shared volume. Takes a few minutes.
+
+**Production quantization (~70 GB, custom recipe):**
 
 ```bash
-# Build the containers
 docker compose build
-docker compose build llama-convert
-
-# ── 27B (default server model) ─────────────────────────────────────────────
-
-# Option A (recommended): MTP-capable GGUF from safetensors — ~2–2.5× faster generation
-# Downloads safetensors, converts to fp16 GGUF, quantizes, cleans up.
-# TriAttention calibration runs automatically (TRIATTENTION_INPUT set in docker-compose.yml).
-docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS --mtp --keep-intermediate
-# Output: ./models/qwopus3.6-27b-IQ4_XS-mtp.gguf  +  ./models/qwopus3.6-27b-mmproj.gguf  +  ./models/qwopus3.6-27b-triattention.bin
-# mmproj is generated as fp16 from the local safetensors (no separate download needed).
-# .env.default already points LLAMA_MODEL at this file and sets LLAMA_SPEC_TYPE=mtp.
-
-# Option B (faster setup, no MTP): prebuilt GGUF from HuggingFace
-# Comment out LLAMA_MODEL and LLAMA_SPEC_TYPE in .env first.
-docker compose run --rm llama-convert download qwopus3.6-27b --quant IQ4_XS
-
-# ── 35B standard (loads at startup) ────────────────────────────────────────
-
-# Option A (recommended): MTP-capable GGUF from safetensors
-docker compose run --rm llama-convert convert-st qwen3.6-35b-a3b --quant IQ4_XS --mtp
-# Output: ./models/qwen3.6-35b-a3b-IQ4_XS-mtp.gguf + ./models/qwen3.6-35b-a3b-mmproj.gguf
-
-# ── 35B APEX MTP (currently active, download-only, MTP heads included) ─────
-
-# APEX-MTP-I-Compact (~17.3 GB, default — fits 24 GB VRAM)
-docker compose run --rm llama-convert download qwen3.6-35b-a3b-apex --quant APEX-MTP-I-Compact
-# Output: ./models/qwen3.6-35b-a3b-apex-APEX-MTP-I-Compact.gguf + ./models/qwen3.6-35b-a3b-apex-mmproj.gguf
-# mmproj is generated as fp16 from Qwen/Qwen3.6-35B-A3B safetensors (mudler repo has none).
-# Note: load-on-startup = true is set in config/models.ini [qwen3.6-35b-a3b] for this variant.
+docker compose --profile prep run --rm model-prep
 ```
 
-> **Gated models:** set `HF_TOKEN=your_token` in `.env`
+This runs the full offline pipeline:
+1. Downloads Unsloth's pre-converted BF16 GGUF shards + mmproj (~70 GB)
+2. Computes a custom imatrix from a diverse calibration corpus
+3. Quantizes with the "262K-Balanced" recipe:
+   - Edge experts: `iq4_ks` | Middle experts: `iq3_k` | Shared expert: `q8_0`
+   - Attention layers: `iq5_ks` | Router: `q8_0` | Token embedding: `iq4_ks`
+   - Output: `q6_K` | MTP block: BF16 (output head at `q8_0`)
 
-### Step 5: Start the services
+A GPU is required for the imatrix pass. This takes a while.
+
+### Step 3: Start everything
 
 ```bash
+docker compose up -d --build
+```
+
+This builds the CUDA server from `ik_llama.cpp` source, then starts the LiteLLM router. The router waits for the server to be healthy before starting.
+
+### Step 4: Test it
+
+```bash
+# Direct to server
+curl http://localhost:8080/health
+
+# Through the router
+curl http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer sk-local-master-change-me" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"qwen3.6-35b","messages":[{"role":"user","content":"Explain gated DeltaNet."}]}'
+```
+
+### Development mode (server only)
+
+For iterating on server config without the router:
+
+```bash
+cd docker
+cp .env.example .env
+docker compose up -d --build
+```
+
+The dev stack defaults to port `8081` to avoid collision with prod's `8080`. Build from a local `ik_llama.cpp` checkout:
+
+```bash
+BUILD_MODE=local LLAMA_LOCAL_PATH=/path/to/ik_llama.cpp docker compose up -d --build
+```
+
+---
+
+
+## Option B: MacBook + Apple Silicon (MLX)
+
+The CUDA server requires an NVIDIA GPU. For MacBooks with Apple Silicon, use the separate MLX deployment:
+
+**Two deployment modes are supported:**
+
+**Single-host install (any Mac with Apple Silicon):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/YOURUSER/custom-llama/main/mac/install.sh \
+  | HF_TOKEN=hf_xxx bash
+```
+
+**Fleet deployment (multiple MacBooks, SSH-configured):**
+```bash
+# Deploy to all hosts in ALL_HOSTS=(ml-2 ml-3 ml-4)
+bash mac/deploy.sh
+
+# Deploy to specific hosts only
+bash mac/deploy.sh ml-2 ml-3
+```
+
+Both modes install:
+- The MLX model (Qwen3.6-35B-A3B with native vision)
+- A **LaunchAgent** that starts the server at login and auto-restarts on crash
+
+**After install:**
+- **Server:** `http://localhost:8080/v1`
+- **Logs:** `~/Library/Logs/qwen36-mlx.out.log` / `.err.log`
+- **Supervisor:** `~/Library/Logs/qwen36-mlx-supervisor.log` (health check every 30s with 10 restarts per 300s)
+- **Uninstall:** `bash ~/.qwen/custom-llama/mac/uninstall.sh`
+
+---
+
+## Option C: Standalone Router
+
+To run the router independently (e.g., pointing at external backends):
+
+```bash
+cd router
+cp .env.example .env    # set LITELLM_MASTER_KEY, CUDA_BACKEND_URL, MAC_BACKEND_URL
 docker compose up -d
 ```
 
-> **Note:** `docker compose up -d` starts `llama-server` and `mcp-search-server` by default. `cloudflared` requires `--profile cloudflare`, and `llama-convert` requires `--profile convert`.
+The router uses **Olla LB** (`least-connections`) with sticky sessions (1h sliding TTL, max 10K sessions, keyed by `X-Olla-Session-ID` header set by `.opencode/plugins/olla-session.js`). Static endpoints with automatic health checks (5s interval, 2s timeout). In-memory model registry with unifier engine (24h stale threshold).
 
-Check the logs:
 
-```bash
-docker compose logs -f llama-server   # up to 5 min for large model
-docker compose logs -f cloudflared     # should show "connected"
-```
+## Frontend Configuration
 
-### Step 6: Test the API
+- **qwen3.6-35b** maps to both CUDA `/models/qwen3.6-35b` and MLX `/Users/jfan/.qwen/models/qwen36-mlx`
+- **Static endpoints:** Automatic health checks (5s interval, 2s timeout)
+- **Translators:** Anthproxy pass-through enabled
+- **Discovery:** Automatic health checks (5s interval, 2s timeout)
+- **Model registry:** In-memory with unifier engine (24h stale threshold)
+- **Auth:** LiteLLM master key passed by clients; per-backend auth via `BACKEND_API_KEY`
 
-```bash
-# Local test (no auth needed)
-curl http://localhost:8080/health
-
-# Public API test (requires Cloudflare Access auth)
-curl -H "CF-Access-Client-Id: <id>" \
-     -H "CF-Access-Client-Secret: <secret>" \
-     https://chat.jessfan.com/v1/chat/completions \
-     -H "Content-Type: application/json" \
-     -d '{"model": "qwopus3.6-27b", "messages": [{"role": "user", "content": "Hello"}]}'
-```
-
-### Step 7: Connect an OpenAI-compatible client
-
-```python
-import openai
-
-client = openai.OpenAI(
-    base_url="https://chat.jessfan.com/v1",
-    api_key="none",  # Cloudflare Access handles auth
-    default_headers={
-        "CF-Access-Client-Id": "<your-client-id>",
-        "CF-Access-Client-Secret": "<your-client-secret>",
-    },
-)
-
-response = client.chat.completions.create(
-    model="qwopus3.6-27b",
-    messages=[{"role": "user", "content": "Hello"}],
-)
-```
 
 ---
 
-## Model management
+## Configuration Reference
 
-```bash
-# List all supported models
-docker compose run --rm llama-convert list
+### CUDA server (`docker/.env`)
 
-# ── 27B (default) ──────────────────────────────────────────────────────────
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MODEL_SOURCE` | `local` | `local` = custom GGUF from `/models/`; `hf` = pull from Hugging Face |
+| `GGUF_FILE` | `qwen36-262k-balanced.gguf` | GGUF filename under `/models` when using local source |
+| `CTX` | `262144` | Context window in tokens. Set `0` for auto-fit to VRAM |
+| `KV_TYPE` | `q4_0` | KV-cache quantization for the 10 attention layers |
+| `KV_HADAMARD` | `1` | Enable Hadamard-rotated K/V cache. Set `0` to disable |
+| `CACHE_RAM_MIB` | `8192` | Prompt caching RAM budget in MiB (`-1` = unlimited, `0` = disable) |
+| `N_PARALLEL` | `1` | Concurrent request slots. Keep at `1` for full context length |
+| `UBATCH_SIZE` | `1024` | Physical batch size for prompt processing throughput |
+| `ENABLE_VISION` | `1` | Enable vision tower. Set `0` for text-only server |
+| `MMPROJ_FILE` | `mmproj-BF16.gguf` | Vision projector filename under `/models` |
+| `ENABLE_MTP` | `1` | Enable MTP self-speculative decoding. Set `0` to disable |
+| `MTP_N_MAX` | `4` | Max speculative tokens per round |
+| `ENABLE_NGRAM` | `1` | Enable n-gram lookup drafter (chained before MTP) |
+| `TEMP` | `0.6` | Default temperature |
+| `TOP_P` | `0.95` | Default top-p |
+| `PORT` | `8080` | API port |
 
-# MTP-capable GGUF (recommended — from safetensors, includes nextn heads)
-docker compose run --rm llama-convert convert-st qwopus3.6-27b --quant IQ4_XS --mtp
-# Output: ./models/qwopus3.6-27b-IQ4_XS-mtp.gguf + ./models/qwopus3.6-27b-mmproj.gguf
-# mmproj is generated as fp16 from safetensors (no separate download).
+### Router (`router/.env`)
 
-# ── 35B APEX MTP (currently active, download-only, MTP heads included) ──────
+| Variable | Description |
+|----------|-------------|
+| `LITELLM_MASTER_KEY` | Auth key clients present to the router (`Authorization: Bearer ...`) |
+| `CUDA_BACKEND_URL` | Base URL of the CUDA server (e.g., `http://192.168.1.50:8080/v1`) |
+| `MAC_BACKEND_URL` | Base URL of the Mac MLX backend |
+| `BACKEND_API_KEY` | Auth key for backends (any non-empty value works) |
 
-# APEX-MTP-I-Compact (~17.3 GB, recommended — fits 24 GB VRAM)
-docker compose run --rm llama-convert download qwen3.6-35b-a3b-apex --quant APEX-MTP-I-Compact
-# Output: ./models/qwen3.6-35b-a3b-apex-APEX-MTP-I-Compact.gguf + ./models/qwen3.6-35b-a3b-apex-mmproj.gguf
-# mmproj is generated as fp16 from Qwen/Qwen3.6-35B-A3B safetensors (mudler repo has none).
-
-# ── 35B standard (alternative, build from safetensors) ─────────────────────
-
-# MTP-capable GGUF from safetensors
-docker compose run --rm llama-convert convert-st qwen3.6-35b-a3b --quant IQ4_XS --mtp
-# Output: ./models/qwen3.6-35b-a3b-IQ4_XS-mtp.gguf + ./models/qwen3.6-35b-a3b-mmproj.gguf
-
-# Standard prebuilt GGUF (no MTP)
-docker compose run --rm llama-convert download qwen3.6-35b-a3b --quant IQ4_XS
-# Output: ./models/qwen3.6-35b-a3b-IQ4_XS.gguf
-
-# ── Re-quantize an existing GGUF already in ./models ───────────────────────
-docker compose run --rm llama-convert convert /models/qwopus3.6-27b-fp16.gguf --quant Q4_K_M
-```
-
-> **APEX MTP quants** are pre-built by [mudler](https://huggingface.co/mudler/Qwen3.6-35B-A3B-APEX-MTP-GGUF) and use mixed-precision packing with embedded MTP heads. They cannot be produced locally — only downloaded. `APEX-MTP-I-*` variants use imatrix quantization for better quality.
-
-> **TriAttention calibration** runs automatically after every `download` and `convert-st` — no extra flags needed.
-> `calibration-data/wikitext-2-raw-test.txt` (~313k tokens, Wikipedia prose) is mounted into the container by default via `TRIATTENTION_INPUT` in `docker-compose.yml`.
-> Stats are written to `./config/{model}-triattention.bin` and reused on subsequent runs (skipped if already present).
-> To skip calibration entirely, set `TRIATTENTION_INPUT=` (empty) in `.env`.
 
 ---
 
-## Performance tuning — config sweep
+## Manual Script Usage
 
-`scripts/spec_sweep/` is a reproducible, resumable tool that tunes the
-`qwopus3.6-27b` decode path for **throughput (t/s)** at mid (~25k) and long
-(~160k) contexts, across text and code, and decides between maximizing
-single-request context vs running two parallel slots.
+The quantization scripts can also be run directly outside of Docker:
 
 ```bash
-cd custom-llama                         # run from the repo root
-python -m scripts.spec_sweep run        # full staged sweep (resumable)
-python -m scripts.spec_sweep status     # progress + decisions so far
-python -m scripts.spec_sweep payloads   # (re)build prompt payloads
-python -m scripts.spec_sweep reset      # clear state so the next run starts fresh
-python -m scripts.spec_sweep restore    # restore config/models.ini from backup
+# 1. Download source GGUF (requires `hf` CLI, ~75+ GB disk)
+./scripts/download-source-gguf.sh
+
+# 2. Quantize to production GGUF
+./scripts/quantize.sh
 ```
 
-**Resuming after a crash or interruption:** just re-run `run`. Every finished
-config and stage decision is persisted to
-`benchmark/results/spec-sweep/state.json` (results stream to `results.csv`), so
-a resumed run skips completed work (`[skip] … already done`) and picks up where
-it left off. A config whose server fails to load is recorded as `tg=0` (loses
-ranking) and the sweep continues rather than aborting.
+Or use the Unsloth-provided imatrix (shipped with the source GGUF) instead of computing your own:
 
-**Resetting the resume state:** `python -m scripts.spec_sweep reset` deletes
-`state.json` and `results.csv`, so the next `run` starts the whole sweep over.
-It leaves `config/models.ini` untouched — use `restore` to revert the live
-config to the pre-sweep backup taken at the start of the first run.
-
-It edits the spec-decode / context params in `config/models.ini` in place
-(section-aware), force-recreates `llama-server`, and measures steady-state
-decode throughput. Staged-greedy stages: `spec-type` → `spec-draft-p-min` →
-`ngram-mod` params → `spec-draft-backend-sampling` → 160k validation →
-context/parallel (`single196` / `maxctx256` @ 262144 / `parallel2` @ 2×~102K).
-Results stream to `benchmark/results/spec-sweep/` (gitignored) and the winning
-config is left live in `config/models.ini`.
-
-See [docs/spec-decode-sweep.md](docs/spec-decode-sweep.md) for the full
-methodology, tracked metrics, resume/ETA behaviour, and reproducibility notes.
-
----
-
-## Docker Compose services
-
-| Service             | Purpose                                             |
-| ------------------- | --------------------------------------------------- |
-| `llama-server`      | llama.cpp inference server (port 8080)              |
-| `cloudflared`       | Cloudflare Tunnel — exposes llama-server and mcp-search-server publicly   |
-| `llama-convert`     | Model conversion tool (download, convert, quantize) |
-| `mcp-search-server` | MCP tool server: search, browser, documents, code (port 3100) |
+```bash
+# The downloaded imatrix_unsloth.dat is used automatically by quantize.sh.
+```
 
 ---
 
 ## Troubleshooting
 
-- **Model not loading:** Check `docker compose logs llama-server`. Common causes: model file missing (`LLAMA_MODEL` path mismatch), insufficient VRAM.
-- **MTP not working:** Confirm the GGUF was built with `--mtp`. Prebuilt GGUFs strip MTP heads. Verify `LLAMA_SPEC_TYPE=mtp` and `LLAMA_MODEL` point to the `-mtp.gguf` file.
-- **Slow generation (11 vs 20 tok/s):** Context may be filling up within a long conversation. MTP requires a `-mtp.gguf` file.
-- **Cloudflare Tunnel not connecting:** Verify `CF_TUNNEL_TOKEN` is correct. Check `docker compose logs cloudflared`.
-- **Cloudflare Access authentication failing:** Ensure the Access Application is configured for the correct domain and authentication method.
-- **GPU not detected:** Verify NVIDIA Container Toolkit is installed. Check `docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi`.
-- **WSL2 BSOD during download/quantize:** Set `CONVERT_DOWNLOAD_RATE=300M` and `CONVERT_THREADS=4` in `.env`.
+**Server won't start — model file not found:**
+Ensure the GGUF exists in the `qwen36-models` volume. Run `docker compose --profile prep run --rm model-prep` to produce it, or `docker compose --profile bringup run --rm model-bringup` for a quick pre-quantized version.
+
+**MTP not engaging:**
+The MTP tensors are baked into the GGUF. If using the Unsloth bring-up GGUF, the MTP tensors may be absent (known issue with that particular repo). Use your own quantized GGUF from the full pipeline.
+
+**Vision not working:**
+Ensure `ENABLE_VISION=1` and that `mmproj-BF16.gguf` exists in the `/models` volume. The mmproj is copied by the `model-prep` or `model-bringup` jobs automatically.
+
+**High VRAM usage:**
+Reduce `N_PARALLEL` to `1`, lower `CTX`, or use a smaller KV type (e.g., `q4_0` is the default). The production quant at ~16.8 GB + KV cache should fit in 24 GB VRAM at `CTX=262144`.
+
+**Build fails — CUDA arch mismatch:**
+Set `CUDA_ARCH` in `docker/.env` to match your GPU architecture (e.g., `89` for Ada Lovelace, `86` for Ampere/RTX 3090).
+
+---
+
+## Benchmark Results
+
+See [`docs/qwen36-bench-results.md`](docs/qwen36-bench-results.md) for full benchmark results and methodology. Key results from real hardware (RTX 3090):
+
+- Basic completion: PASS
+- Vision: PASS
+- MTP self-speculative decoding: PASS (high draft acceptance rates)
+- Prompt cache reuse: PASS (54x speedup on repeated prompts)
+- Long-context stability: PASS (262K context, 172K+ token prompts)
+

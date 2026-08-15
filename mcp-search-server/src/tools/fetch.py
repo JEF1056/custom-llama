@@ -3,13 +3,14 @@
 import logging
 from typing import Annotated
 
-from mcp.server import FastMCP
-from mcp.server.fastmcp import Context
+from fastmcp import FastMCP
+from fastmcp.server import Context
 from pydantic import Field
 
 from src.browser.automation import browser_manager
 from src.config import settings
 from src.extractor.content import ContentExtractor, TruncationMode
+from src.output.format import format_result
 from src.output_store import output_store
 
 logger = logging.getLogger(__name__)
@@ -42,10 +43,8 @@ def fetch_handler(server: FastMCP) -> None:
         sections: list of heading texts → extract only those sections (useful for long pages).
         code_block_max_chars: override per-code-block char limit.
 
-        Long pages return a condensed preview plus a `content_handle`; call
-        read_output(handle=content_handle) to read the full text in windows.
-        Returns: markdown — title, URL, the extracted content, and (when the page
-        was truncated) a footer with the read_output handle to fetch the rest.
+        Long pages return a condensed preview plus a read_output handle in the footer.
+        Returns: compact text — title with URL, extracted content, and pagination hint.
         """
         sid: str | None = None
         try:
@@ -76,17 +75,15 @@ def fetch_handler(server: FastMCP) -> None:
             )
 
             # Extract the full, untruncated text for paginated reads
-            full_extractor = ContentExtractor()
-            full_content = full_extractor.extract(html, truncate="never")
-            full_text = full_content["content"]
+            full_text = extractor.extract(html, truncate="never")["content"]
 
             # Filter to specific sections if requested
             if sections:
                 content["content"] = extractor._extract_sections(
                     content["content"], content["headings"], sections
                 )
-                full_text = full_extractor._extract_sections(
-                    full_text, full_content["headings"], sections
+                full_text = extractor._extract_sections(
+                    full_text, content["headings"], sections
                 )
 
             if ctx:
@@ -95,26 +92,21 @@ def fetch_handler(server: FastMCP) -> None:
             preview = content.get("content", "")
             total_chars = len(full_text)
 
-            heading = f"[{title}]({url})" if url else title
-            parts = [f"# {heading}", "", f"_Source: {url}_", "", preview]
-
             # If the inline preview is shorter than the full text, expose a handle
             # so the model can read the remainder via read_output.
             if len(preview) < total_chars:
                 handle = output_store.store(full_text, source=f"fetch: {url}")
-                parts.append("")
-                parts.append("---")
-                parts.append(
-                    f"_Preview shown ({len(preview)} of {total_chars} chars). "
-                    f'Call read_output(handle="{handle}", offset=0) to read the full page._'
+                return format_result(
+                    f"[{title}]({url})\n\n{preview}",
+                    footer=f"Preview: {len(preview)}/{total_chars} — read_output(handle=\"{handle}\", offset=0)",
                 )
 
             if ctx:
                 await ctx.report_progress(4, 4, "Done")
-            return "\n".join(parts).rstrip()
+            return f"[{title}]({url})\n\n{preview}"
         except Exception as e:
             logger.error("Fetch error: %s", str(e))
-            return f"**Error fetching URL:** {str(e)}"
+            return f"Error: {str(e)}"
         finally:
             if sid is not None:
                 await browser_manager.close_session(sid)

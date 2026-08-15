@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  ollam:
+    build: ./
+    container_name: ollam
+    restart: unless-stopped
+    ports:
+      - "4000:40114"  # API (OpenAI-compatible)
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    networks:
+      - router-net
+
+networks:
+  router-net:
+    driver: bridge

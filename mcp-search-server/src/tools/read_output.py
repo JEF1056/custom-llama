@@ -3,13 +3,14 @@
 import logging
 from typing import Annotated
 
-from mcp.server import FastMCP
-from mcp.server.fastmcp import Context
+from fastmcp import FastMCP
+from fastmcp.server import Context
 from pydantic import Field
 
 from src.config import settings
+from src.output.format import format_result, format_error
 from src.output_store import output_store
-from src.tools._report import error_report
+from src.tools._report import error_report as _legacy_error_report
 
 logger = logging.getLogger(__name__)
 
@@ -43,11 +44,8 @@ def read_output_handler(server: FastMCP) -> None:
         """Read more of a large output that another tool only previewed.
 
         When fetch / deep_search / code_run / take_snapshot / get_content preview
-        a big result, they add three sibling fields next to the previewed value,
-        e.g. for `content`: `content_handle`, `content_next_offset`, and
-        `content_hint` (the hint is a ready-to-run `read_output(...)` call you can
-        follow directly). Reading the full content is like reading a file by line
-        range.
+        a big result, they add pagination hints in the footer. Follow the
+        read_output(handle=..., offset=...) call in the footer to continue.
 
         handle: the `*_handle` value from the previewing tool's result.
         offset: starting character index — pass the `*_next_offset` from that
@@ -56,8 +54,7 @@ def read_output_handler(server: FastMCP) -> None:
         limit:  characters to return (defaults to config, ~16000).
         Keep calling with the returned `next_offset` until the footer says the end
         is reached. Handles expire after ~30 min; if expired, re-run the original tool.
-        Returns: markdown — the content window followed by a footer with the byte
-        range read, total size, and the next read_output call (or "end of output").
+        Returns: compact text — the content window with a range/footer.
         """
         if ctx:
             await ctx.report_progress(0, 1, f"Reading output {handle}\u2026")
@@ -70,7 +67,7 @@ def read_output_handler(server: FastMCP) -> None:
                 "Re-run the original tool (fetch/deep_search/code_run/take_snapshot/"
                 "get_content) to get a fresh handle."
             )
-            return error_report(msg, hint)
+            return format_error(msg, hint=hint)
 
         if ctx:
             await ctx.report_progress(1, 1, "Done")
@@ -83,16 +80,13 @@ def read_output_handler(server: FastMCP) -> None:
 
         if result.get("has_more"):
             next_offset = result.get("next_offset")
-            footer = (
-                f"_Read chars {start}–{end} of {total}. "
-                f'Continue: read_output(handle="{handle}", offset={next_offset})._'
-            )
+            footer = f"{start}-{end}/{total} — read_output(handle=\"{handle}\", offset={next_offset})"
         else:
-            footer = f"_Read chars {start}–{end} of {total}. End of output._"
+            footer = f"End: {start}-{end}/{total}"
 
         if _fences_as_text(result.get("source", "")):
             content = f"```text\n{content}\n```"
 
-        return f"{content}\n\n---\n{footer}"
+        return format_result(content, footer=footer)
 
     logger.info("Registered read_output tool")

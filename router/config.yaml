@@ -1,0 +1,77 @@
+server:
+  host: "0.0.0.0"
+  port: 40114
+  write_timeout: 0s
+
+proxy:
+  engine: "olla"
+  profile: "auto"
+  load_balancer: "least-connections"
+  response_timeout: 15m
+  read_timeout: 10m
+  sticky_sessions:
+    enabled: true
+    idle_ttl_seconds: 3600 # 1h sliding TTL; coding sessions have long think-time gaps
+    max_sessions: 10000
+    key_sources: # ONLY the explicit header; the automatic sources below
+      - "session_header" # would all collapse opencode sessions onto ONE backend
+      - "prefix_hash" # (identical system prompt / auth key / host IP), defeating
+      - "auth_header" # per-session distribution. The .opencode/plugins/olla-session.js
+      - "ip" # plugin sets a distinct X-Olla-Session-ID per session/subagent.
+
+discovery:
+  static:
+    endpoints:
+      - url: "http://100.118.67.28:8080"
+        name: "ml-1-wsl-cuda"
+        type: "llamacpp"
+        priority: 100
+        check_interval: 5s # Reduce for faster detection
+        check_timeout: 2s # Fail fast on timeouts
+
+      - url: "http://100.77.84.65:8080"
+        name: "ml-2-mlx"
+        type: "openai-compatible"
+        priority: 95
+        check_interval: 5s # Reduce for faster detection
+        check_timeout: 2s # Fail fast on timeouts
+
+      - url: "http://100.93.207.60:8080"
+        name: "ml-3-mlx"
+        type: "openai-compatible"
+        priority: 90
+        check_interval: 5s # Reduce for faster detection
+        check_timeout: 2s # Fail fast on timeouts
+
+      - url: "http://100.66.209.104:8080"
+        name: "ml-4-mlx"
+        type: "openai-compatible"
+        priority: 50
+        check_interval: 5s # Reduce for faster detection
+        check_timeout: 2s # Fail fast on timeouts
+
+model_registry:
+  type: "memory"
+  enable_unifier: true
+  routing_strategy:
+    type: "strict"
+    options:
+      fallback_behavior: "compatible_only"
+  unification:
+    enabled: true
+    stale_threshold: 24h
+    cleanup_interval: 10m
+
+model_aliases:
+  qwen3.6-35b:
+    - /models/qwen3.6-35b
+    - /Users/jfan/.qwen/models/qwen36-mlx
+
+translators:
+  anthropic:
+    enabled: true
+    passthrough_enabled: true
+
+logging:
+  level: "info"
+  format: "json"

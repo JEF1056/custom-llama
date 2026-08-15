@@ -1,35 +1,9 @@
-# Model files (large binary files)
-models/
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
+# Local env files hold secrets (HF_TOKEN, LITELLM_MASTER_KEY); never commit them.
 .env
-config/webui-config.json
-
-# Docker
-.docker/
-docker-compose.override.yml
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# IDE
-.opencode/*
-!.opencode/weave-opencode.json
-.weave/
-.vscode/
-.idea/
-plans
-.roo
-.roomodes
-opencode.json
+*.env
+!.env.example
 .agents/
 
-# Benchmark results (large JSONL files)
-benchmark/results/
-
-# Mcp files
-mcp-files/
+# Python bytecode
+__pycache__/
+*.pyc

@@ -1,0 +1,86 @@
+# CPU-only server for Qwen3.6-35B-A3B.
+#
+# Identical structure to Dockerfile (CUDA) but uses plain ubuntu:24.04 as
+# both build and runtime base — no NVIDIA toolkit, no CUDA compiler, no
+# ggml-cuda.  The binary links against BLAS/OpenMP for multi-threaded CPU
+# inference only; NGL must be 0 (the Compose services enforce this).
+#
+# Suitable for machines without a GPU or for running a fallback/development
+# server on any x86_64 host.  Pair with entrypoint.sh's FLASH_ATTN=off,
+# KV_HADAMARD=0, ENABLE_MTP=0 (all set in the Compose service).
+#
+# BUILD_MODE controls the ik_llama.cpp source:
+#   git   (default) - clones LLAMA_REPO at LLAMA_REF
+#   local           - copies from the "llama-src" named build context
+#                     (see docker-compose.yml additional_contexts)
+ARG BUILD_MODE=git
+
+# --- source: git -------------------------------------------------------------
+FROM alpine:3.20 AS source-git
+ARG LLAMA_REPO=https://github.com/ikawrakow/ik_llama.cpp.git
+ARG LLAMA_REF=main
+RUN apk add --no-cache git ca-certificates && \
+    git clone --depth 1 --branch "${LLAMA_REF}" "${LLAMA_REPO}" /src
+
+# --- source: local -----------------------------------------------------------
+FROM alpine:3.20 AS source-local
+COPY --from=llama-src . /src/
+
+# --- select source -----------------------------------------------------------
+FROM source-${BUILD_MODE} AS source
+
+# --- build stage -------------------------------------------------------------
+FROM ubuntu:24.04 AS build
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        cmake \
+        ninja-build \
+        build-essential \
+        libcurl4-openssl-dev \
+        libssl-dev \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY --from=source /src .
+
+# CPU-only build: GGML_CUDA=OFF, no CUDA architectures.
+# LLAMA_CURL+OPENSSL so the server can pull GGUFs via -hf at runtime.
+# Builds the same tool set as the CUDA image so the offline weights pipeline
+# (quantize.sh) can run here too (with NGL=0 for the imatrix CPU fallback).
+RUN cmake -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DGGML_CUDA=OFF \
+        -DLLAMA_CURL=ON \
+        -DLLAMA_OPENSSL=ON \
+        -DLLAMA_BUILD_SERVER=ON \
+    && cmake --build build --target llama-server llama-quantize llama-imatrix llama-gguf-split llama-bench -j
+
+# Collect all shared objects alongside the binaries (same as CUDA Dockerfile).
+RUN find build -name '*.so*' -exec cp -uP -t build/bin/ {} +
+
+# --- runtime stage -----------------------------------------------------------
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libcurl4 \
+        libgomp1 \
+        curl \
+        ca-certificates \
+        python3 \
+        python3-pip \
+    && pip3 install --no-cache-dir --break-system-packages 'huggingface_hub[cli]' \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /src/build/bin/ /opt/iqllama/bin/
+ENV PATH="/opt/iqllama/bin:${PATH}" \
+    LD_LIBRARY_PATH="/opt/iqllama/bin"
+
+WORKDIR /workspace
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

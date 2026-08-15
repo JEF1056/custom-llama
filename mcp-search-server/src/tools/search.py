@@ -3,8 +3,8 @@
 import logging
 from typing import Annotated
 
-from mcp.server import FastMCP
-from mcp.server.fastmcp import Context
+from fastmcp import FastMCP
+from fastmcp.server import Context
 from pydantic import Field
 
 from src.config import settings
@@ -29,7 +29,7 @@ def search_handler(server: FastMCP) -> None:
 
         max_results: defaults to config value (typically 10).
         Follow up with fetch(url) to get full content, or browser_screenshot(url) for a visual.
-        Returns: markdown — a numbered list of results (title, URL, snippet).
+        Returns: compact text — numbered list of results (title, URL, snippet).
         """
         if ctx:
             await ctx.report_progress(0, 2, f'Searching for "{query}"\u2026')
@@ -39,28 +39,23 @@ def search_handler(server: FastMCP) -> None:
         if not results:
             if ctx:
                 await ctx.report_progress(2, 2, "No results")
-            return f'# Search: "{query}"\n\n_No results from {settings.SEARCH_ENGINE}._'
+            return f'No results from {settings.SEARCH_ENGINE}.'
 
         if ctx:
             await ctx.report_progress(1, 2, f"Formatting {len(results)} result(s)\u2026")
-        lines = [
-            f'# Search: "{query}"',
-            "",
-            f"_{len(results)} result(s) from {settings.SEARCH_ENGINE}_",
-            "",
-        ]
+        lines = [f'Search: "{query}" — {len(results)} results']
         for i, r in enumerate(results, 1):
             title = r.get("title", "") or "(untitled)"
             url = r.get("url", "")
             snippet = r.get("snippet", "")
             heading = f"[{title}]({url})" if url else title
-            lines.append(f"{i}. **{heading}**")
             if snippet:
-                lines.append(f"   {snippet}")
-            lines.append("")
+                lines.append(f"{i}. {heading} — {snippet}")
+            else:
+                lines.append(f"{i}. {heading}")
 
         if ctx:
             await ctx.report_progress(2, 2, "Done")
-        return "\n".join(lines).rstrip()
+        return "\n".join(lines)
 
     logger.info("Registered search tool")

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent for the Qwen3.6-35B-A3B MLX VLM server.
+  Placeholders (__REPO__, __HOME__, __MLX_PORT__, __MODEL_PATH__) are filled in by install.sh.
+  RunAtLoad starts it at login; KeepAlive restarts it if it ever exits.
+  All server values are hardcoded in the scripts — no env vars needed at boot.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.custom-llama.qwen36-mlx</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__REPO__/mac/launch-mlx-server.sh</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Throttle restarts so a crash loop doesn't spin the CPU. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/qwen36-mlx.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/qwen36-mlx.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

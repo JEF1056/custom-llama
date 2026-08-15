@@ -13,16 +13,18 @@ import json
 import logging
 import re
 import time
+from functools import wraps
 from pathlib import Path
 from typing import Annotated
 
-from mcp.server import FastMCP
-from mcp.server.fastmcp import Context
+from fastmcp import FastMCP
+from fastmcp.server import Context
 from mcp.types import ImageContent, TextContent
 from pydantic import Field
 
 from src.browser.automation import get_browser_manager as _get_browser_manager
 from src.config import settings
+from src.output.format import format_result
 from src.output_store import output_store
 
 logger = logging.getLogger(__name__)
@@ -142,6 +144,47 @@ async def _interactables_summary(page) -> str:
     return "\n".join(lines)
 
 
+def _browser_tool(fn):
+    """Decorator for browser tools that share the same session/page lifecycle.
+
+    Handles:
+      - Scoping the session_id to the caller's namespace
+      - Ensuring a page is available via _ensure_page
+      - Reporting progress (0→1)
+      - Catching exceptions and returning formatted errors
+      - Closing the session if it was one-off
+    Subclasses supply the body via ``body(page, scoped_sid, ctx)``.
+    """
+    @wraps(fn)
+    async def wrapper(*args, **kwargs):
+        ctx = kwargs.get("ctx") or (args[2] if len(args) > 2 and hasattr(args[2], "report_progress") else None)
+        # Extract session_id from kwargs or positional args
+        session_id = kwargs.get("session_id")
+        if session_id is None and len(args) > 1:
+            session_id = args[1]
+
+        scoped_sid = _scope_id(ctx, session_id) if session_id else None
+        one_off = session_id is None
+
+        try:
+            if ctx:
+                await ctx.report_progress(0, 1, "Preparing page\u2026")
+            page, scoped_sid = await _ensure_page(scoped_sid)
+            result = await fn(page, scoped_sid, ctx, *args[3:], **{k: v for k, v in kwargs.items() if k != "ctx" and k != "session_id"})
+            if ctx:
+                await ctx.report_progress(1, 1, "Done")
+            return result
+        except Exception as e:
+            logger.error("%s error: %s", fn.__name__, str(e))
+            return f"Error: {str(e)}"
+        finally:
+            if one_off and page is not None:
+                with contextlib.suppress(Exception):
+                    await _get_browser_manager().close_session(scoped_sid)
+
+    return wrapper
+
+
 def browser_handler(server: FastMCP) -> None:
     """Register the consolidated browser automation tools."""
 
@@ -254,11 +297,17 @@ def browser_handler(server: FastMCP) -> None:
             if ctx:
                 await ctx.report_progress(1, 2, "Extracting page state\u2026")
             state = await mgr.get_page_state(page, max_length=8000)
-            result = {"status": "success", **state}
-            return json.dumps(result, indent=2, default=str)
+            snapshot = state.get("snapshot", "")
+            interactables_count = state.get("interactables_count", 0)
+            lines = [f"URL: {state.get('url', '')}", f"Title: {state.get('title', '')}"]
+            if snapshot:
+                lines.append(format_result(snapshot, footer=f"Interactables: {interactables_count} visible"))
+            else:
+                lines.append(f"Interactables: {interactables_count} visible")
+            return "\n".join(lines)
         except Exception as e:
             logger.error("navigate_page error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)})
+            return f"Error: {str(e)}"
         finally:
             if one_off and page is not None:
                 with contextlib.suppress(Exception):
@@ -301,13 +350,12 @@ def browser_handler(server: FastMCP) -> None:
             result_text = holder.get("snapshot", "")
             hint = holder.get("snapshot_hint")
 
-            result = {"status": "success", "snapshot": result_text}
             if hint:
-                result["snapshot_hint"] = hint
-            return json.dumps(result, indent=2, default=str)
+                return format_result(result_text, footer=hint)
+            return result_text
         except Exception as e:
             logger.error("take_snapshot error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)})
+            return f"Error: {str(e)}"
         finally:
             if one_off and page is not None:
                 with contextlib.suppress(Exception):
@@ -323,7 +371,7 @@ def browser_handler(server: FastMCP) -> None:
     ) -> str:
         """Get unified page state: URL, title, accessibility snapshot, interactables, scroll.
 
-        Returns a structured JSON object with current page state.
+        Returns compact text with URL, title, snapshot, and interactables info.
         """
         page = None
         scoped_sid = _scope_id(ctx, session_id) if session_id else None
@@ -336,11 +384,17 @@ def browser_handler(server: FastMCP) -> None:
             state = await mgr.get_page_state(page, max_length=8000)
             if ctx:
                 await ctx.report_progress(1, 2, "Done")
-            result = {"status": "success", **state}
-            return json.dumps(result, indent=2, default=str)
+            lines = [f"URL: {state.get('url', '')}", f"Title: {state.get('title', '')}"]
+            snapshot = state.get("snapshot", "")
+            interactables_count = state.get("interactables_count", 0)
+            if snapshot:
+                lines.append(format_result(snapshot, footer=f"Interactables: {interactables_count} visible"))
+            else:
+                lines.append(f"Interactables: {interactables_count} visible")
+            return "\n".join(lines)
         except Exception as e:
             logger.error("page_state error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)})
+            return f"Error: {str(e)}"
         finally:
             if one_off and page is not None:
                 with contextlib.suppress(Exception):
@@ -363,7 +417,7 @@ def browser_handler(server: FastMCP) -> None:
     ) -> str:
         """Click an element on the current page by CSS selector.
 
-        Returns updated page state (url, title, interactables count).
+        Returns compact text: selector, url, title, interactables count.
         """
         page = None
         scoped_sid = _scope_id(ctx, session_id) if session_id else None
@@ -378,20 +432,15 @@ def browser_handler(server: FastMCP) -> None:
             await mgr.click(page, selector)
             await page.wait_for_load_state("domcontentloaded", timeout=5000)
             interactables = await mgr.get_interactables(page)
-            result = {
-                "status": "success",
-                "action": "click",
-                "selector": selector,
-                "url": page.url,
-                "title": await page.title(),
-                "interactables_count": len(interactables),
-            }
             if ctx:
                 await ctx.report_progress(2, 3, "Done")
-            return json.dumps(result, indent=2)
+            return format_result(
+                f"Clicked: {selector}\nURL: {page.url} | Title: {await page.title()}",
+                footer=f"Interactables: {len(interactables)} visible",
+            )
         except Exception as e:
             logger.error("click error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)})
+            return f"Error: {str(e)}"
         finally:
             if one_off and page is not None:
                 with contextlib.suppress(Exception):
@@ -415,7 +464,7 @@ def browser_handler(server: FastMCP) -> None:
     ) -> str:
         """Fill an input field on the current page by CSS selector.
 
-        Returns updated page state (url, title).
+        Returns compact text: selector, value, url, title.
         """
         page = None
         scoped_sid = _scope_id(ctx, session_id) if session_id else None
@@ -428,20 +477,12 @@ def browser_handler(server: FastMCP) -> None:
             if ctx:
                 await ctx.report_progress(1, 3, f"Filling {selector}\u2026")
             await mgr.fill(page, selector, value)
-            result = {
-                "status": "success",
-                "action": "fill",
-                "selector": selector,
-                "value": value,
-                "url": page.url,
-                "title": await page.title(),
-            }
             if ctx:
                 await ctx.report_progress(2, 3, "Done")
-            return json.dumps(result, indent=2)
+            return f"Filled: {selector} = \"{value}\"\nURL: {page.url} | Title: {await page.title()}"
         except Exception as e:
             logger.error("fill error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)})
+            return f"Error: {str(e)}"
         finally:
             if one_off and page is not None:
                 with contextlib.suppress(Exception):
@@ -459,7 +500,10 @@ def browser_handler(server: FastMCP) -> None:
         ] = None,
         ctx: Context | None = None,
     ) -> str:
-        """Get the inner text of an element by CSS selector."""
+        """Get the inner text of an element by CSS selector.
+
+        Returns the raw text content directly.
+        """
         page = None
         scoped_sid = _scope_id(ctx, session_id) if session_id else None
         one_off = session_id is None
@@ -467,10 +511,10 @@ def browser_handler(server: FastMCP) -> None:
             page, scoped_sid = await _ensure_page(scoped_sid)
             mgr = _get_browser_manager()
             text = await mgr.get_text(page, selector)
-            return json.dumps({"status": "success", "text": text})
+            return text
         except Exception as e:
             logger.error("get_text error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)})
+            return f"Error: {str(e)}"
         finally:
             if one_off and page is not None:
                 with contextlib.suppress(Exception):
@@ -488,7 +532,10 @@ def browser_handler(server: FastMCP) -> None:
         ] = None,
         ctx: Context | None = None,
     ) -> str:
-        """Evaluate JavaScript on the current page."""
+        """Evaluate JavaScript on the current page.
+
+        Returns the result value, or compact JSON if the result is structured data.
+        """
         page = None
         scoped_sid = _scope_id(ctx, session_id) if session_id else None
         one_off = session_id is None
@@ -496,17 +543,13 @@ def browser_handler(server: FastMCP) -> None:
             page, scoped_sid = await _ensure_page(scoped_sid)
             mgr = _get_browser_manager()
             result = await mgr.evaluate(page, script)
-            try:
-                return json.dumps(
-                    {"status": "success", "result": result}, indent=2, default=str
-                )
-            except (TypeError, ValueError):
-                return json.dumps(
-                    {"status": "success", "result": str(result)}, indent=2
-                )
+            # If result is a dict or list, return compact JSON to preserve structure
+            if isinstance(result, (dict, list)):
+                return json.dumps(result, separators=(",", ":"), default=str)
+            return str(result)
         except Exception as e:
             logger.error("evaluate error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)})
+            return f"Error: {str(e)}"
         finally:
             if one_off and page is not None:
                 with contextlib.suppress(Exception):
@@ -522,8 +565,7 @@ def browser_handler(server: FastMCP) -> None:
     ) -> str:
         """Get all clickable and fillable elements on the current page.
 
-        Returns a structured list of elements with index, tag, type, text,
-        name, id, placeholder, selector, and visible state.
+        Returns a compact list: "[index] type tag: label -> selector" per line.
         """
         page = None
         scoped_sid = _scope_id(ctx, session_id) if session_id else None
@@ -532,10 +574,16 @@ def browser_handler(server: FastMCP) -> None:
             page, scoped_sid = await _ensure_page(scoped_sid)
             mgr = _get_browser_manager()
             elements = await mgr.get_interactables(page)
-            return json.dumps({"status": "success", "elements": elements}, indent=2)
+            visible = [e for e in elements if e.get("visible")]
+            if not visible:
+                return "No interactable elements found."
+            lines = [f"{e['index']} {e.get('type', '')} {e.get('tag', '')}: {next((p for p in (e.get('text', ''), e.get('name', ''), e.get('placeholder', '')) if p), '')[:60]} -> {e.get('selector', '')}" for e in visible[:50]]
+            if len(visible) > 50:
+                lines.append(f"... and {len(visible) - 50} more")
+            return "\n".join(lines)
         except Exception as e:
             logger.error("get_interactables error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)})
+            return f"Error: {str(e)}"
         finally:
             if one_off and page is not None:
                 with contextlib.suppress(Exception):
@@ -565,13 +613,12 @@ def browser_handler(server: FastMCP) -> None:
             output_store.attach(holder, "content", content, source="browser_get_content")
             result_text = holder.get("content", "")
             hint = holder.get("content_hint")
-            result = {"status": "success", "content": result_text}
             if hint:
-                result["content_hint"] = hint
-            return json.dumps(result, indent=2)
+                return format_result(result_text, footer=hint)
+            return result_text
         except Exception as e:
             logger.error("get_content error: %s", str(e))
-            return json.dumps({"status": "error", "error": str(e)})
+            return f"Error: {str(e)}"
         finally:
             if one_off and page is not None:
                 with contextlib.suppress(Exception):
