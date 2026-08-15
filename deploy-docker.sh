@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 MODEL_ALIAS="qwen3.8-27b-heretic-ara"
-QUANT="IQ4_KSS"
+QUANT="IQ4_XS"
 
 stop_and_clean() {
     echo "=== Stopping Docker services and cleaning up ==="
