@@ -1,21 +1,4 @@
 # =============================================================================
-# Stage 0: UI Builder (Node 20)
-# Builds the SvelteKit frontend so the CUDA builder can embed it via cmake.
-# Runs in parallel with the CUDA compile — no GPU or CUDA deps needed here.
-# =============================================================================
-FROM node:20-slim AS ui-builder
-
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && \
-  rm -rf /var/lib/apt/lists/*
-
-RUN git clone --depth 1 --branch llama-next \
-  https://github.com/JEF1056/llama-cpp-turboquant.git /llama.cpp
-
-WORKDIR /llama.cpp/tools/ui
-
-RUN npm install && npm run build
-
-# =============================================================================
 # Stage 1: Builder (CUDA)
 # =============================================================================
 FROM nvidia/cuda:12.9.0-devel-ubuntu24.04 AS builder
@@ -41,14 +24,7 @@ RUN rm -rf /var/lib/apt/lists/* && \
   pkg-config && \
   rm -rf /var/lib/apt/lists/*
 
-RUN git clone --depth 1 --branch llama-next --recursive \
-  https://github.com/JEF1056/llama-cpp-turboquant.git /llama.cpp
-
-# Pre-populate the UI dist so cmake's local-build check succeeds and skips
-# the HuggingFace download entirely. The new ui-assets.cmake treats
-# tools/ui/dist as "pre-built assets" (Priority 1) and embeds them directly,
-# avoiding any npm build or HF download in the CUDA builder stage.
-COPY --from=ui-builder /llama.cpp/tools/ui/dist/ /llama.cpp/tools/ui/dist/
+RUN git clone --depth 1 https://github.com/JEF1056/ik_llama.cpp.git /llama.cpp
 
 WORKDIR /llama.cpp
 
