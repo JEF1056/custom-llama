@@ -1,16 +1,16 @@
-# CUDA server for Qwen3.6-35B-A3B on an RTX 3090, built from stock
-# ikawrakow/ik_llama.cpp (no forks/patches — see docs/iqllama-migration-plan.md).
+# CUDA server for Qwen3.8-27B-heretic-ara (dense) on an RTX 3090, built from
+# stock ikawrakow/ik_llama.cpp (no forks/patches — see docs/iqllama-migration-plan.md).
 #
 # Multi-stage: a devel image compiles llama-server/llama-quantize/llama-imatrix
 # for Ampere (sm_86); a slim runtime image ships only the server binary + libs.
 #
 # ik_llama.cpp natively supports (verified against source, see the migration
-# plan's "Verified findings"): the qwen35moe/qwen3next hybrid (DeltaNet + full
-# attention + MoE) architecture, Hadamard-rotated 4-bit KV cache on the
+# plan's "Verified findings"): the qwen3_5 hybrid (DeltaNet + full
+# attention, dense) architecture, Hadamard-rotated 4-bit KV cache on the
 # attention layers (-khad/-vhad), MTP self-speculative decoding
 # (--spec-type mtp:...), and Qwen3-VL-family vision (mmproj). The GGUF weights
 # themselves are produced OFFLINE by scripts/ (Phase 2 of the migration plan,
-# from Unsloth's pre-converted BF16 GGUF) and mounted in via the /models
+# converting safetensors to BF16 GGUF) and mounted in via the /models
 # volume — this image only builds and runs the engine.
 #
 # BUILD_MODE controls where the ik_llama.cpp source comes from:

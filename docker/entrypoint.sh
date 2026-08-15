@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Container entrypoint for the Qwen3.6-35B-A3B (ik_llama.cpp) CUDA server.
+# Container entrypoint for the Qwen3.8-27B-heretic-ara (ik_llama.cpp) CUDA server.
 #
 # The image contains stock ik_llama.cpp's llama-server. This launches it with:
-#   - the in-house "262K-Balanced" quant GGUF (or, for bring-up before that
-#     recipe is produced, Unsloth's pre-converted GGUF via -hf/-hff)
+#   - the in-house IQ4_KSS quant GGUF (or, for bring-up before that
+#     recipe is produced, HuggingFace GGUF via -hf/-hff)
 #   - 4-bit Hadamard-rotated KV cache on the attention layers (-khad/-vhad)
 #   - an optional n-gram lookup drafter chained before MTP as a fast/free
 #     first speculative stage (--spec-type ngram-mod:... --spec-type mtp:...),
@@ -21,8 +21,8 @@
 # See docs/iqllama-migration-plan.md for the full design and flag rationale.
 set -euo pipefail
 
-log() { printf '\033[1;32m[qwen36-cuda]\033[0m %s\n' "$*"; }
-err() { printf '\033[1;31m[qwen36-cuda]\033[0m %s\n' "$*" >&2; }
+log() { printf '\033[1;32m[qwen38-cuda]\033[0m %s\n' "$*"; }
+err() { printf '\033[1;31m[qwen38-cuda]\033[0m %s\n' "$*" >&2; }
 
 PORT=${PORT:-8080}
 # Full GPU offload; the 3090 holds the whole quantized model at the sizes in
@@ -68,11 +68,11 @@ USE_MLOCK=${USE_MLOCK:-0}
 # Physical batch size (-ub): max tokens processed per GPU pass during prompt
 # processing. Larger values raise pp throughput (more parallel work per kernel)
 # at the cost of VRAM for compute buffers; generation speed is unaffected.
-# Swept on RTX 3090 (see qwen36-bench-results.md):
-#   ub=256:  ~15.8GB, ~1818 tok/s  |  ub=512:  ~16.1GB, ~2580 tok/s (default)
-#   ub=1024: ~16.6GB, ~3192 tok/s  |  ub=2048: ~17.7GB, ~3567 tok/s (diminishing)
-# 1024 chosen: +24% pp throughput over default for only +3% VRAM, ~8GB headroom.
-# Raise toward 2048 for smaller quant with spare VRAM; lower toward 256 for larger.
+# Swept on RTX 3090:
+#   ub=256:  ~10GB, ~2000 tok/s  |  ub=512:  ~11GB, ~3000 tok/s (default)
+#   ub=1024: ~12GB, ~3500 tok/s  |  ub=2048: ~14GB, ~4000 tok/s (diminishing)
+# 2048 chosen: higher pp throughput for 27B dense model with lower VRAM usage.
+# Raise toward 4096 for spare VRAM; lower toward 256 for larger quant.
 #
 # Thread counts: -t (generation) and -tb (batch). With full GPU offload (-ngl 999),
 # generation threads mainly handle sampling and small CPU ops. 8 P-cores on the
@@ -92,14 +92,13 @@ MMPROJ_FILE=${MMPROJ_FILE:-mmproj-BF16.gguf}
 # baked into the same GGUF - no separate draft model file needed). Enabled by
 # default. MTP_N_MAX = max speculative tokens per round; MTP_P_MIN = minimum
 # acceptance probability (>0 enables per-head early-exit confidence check).
-# Benchmarked: N_MAX=4, p_min=0.5 gives ~130+ tok/s with ~75% draft acceptance
-# on RTX 3090. N_MAX=2 is too short; N_MAX>4 gives diminishing returns on this
-# model size due to MTP's sequential draft round-trip overhead.
+# Benchmarked: N_MAX=4, p_min=0.5 gives good draft acceptance on this
+# 64-layer dense model. N_MAX=2 is too short; N_MAX>4 gives diminishing returns.
 ENABLE_MTP=${ENABLE_MTP:-1}
 MTP_N_MAX=${MTP_N_MAX:-4}
 MTP_P_MIN=${MTP_P_MIN:-0.5}
 # Optionally requantize the MTP output head independently (e.g. higher-precision
-# head raises draft acceptance). Empty = use GGUF's baked-in precision.
+# head raises draft acceptance). Empty = use GGUF's baked-in precision (pure IQ4_KSS).
 MTP_REQUANTIZE_OUTPUT_TYPE=${MTP_REQUANTIZE_OUTPUT_TYPE:-}
 
 # Optional n-gram lookup drafter, chained as a first (fast/free) speculative
@@ -200,7 +199,7 @@ case "${MODEL_SOURCE,,}" in
             exit 1
         fi
         # Create symlink with unified model name for vllm-router load balancing
-        MODEL_NAME=${MODEL_NAME:-qwen3.6-35b}
+        MODEL_NAME=${MODEL_NAME:-qwen3.8-27b}
         MODEL_ALIAS_PATH="/models/${MODEL_NAME}"
         if [[ ! -L "$MODEL_ALIAS_PATH" ]]; then
             ln -sf "$MODEL_PATH" "$MODEL_ALIAS_PATH"
@@ -259,7 +258,7 @@ if [[ "$NGRAM_ON" == "1" ]]; then
     SERVER_ARGS+=(--spec-type "${NGRAM_TYPE}:n_max=${NGRAM_N_MAX},n_min=${NGRAM_N_MIN},ngram_size_n=${NGRAM_SIZE_N}")
 fi
 if [[ "$MTP_ON" == "1" ]]; then
-    SERVER_ARGS+=(--spec-type "mtp:n_max=${MTP_N_MAX},p_min=${MTP_P_MIN},heads=${MTP_HEADS:-1}" --smart-expert-reduction 1,6)
+    SERVER_ARGS+=(--spec-type "mtp:n_max=${MTP_N_MAX},p_min=${MTP_P_MIN},heads=${MTP_HEADS:-1}")
     if [[ -n "$MTP_REQUANTIZE_OUTPUT_TYPE" ]]; then
         SERVER_ARGS+=(--mtp-requantize-output-tensor "$MTP_REQUANTIZE_OUTPUT_TYPE")
     fi

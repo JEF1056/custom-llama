@@ -22,7 +22,7 @@
 # with no rebuild. Only Dockerfile, build-arg, or fork-checkout changes require
 # `--build`.
 #
-# Weights live in the qwen36-models NAMED VOLUME, not in the image, so they
+# Weights live in the qwen38-models NAMED VOLUME, not in the image, so they
 # survive `docker compose up -d --force-recreate` / image rebuilds (only
 # `docker compose down -v` or `docker volume rm` clears them).
 #
@@ -42,17 +42,17 @@ services:
         CUDA_VERSION: ${CUDA_VERSION:-13.3.0}
       additional_contexts:
         llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
-    image: custom-llama/qwen36-cuda:${BUILD_MODE:-git}
+    image: custom-llama/qwen38-cuda:${BUILD_MODE:-git}
     container_name: server
     env_file: .env
     environment:
       LLAMA_CACHE: /models
-      MODEL_NAME: qwen3.6-35b
+      MODEL_NAME: qwen3.8-27b
     ports:
       - "${LLAMA_PORT:-8080}:8080"
     volumes:
-      - qwen36-models:/models
-      - qwen36-data:/workspace
+      - qwen38-models:/models
+      - qwen38-data:/workspace
       - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
     networks:
       - qwen-net
@@ -86,7 +86,7 @@ services:
         LLAMA_REF: ${LLAMA_REF:-ngram-mtp-vision-chain}
       additional_contexts:
         llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
-    image: custom-llama/qwen36-cpu:${BUILD_MODE:-git}
+    image: custom-llama/qwen38-cpu:${BUILD_MODE:-git}
     container_name: server-cpu
     profiles: ["cpu"]
     env_file: .env
@@ -99,8 +99,8 @@ services:
     ports:
       - "${CPU_PORT:-8083}:8080"
     volumes:
-      - qwen36-models:/models
-      - qwen36-data:/workspace
+      - qwen38-models:/models
+      - qwen38-data:/workspace
       - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
     ulimits:
       memlock:
@@ -114,8 +114,8 @@ services:
       start_period: 300s
     restart: unless-stopped
 
-  # One-shot: full Phase 2 pipeline (BF16 download -> imatrix -> quantize).
-  # Needs GPU for the imatrix pass. Writes into qwen36-models.
+  # One-shot: full Phase 2 pipeline (safetensors download -> BF16 convert -> quantize).
+  # Needs GPU for the imatrix pass. Writes into qwen38-models.
   #   docker compose --profile prep run --rm model-prep
   model-prep:
     build:
@@ -128,13 +128,13 @@ services:
         CUDA_ARCH: ${CUDA_ARCH:-86}
       additional_contexts:
         llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
-    image: custom-llama/qwen36-cuda:${BUILD_MODE:-git}
+    image: custom-llama/qwen38-cuda:${BUILD_MODE:-git}
     container_name: model-prep
     profiles: ["prep"]
     entrypoint: ["/bin/bash", "/scripts/prepare-weights.sh"]
     env_file: .env
     volumes:
-      - qwen36-models:/models
+      - qwen38-models:/models
       - ../scripts:/scripts:ro
     deploy:
       resources:
@@ -157,14 +157,14 @@ services:
         LLAMA_REF: ${LLAMA_REF:-ngram-mtp-vision-chain}
       additional_contexts:
         llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
-    image: custom-llama/qwen36-cpu:${BUILD_MODE:-git}
+    image: custom-llama/qwen38-cpu:${BUILD_MODE:-git}
     container_name: model-prep-cpu
     profiles: ["prep-cpu"]
     entrypoint: ["/bin/bash", "/scripts/prepare-weights.sh"]
     environment:
       NGL: "0"
     volumes:
-      - qwen36-models:/models
+      - qwen38-models:/models
       - ../scripts:/scripts:ro
     restart: "no"
 
@@ -173,5 +173,5 @@ networks:
     driver: bridge
 
 volumes:
-  qwen36-data:
-  qwen36-models:
+  qwen38-data:
+  qwen38-models:
