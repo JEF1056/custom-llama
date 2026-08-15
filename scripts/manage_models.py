@@ -124,11 +124,12 @@ MODELS = {
         "mmproj": "mmproj-F32.gguf",
     },
     "qwen3.8-27b-heretic-ara": {
-        "hf_repo": "mradermacher/Qwen3.8-27B-heretic-ara-i1-GGUF",
-        "fp16_repo": "heretic-org/Qwen3.8-27B-heretic-ara",
+        "hf_repo": "mradermacher/Qwen3.8-27B-heretic-ara-GGUF",
+        "imatrix_repo": "mradermacher/Qwen3.8-27B-heretic-ara-i1-GGUF",
+        "imatrix_file": "Qwen3.8-27B-heretic-ara.imatrix.gguf",
         "description": "Qwen 3.8 27B Heretic Ara (~14GB)",
         "size_gb": 14,
-        "default_quant": "IQ4_XS",
+        "default_quant": "IQ4_KSS",
     },
     "qwopus3.6-27b": {
         "hf_repo": "Jackrong/Qwopus3.6-27B-v2-GGUF",
@@ -668,7 +669,7 @@ def _resolve_nthreads(nthreads: int | None) -> int:
     return max(1, cpu_count // 2)
 
 
-def _quantize(source: Path, dest: Path, quant: str, nthreads: int | None = None) -> None:
+def _quantize(source: Path, dest: Path, quant: str, nthreads: int | None = None, imatrix: Path | None = None) -> None:
     """Run llama-quantize to produce dest from source with the given quant type.
 
     Streams llama-quantize output directly to the console and exits on failure.
@@ -680,19 +681,27 @@ def _quantize(source: Path, dest: Path, quant: str, nthreads: int | None = None)
         nthreads: Number of CPU threads to use. Falls back to CONVERT_THREADS env
             var, then cpu_count//2. Limiting threads prevents CLOCK_WATCHDOG_TIMEOUT
             BSODs on Windows when Docker saturates all host CPU cores.
+        imatrix: Optional path to an importance matrix (.imatrix.gguf) file.
     """
     threads = _resolve_nthreads(nthreads)
     source_size = _fmt_bytes(source.stat().st_size) if source.exists() else "unknown"
     _section(f"Quantizing to {quant}")
     print(f"  Source  : {source.name} ({source_size})")
     print(f"  Output  : {dest.name}")
+    if imatrix:
+        print(f"  Imatrix : {imatrix.name}")
     print(f"  Threads : {threads}")
 
     t0 = time.monotonic()
     try:
+        cmd = ["llama-quantize"]
+        if imatrix and imatrix.exists():
+            cmd.extend(["--imatrix", str(imatrix)])
+        cmd.extend([str(source), str(dest), quant, str(threads)])
+
         with _keepalive(30, "quantize"):
             result = subprocess.run(
-                ["llama-quantize", str(source), str(dest), quant, str(threads)],
+                cmd,
                 stdout=None,
                 stderr=None,
             )
@@ -991,9 +1000,20 @@ def download_model(model_name: str, quant: str, output_dir: str, nthreads: int |
 
     print(f"  Best available source: {Path(source_file).name}")
 
+    imatrix_path = None
+    if "imatrix_repo" in model_info and "imatrix_file" in model_info:
+        imatrix_repo = model_info["imatrix_repo"]
+        imatrix_file = model_info["imatrix_file"]
+        print(f"  Downloading imatrix: {imatrix_file} from {imatrix_repo}...")
+        imatrix_path = _hf_download_file(imatrix_repo, imatrix_file, str(output_path))
+
     actual_source = _hf_download_file(hf_repo, source_file, str(output_path))
 
-    _quantize(actual_source, canonical, quant, nthreads=nthreads)
+    _quantize(actual_source, canonical, quant, nthreads=nthreads, imatrix=imatrix_path)
+
+    if imatrix_path and imatrix_path.exists() and not keep_intermediate:
+        print(f"\n  Removing imatrix     : {imatrix_path.name}")
+        imatrix_path.unlink(missing_ok=True)
 
     if keep_intermediate:
         print(f"\n  Keeping source GGUF  : {actual_source.name}")
