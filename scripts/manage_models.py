@@ -123,6 +123,13 @@ MODELS = {
         "size_gb": 17,
         "mmproj": "mmproj-F32.gguf",
     },
+    "qwen3.8-27b-heretic-ara": {
+        "hf_repo": "mradermacher/Qwen3.8-27B-heretic-ara-i1-GGUF",
+        "fp16_repo": "heretic-org/Qwen3.8-27B-heretic-ara",
+        "description": "Qwen 3.8 27B Heretic Ara (~14GB)",
+        "size_gb": 14,
+        "default_quant": "IQ4_XS",
+    },
     "qwopus3.6-27b": {
         "hf_repo": "Jackrong/Qwopus3.6-27B-v2-GGUF",
         "fp16_repo": "Jackrong/Qwopus3.6-27B-v2",
@@ -200,6 +207,7 @@ QUANT_PRIORITY = [
     "Q4_K_M",
     "Q4_K_S",
     "IQ4_NL",
+    "IQ4_KSS",
     "Q3_K_L",
     "Q3_K_M",
     "Q3_K_S",

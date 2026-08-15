@@ -198,7 +198,7 @@ RUN rm -rf /var/lib/apt/lists/* && \
 # --no-compile: skip .pyc bytecode generation (~200MB saved for torch alone).
 RUN --mount=type=cache,target=/root/.cache/uv \
   uv pip install --system --break-system-packages --no-compile \
-  torch --index-url https://download.pytorch.org/whl/cu128
+  torch --index-url https://download.pytorch.org/whl/cpu
 
 RUN --mount=type=cache,target=/root/.cache/uv \
   uv pip install --system --break-system-packages --no-compile \
@@ -219,8 +219,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # Copied last so edits to these scripts never bust any pip cache layer.
 COPY scripts/manage_models.py /scripts/manage_models.py
-COPY scripts/triattention_calibrate.py /scripts/triattention_calibrate.py
-COPY scripts/triattention_common.py /scripts/triattention_common.py
 
 # Enable hf_transfer: Rust-based parallel downloader that ships with
 # huggingface_hub.  Provides multi-connection HTTP range downloads for
