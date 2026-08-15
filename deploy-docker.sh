@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 MODEL_ALIAS="qwen3.8-27b-heretic-ara"
-QUANT="IQ4_KSS"
+QUANT="IQ4_XS"
 
 stop_and_clean() {
     echo "=== Stopping Docker services and cleaning up ==="
@@ -36,17 +36,12 @@ uninstall_all() {
 
 install_and_start() {
     echo "=== Deploying custom-llama with $MODEL_ALIAS ($QUANT) ==="
-    python3 sync-env.py
 
     echo "Building Docker images..."
     docker compose build llama-convert llama-server
 
-    echo "Preparing/converting model $MODEL_ALIAS ($QUANT)..."
-    docker compose run --rm llama-convert convert-st "$MODEL_ALIAS" --quant "$QUANT" || \
+    echo "Downloading model $MODEL_ALIAS ($QUANT)..."
     docker compose run --rm llama-convert download "$MODEL_ALIAS" --quant "$QUANT"
-
-    echo "Updating environment sync..."
-    python3 sync-env.py
 
     echo "Starting llama-server container..."
     docker compose up -d llama-server
