@@ -42,17 +42,17 @@ services:
         CUDA_VERSION: ${CUDA_VERSION:-13.3.0}
       additional_contexts:
         llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
-    image: custom-llama/qwen36-cuda:${BUILD_MODE:-git}
-    container_name: server
+    image: custom-llama/qwen38-cuda:${BUILD_MODE:-git}
+    container_name: llama-server
     env_file: .env
     environment:
       LLAMA_CACHE: /models
-      MODEL_NAME: qwen3.6-35b
+      MODEL_NAME: qwen3.8-27b
     ports:
       - "${LLAMA_PORT:-8080}:8080"
     volumes:
-      - qwen36-models:/models
-      - qwen36-data:/workspace
+      - qwen38-models:/models
+      - qwen38-data:/workspace
       - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
     networks:
       - qwen-net
@@ -128,13 +128,13 @@ services:
         CUDA_ARCH: ${CUDA_ARCH:-86}
       additional_contexts:
         llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
-    image: custom-llama/qwen36-cuda:${BUILD_MODE:-git}
+    image: custom-llama/qwen38-cuda:${BUILD_MODE:-git}
     container_name: model-prep
     profiles: ["prep"]
     entrypoint: ["/bin/bash", "/scripts/prepare-weights.sh"]
     env_file: .env
     volumes:
-      - qwen36-models:/models
+      - qwen38-models:/models
       - ../scripts:/scripts:ro
     deploy:
       resources:
@@ -145,33 +145,10 @@ services:
               capabilities: [gpu]
     restart: "no"
 
-  # One-shot: same pipeline as model-prep but running entirely on CPU.
-  #   docker compose --profile prep-cpu run --rm model-prep-cpu
-  model-prep-cpu:
-    build:
-      context: .
-      dockerfile: Dockerfile.cpu
-      args:
-        BUILD_MODE: ${BUILD_MODE:-git}
-        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/JEF1056/ik_llama.cpp.git}
-        LLAMA_REF: ${LLAMA_REF:-ngram-mtp-vision-chain}
-      additional_contexts:
-        llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
-    image: custom-llama/qwen36-cpu:${BUILD_MODE:-git}
-    container_name: model-prep-cpu
-    profiles: ["prep-cpu"]
-    entrypoint: ["/bin/bash", "/scripts/prepare-weights.sh"]
-    environment:
-      NGL: "0"
-    volumes:
-      - qwen36-models:/models
-      - ../scripts:/scripts:ro
-    restart: "no"
-
 networks:
   qwen-net:
     driver: bridge
 
 volumes:
-  qwen36-data:
-  qwen36-models:
+  qwen38-data:
+  qwen38-models:

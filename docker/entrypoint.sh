@@ -75,7 +75,7 @@ THREADS_BATCH=${THREADS_BATCH:-4}
 # Vision (multimodal). Qwen3.6-35B-A3B ships a Qwen3-VL-lineage vision tower as
 # a separate mmproj GGUF (ik_llama's examples/mtmd/clip.cpp has a full
 # PROJECTOR_TYPE_QWEN3VL implementation). Enabled by default; set 0 for text-only.
-ENABLE_VISION=${ENABLE_VISION:-1}
+ENABLE_VISION=${ENABLE_VISION:-0}
 MMPROJ_FILE=${MMPROJ_FILE:-mmproj-BF16.gguf}
 
 # MTP self-speculative decoding (DeepSeek-V3-style single trailing MTP layer,
@@ -89,20 +89,12 @@ MTP_P_MIN=${MTP_P_MIN:-0.0}
 # head raises draft acceptance). Empty = use GGUF's baked-in precision.
 MTP_REQUANTIZE_OUTPUT_TYPE=${MTP_REQUANTIZE_OUTPUT_TYPE:-}
 
-# Optional n-gram lookup drafter, chained as a first (fast/free) speculative
-# stage ahead of MTP (`--spec-type ngram-mod:... --spec-type mtp:...`). Costs no
-# extra model inference - just string matching against context - so it's a pure
-# win on repeated/templated spans (long docs, code, boilerplate), leaving MTP
-# for harder/novel spans.
-#
-# ROOT CAUSE: when `mmproj` is loaded, `server-context.cpp` whitelists ONLY
-# zero stages or exactly one MTP stage. A two-stage chain fails that check,
-# and the `else` branch clears ALL stages (`stages.clear(); has_mtp=false;`),
-# disabling MTP too. This is a deliberate upstream restriction (mtmd/vision
-# only wired for single-stage MTP). Default OFF (ENABLE_NGRAM=0) so vision+MTP
-# works. Only enable on text-only (ENABLE_VISION=0) - note that path has its
-# own bug (`--no-mmproj` unrecognized) in this build.
-ENABLE_NGRAM=${ENABLE_NGRAM:-1}
+# Optional n-gram lookup drafter: in ik_llama.cpp, mtmd/vision only supports single-stage MTP
+if [[ "$ENABLE_VISION" == "1" ]]; then
+    ENABLE_NGRAM=0
+else
+    ENABLE_NGRAM=${ENABLE_NGRAM:-1}
+fi
 NGRAM_TYPE=${NGRAM_TYPE:-ngram-mod}
 NGRAM_N_MAX=${NGRAM_N_MAX:-16}
 NGRAM_N_MIN=${NGRAM_N_MIN:-2}
@@ -124,19 +116,11 @@ REASONING_BUDGET=${REASONING_BUDGET:-4096}
 PRESERVE_THINKING=${PRESERVE_THINKING:-1}
 
 # --- Weights -----------------------------------------------------------------
-# MODEL_SOURCE controls how the model is sourced:
-#   local (default) - our in-house "262K-Balanced" GGUF (Phase 2/4), produced by
-#                      scripts/quantize.sh, mounted read-only under /models.
-#   hf              - pull a public GGUF from Hugging Face via -hf/-hff (e.g.
-#                      llmfan46's abliterated Qwen3.6 quant) for bring-up/smoke-tests.
 MODEL_SOURCE=${MODEL_SOURCE:-local}
-GGUF_FILE=${GGUF_FILE:-qwen36-262k-balanced.gguf}
-HF_REPO=${HF_REPO:-llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF}
+GGUF_FILE=${GGUF_FILE:-qwen38-27b-heretic-ara-iq4_kss.gguf}
+HF_REPO=${HF_REPO:-trohrbaugh/Qwen3.8-27B-heretic-ara}
 HF_FILE=${HF_FILE:-}
 export HF_TOKEN=${QWEN_TOKEN:-${HF_TOKEN:-}}
-# Persist downloaded weights so restarts never re-download. Under docker compose
-# this is set to the dedicated /models cache volume; the /workspace fallback
-# keeps standalone `docker run` invocations persistent too.
 export LLAMA_CACHE=${LLAMA_CACHE:-/workspace/models}
 mkdir -p "$LLAMA_CACHE"
 
@@ -227,8 +211,6 @@ if [[ "$VISION_ON" == "1" ]]; then
         fi
         SERVER_ARGS+=(--mmproj "$MMPROJ_PATH")
     fi
-else
-    SERVER_ARGS+=(--no-mmproj)
 fi
 # MTP self-speculative decoding: no separate draft file - the trailing MTP
 # layer(s) are baked into the same GGUF. If the n-gram drafter is also
