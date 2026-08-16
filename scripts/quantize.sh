@@ -56,45 +56,45 @@
 # BASE_TYPE (iq4_kss).
 set -euo pipefail
 
-SRC_DIR=${SRC_DIR:-/models/qwen36-src}
-BF16_GGUF=${BF16_GGUF:-$SRC_DIR/qwen36-bf16.gguf}
-IMATRIX=${IMATRIX:-$SRC_DIR/imatrix_unsloth.dat}
-OUT_GGUF=${OUT_GGUF:-/models/qwen36-262k-balanced.gguf}
+SRC_DIR=${SRC_DIR:-/models/qwen38-src}
+SRC_GGUF=${SRC_GGUF:-$SRC_DIR/Qwen3.8-27B-heretic-ara.Q8_0.gguf}
+IMATRIX=${IMATRIX:-$SRC_DIR/Qwen3.8-27B-heretic-ara.imatrix.dat}
+OUT_GGUF=${OUT_GGUF:-/models/qwen38-27b-heretic-ara-iq4_kss.gguf}
 LLAMA_BIN_DIR=${LLAMA_BIN_DIR:-/opt/iqllama/bin}
-# Base/default type for any tensor not matched by a more specific rule below.
-BASE_TYPE=${BASE_TYPE:-iq4_kss}
-# Layer ranges (0-indexed, 40 total layers): edge = most sensitive, kept a tier
-# higher; middle = sparse bulk, the main quality/size trade-off.
-EDGE_RANGE=${EDGE_RANGE:-'([0-4]|3[5-9])'}
-MIDDLE_RANGE=${MIDDLE_RANGE:-'([5-9]|[12][0-9]|3[0-4])'}
+QUANT_TYPE=${QUANT_TYPE:-iq4_kss}
 
-if [[ ! -f "$BF16_GGUF" ]]; then
-    echo "[quantize] ERROR: $BF16_GGUF not found; run download-source-gguf.sh first." >&2
-    exit 1
+if [[ ! -f "$SRC_GGUF" ]]; then
+    # Check alternate filenames
+    if [[ -f "$SRC_DIR/qwen38-bf16.gguf" ]]; then
+        SRC_GGUF="$SRC_DIR/qwen38-bf16.gguf"
+    elif [[ -f "/models/Qwen3.8-27B-heretic-ara.Q8_0.gguf" ]]; then
+        SRC_GGUF="/models/Qwen3.8-27B-heretic-ara.Q8_0.gguf"
+    else
+        echo "[quantize] ERROR: Source GGUF ($SRC_GGUF) not found; run download-source-gguf.sh first." >&2
+        exit 1
+    fi
 fi
 
-if [[ ! -f "$IMATRIX" ]]; then
-    echo "[quantize] ERROR: $IMATRIX not found; run download-source-gguf.sh first" \
-         "(it fetches imatrix_unsloth.gguf_file alongside the BF16 shards)." >&2
-    exit 1
+IMATRIX_ARGS=()
+if [[ -f "$IMATRIX" ]]; then
+    echo "[quantize] using imatrix: $IMATRIX"
+    IMATRIX_ARGS=(--imatrix "$IMATRIX")
+elif [[ -f "$SRC_DIR/Qwen3.8-27B-heretic-ara.imatrix.gguf" ]]; then
+    echo "[quantize] converting GGUF imatrix -> DAT format..."
+    python3 /opt/iqllama/convert_imatrix_gguf_to_dat.py \
+        "$SRC_DIR/Qwen3.8-27B-heretic-ara.imatrix.gguf" --outfile "$SRC_DIR/Qwen3.8-27B-heretic-ara.imatrix.dat"
+    IMATRIX="$SRC_DIR/Qwen3.8-27B-heretic-ara.imatrix.dat"
+    IMATRIX_ARGS=(--imatrix "$IMATRIX")
 fi
 
-echo "[quantize] $BF16_GGUF -> $OUT_GGUF (262K-Balanced recipe)"
-echo "[quantize] imatrix: $IMATRIX"
-"$LLAMA_BIN_DIR/llama-quantize" \
-    --imatrix "$IMATRIX" \
-    --custom-q "blk\.${EDGE_RANGE}\..*ffn_(gate|up|down)_exps\.weight=iq4_kss" \
-    --custom-q "blk\.${MIDDLE_RANGE}\..*ffn_(gate|up|down)_exps\.weight=iq3_ks" \
-    --custom-q ".*ffn_(gate|up|down)_shexp\.weight=q8_0" \
-    --custom-q ".*ssm_out\.weight=iq6_k" \
-    --custom-q "blk\.40\.attn_.*\.weight=bf16" \
-    --custom-q "blk\.40\.ffn_(gate|up|down)_exps\.weight=q8_0" \
-    --custom-q "blk\.40\.ffn_.*\.weight=bf16" \
-    --custom-q "blk\.40\.nextn\..*\.weight=bf16" \
-    --attn-q-type iq5_ks --attn-k-type iq5_ks --attn-v-type iq5_ks --attn-output-type iq5_ks \
-    --ffn-gate-inp-type q8_0 \
-    --token-embedding-type iq4_kss \
-    --output-tensor-type q6_K \
-    "$BF16_GGUF" "$OUT_GGUF" "$BASE_TYPE"
+if [[ -f "$OUT_GGUF" && -s "$OUT_GGUF" ]]; then
+    echo "[quantize] Target quantized GGUF already exists: $OUT_GGUF (skipping quantize)"
+else
+    echo "[quantize] Quantizing $SRC_GGUF -> $OUT_GGUF (pure $QUANT_TYPE)"
+    "$LLAMA_BIN_DIR/llama-quantize" \
+        --allow-requantize \
+        "${IMATRIX_ARGS[@]}" \
+        "$SRC_GGUF" "$OUT_GGUF" "$QUANT_TYPE"
+fi
 
 echo "[quantize] done: $OUT_GGUF"

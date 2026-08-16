@@ -15,27 +15,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 "$SCRIPT_DIR/download-source-gguf.sh"
 
-SRC_DIR=${SRC_DIR:-/models/qwen36-src}
-# Use Unsloth's shipped imatrix, converted to ik_llama.cpp's binary DAT format
-# (download-source-gguf.sh does the conversion automatically).
-# Override by setting IMATRIX=/path/to/custom.imatrix before calling this script.
-export IMATRIX="${IMATRIX:-$SRC_DIR/imatrix_unsloth.dat}"
+SRC_DIR=${SRC_DIR:-/models/qwen38-src}
+export IMATRIX="${IMATRIX:-$SRC_DIR/Qwen3.8-27B-heretic-ara.imatrix.dat}"
 
 "$SCRIPT_DIR/quantize.sh"
 
 MMPROJ_FILE=${MMPROJ_FILE:-mmproj-Q8_0.gguf}
-if [[ ! -f "/models/$MMPROJ_FILE" ]]; then
+if [[ -f "$SRC_DIR/mmproj-BF16.gguf" && ! -f "/models/$MMPROJ_FILE" ]]; then
     if [[ "$MMPROJ_FILE" == "mmproj-BF16.gguf" ]]; then
         cp "$SRC_DIR/mmproj-BF16.gguf" "/models/$MMPROJ_FILE"
     else
-        # Default: Q8_0-quantize the vision tower's BF16 weight tensors
-        # (~32% smaller / ~276MiB less VRAM at load, no observed vision-
-        # quality regression - see quantize-mmproj.py header for the
-        # real-hardware validation notes). Set MMPROJ_FILE=mmproj-BF16.gguf
-        # to skip this and use the unquantized vision tower instead.
         "$SCRIPT_DIR/quantize-mmproj.py" "$SRC_DIR/mmproj-BF16.gguf" "/models/$MMPROJ_FILE"
     fi
 fi
 
-echo "[prepare] done: ${OUT_GGUF:-/models/qwen36-262k-balanced.gguf}"
+echo "[prepare] done: ${OUT_GGUF:-/models/qwen38-27b-heretic-ara-iq4_kss.gguf}"
 echo "[prepare] server MODEL_SOURCE=local will pick it up on next start/recreate."
