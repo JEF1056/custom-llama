@@ -1,66 +1,64 @@
 #!/usr/bin/env bash
 #
-# Launches the Qwen3.6-35B-A3B MLX VLM server. Invoked by the supervisor.
-# All values are hardcoded — no env var dependencies at boot.
+# Launches the Qwen3.8-27B-heretic-ara MLX VLM server.
 set -euo pipefail
 
+# Ensure standard Homebrew / local python paths are available
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.qwen/mlx-venv/bin:$PATH"
+
+# Resolve python binary
+if [[ -x "/opt/homebrew/bin/python3" ]]; then
+    PYTHON_BIN="/opt/homebrew/bin/python3"
+elif [[ -x "$HOME/.qwen/mlx-venv/bin/python3" ]]; then
+    PYTHON_BIN="$HOME/.qwen/mlx-venv/bin/python3"
+else
+    PYTHON_BIN="$(which python3)"
+fi
+
 # ---- Model path -------------------------------------------------------------
-MODEL_PATH="$HOME/.qwen/models/qwen36-mlx"
+MODEL_PATH=${MODEL_PATH:-"$HOME/.qwen/models/Qwen3.8-27B-heretic-ara-mxfp4"}
 
 if [[ ! -d "$MODEL_PATH" ]]; then
-    echo "[qwen36] ERROR: Model directory not found: $MODEL_PATH" >&2
-    echo "[qwen36] Run mac/install.sh to download and quantize the model." >&2
+    echo "[qwen38] ERROR: Model directory not found: $MODEL_PATH" >&2
     exit 1
 fi
 
 # ---- Server binding -----------------------------------------------------------
-MLX_HOST="0.0.0.0"
-MLX_PORT="8080"
+MLX_HOST=${MLX_HOST:-"0.0.0.0"}
+MLX_PORT=${MLX_PORT:-"8080"}
 
-# ---- Build KV bits argument ---------------------------------------------------
-KV_BITS_ARG="--kv-bits 4.2"
-
-# ---- Build max KV size argument -----------------------------------------------
-MAX_KV_SIZE_ARG="--max-kv-size 229376"
-
-# ---- Build prefill step size argument -----------------------------------------
-PRELOAD_ARGS="--prefill-step-size 1024"
-
-# ---- Build extra args ---------------------------------------------------------
-EXTRA_ARGS="--enable-thinking --thinking-budget 4096 --kv-quant-scheme turboquant"
-
-# ---- DFlash speculative decoding ----------------------------------------------
-DRAFT_MODEL_ARG="--draft-model z-lab/Qwen3.6-35B-A3B-DFlash"
-
-# ---- Launch the server --------------------------------------------------------
-echo "[qwen36] Starting mlx_vlm.server"
-echo "[qwen36] Model: $MODEL_PATH"
-echo "[qwen36] Host: $MLX_HOST  Port: $MLX_PORT"
-echo "[qwen36] KV bits: 4.2 (TurboQuant: 4-bit keys, 2-bit values)  Max KV size: 229376  Prefill step: 1024"
-echo "[qwen36] Thinking: enabled"
-echo "[qwen36] APC: enabled  (blocks=2048  disk=$HOME/.cache/mlx-vlm/caching)"
-echo "[qwen36] DFlash: enabled (z-lab/Qwen3.6-35B-A3B-DFlash)"
+# ---- Tuning parameters --------------------------------------------------------
+KV_BITS=${KV_BITS:-"4"}
+KV_QUANT_SCHEME=${KV_QUANT_SCHEME:-"uniform"}
+KV_GROUP_SIZE=${KV_GROUP_SIZE:-"64"}
+MAX_KV_SIZE=${MAX_KV_SIZE:-"131072"}
+PREFILL_STEP_SIZE=${PREFILL_STEP_SIZE:-"2048"}
 
 # ---- APC (Automatic Prefix Caching) -------------------------------------------
 export APC_ENABLED=1
-export APC_NUM_BLOCKS=2048
+export APC_NUM_BLOCKS=16384
 export APC_BLOCK_SIZE=16
+export APC_EXACT_CACHE_ENTRIES=16
 export APC_DISK_PATH="$HOME/.cache/mlx-vlm/caching"
-export APC_DISK_MAX_GB=0
-export APC_DISK_SHARD_MAX_BLOCKS=256
-export APC_MAX_POOL_TENSORS=450000
-export APC_LAYER_MAJOR_MEMORY_MIN_TOKENS=50000
-export APC_HASH=fast
+export APC_DISK_MAX_GB=40
+export APC_DISK_SHARD_MAX_BLOCKS=1024
+export APC_DISK_WORKERS=4
+export MLX_METAL_FAST_SYNCHRONIZATION=1
 mkdir -p "$APC_DISK_PATH"
+
+echo "[qwen38] Starting mlx_vlm.server with $PYTHON_BIN"
+echo "[qwen38] Model: $MODEL_PATH"
+echo "[qwen38] Host: $MLX_HOST  Port: $MLX_PORT"
+echo "[qwen38] KV bits: $KV_BITS ($KV_QUANT_SCHEME)  Max KV size: $MAX_KV_SIZE  Prefill step: $PREFILL_STEP_SIZE"
 
 cd "$MODEL_PATH"
 
-python3 -m mlx_vlm.server \
+exec "$PYTHON_BIN" -m mlx_vlm.server \
     --host "$MLX_HOST" \
     --port "$MLX_PORT" \
     --model "$MODEL_PATH" \
-    $DRAFT_MODEL_ARG \
-    $KV_BITS_ARG \
-    $MAX_KV_SIZE_ARG \
-    $PRELOAD_ARGS \
-    $EXTRA_ARGS
+    --kv-bits "$KV_BITS" \
+    --kv-quant-scheme "$KV_QUANT_SCHEME" \
+    --kv-group-size "$KV_GROUP_SIZE" \
+    --prefill-step-size "$PREFILL_STEP_SIZE" \
+    --max-kv-size "$MAX_KV_SIZE"
