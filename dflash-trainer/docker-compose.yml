@@ -1,0 +1,27 @@
+services:
+  dflash-trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: dflash-trainer:latest
+    container_name: dflash-trainer
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ./output:/output
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+      - PYTHONUNBUFFERED=1
+    command:
+      - "--model-id"
+      - "heretic-org/Qwen3.8-27B-heretic-ara"
+      - "--output-dir"
+      - "/output/Qwen3.8-27B-heretic-dflash"
+      - "--max-steps"
+      - "5000"
