@@ -1,16 +1,16 @@
-#!/bin/env python3
+#!/usr/bin/env python3
 """
 =============================================================================
-Centralized Multi-Node LLM Benchmark Harness
+Centralized Concurrent Multi-Node LLM Benchmark Harness
 =============================================================================
-Tests remote and local LLM server instances (Docker llama-server, MLX server)
+Tests multiple remote and local LLM servers concurrently using a ThreadPoolExecutor
 across 3 prompt scale tiers:
-  - Short  (2k tokens)
-  - Medium (50k tokens)
-  - Long   (125k tokens)
+  - 2k   (~2,000 tokens)
+  - 50k  (~50,000 tokens)
+  - 125k (~125,000 tokens)
 
 Evaluates:
-  1. Time to First Token (TTFT)
+  1. Time to First Token (TTFT / Prefill)
   2. Prompt Processing Speed (Prefill Tokens/Sec)
   3. Decode Speed (Generation Tokens/Sec)
   4. Prefix Cache Performance (Pass 1 Cold vs Pass 2 Warm Cache hit delta)
@@ -24,6 +24,8 @@ import json
 import argparse
 import urllib.request
 import urllib.error
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Approximate conversion: 1 token ~ 4 characters
 CHAR_PER_TOKEN = 4
@@ -34,16 +36,8 @@ PROMPT_TIERS = {
     "125k": 125000,
 }
 
-BASE_PREFIX = (
-    "You are a helpful AI assistant. Below is an extensive technical context document. "
-    "Please read the context carefully and prepare to analyze it.\n\n--- BEGIN CONTEXT ---\n"
-)
-
 BASE_SUFFIX = "\n--- END CONTEXT ---\n\nQuestion: Summarize the key architectural principles presented in the text."
 
-
-import random
-import uuid
 
 def generate_prompt(token_count: int, nonce: str = None) -> str:
     """Generate a prompt of roughly target token count with repeated technical text and unique nonce."""
@@ -58,7 +52,7 @@ def generate_prompt(token_count: int, nonce: str = None) -> str:
         "and efficient key-value storage layouts. When designing high-throughput inference "
         "servers for large language models, memory bandwidth and KV-cache footprint dominate "
         "the execution bottleneck. Quantization techniques such as MXFP4, IQ4_KSS, and 4-bit "
-        "block formats significantly reduce system VRAM usage while preserving model quality.\n"
+        "quantized KV cache blocks minimize memory bus pressure and maximize token throughput.\n"
     )
     target_chars = token_count * CHAR_PER_TOKEN
     prefix_len = len(prefix) + len(BASE_SUFFIX)
@@ -70,48 +64,8 @@ def generate_prompt(token_count: int, nonce: str = None) -> str:
     return prefix + context + BASE_SUFFIX
 
 
-def reset_server_cache(server_url: str, api_key: str = None) -> bool:
-    """Reset server APC / KV cache via /cache/reset (MLX) or /slots/{id}?action=erase (llama-server/Docker)."""
-    base_url = server_url.rstrip("/")
-    if base_url.endswith("/v1"):
-        clean_base = base_url[:-3]
-    else:
-        clean_base = base_url
-
-    reset_success = False
-
-    # 1. Try MLX APC cache reset
-    for path in ["/cache/reset", "/v1/cache/reset"]:
-        target_url = clean_base + path
-        req = urllib.request.Request(target_url, data=b"{}", headers={"Content-Type": "application/json"})
-        if api_key:
-            req.add_header("Authorization", f"Bearer {api_key}")
-        try:
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                if resp.status == 200:
-                    reset_success = True
-        except Exception:
-            pass
-
-    # 2. Try llama-server (llama.cpp) slot cache erase
-    for slot_id in range(4):
-        for path in [f"/slots/{slot_id}?action=erase", f"/v1/slots/{slot_id}?action=erase"]:
-            target_url = clean_base + path
-            req = urllib.request.Request(target_url, data=b"{}", headers={"Content-Type": "application/json"})
-            if api_key:
-                req.add_header("Authorization", f"Bearer {api_key}")
-            try:
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    if resp.status == 200:
-                        reset_success = True
-            except Exception:
-                pass
-
-    return reset_success
-
-
 def get_default_model(server_url: str, api_key: str = None) -> str:
-    """Fetch first model name from /v1/models endpoint."""
+    """Fetch the active model name from /v1/models endpoint."""
     url = f"{server_url.rstrip('/')}/models"
     req = urllib.request.Request(url)
     if api_key:
@@ -121,6 +75,11 @@ def get_default_model(server_url: str, api_key: str = None) -> str:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             if "data" in data and len(data["data"]) > 0:
+                # Prefer explicitly loaded models
+                for m in data["data"]:
+                    mid = m["id"]
+                    if "mxfp4" in mid or "qwen" in mid.lower():
+                        return mid
                 return data["data"][0]["id"]
     except Exception as e:
         print(f"[WARN] Failed to auto-detect model from {url}: {e}")
@@ -159,7 +118,7 @@ def run_single_benchmark(
     gen_tokens = 0
 
     try:
-        with urllib.request.urlopen(req, timeout=600) as response:
+        with urllib.request.urlopen(req, timeout=1200) as response:
             for line in response:
                 line = line.decode("utf-8").strip()
                 if line.startswith("data: "):
@@ -186,7 +145,7 @@ def run_single_benchmark(
     if first_token_time is None or gen_tokens == 0:
         return {"error": "No tokens received from server"}
 
-    ttft = first_token_time - start_time  # Time to First Token (includes prefill)
+    ttft = first_token_time - start_time
     gen_duration = (last_token_time - first_token_time) if gen_tokens > 1 else (end_time - first_token_time)
     decode_tps = (gen_tokens - 1) / gen_duration if gen_duration > 0 and gen_tokens > 1 else gen_tokens / max(0.001, end_time - first_token_time)
 
@@ -203,95 +162,121 @@ def run_single_benchmark(
     }
 
 
+def benchmark_host(server_url: str, model: str, tiers: list, max_tokens: int, prefix_cache: bool, api_key: str):
+    """Run all prompt tiers sequentially on a single host."""
+    clean_url = server_url.rstrip("/")
+    detected_model = model or get_default_model(clean_url, api_key)
+    
+    print(f"[{clean_url}] Starting benchmark (Model: {detected_model})...", flush=True)
+    results = {}
+
+    for tier in tiers:
+        if tier not in PROMPT_TIERS:
+            continue
+        target_tokens = PROMPT_TIERS[tier]
+        prompt = generate_prompt(target_tokens)
+
+        # Pass 1: Cold Cache
+        print(f"[{clean_url}] Running Tier {tier.upper()} Cold Pass...", flush=True)
+        res1 = run_single_benchmark(clean_url, detected_model, prompt, max_tokens, api_key)
+        if "error" in res1:
+            print(f"[{clean_url}] Tier {tier.upper()} Cold Failed: {res1['error']}", flush=True)
+            results[tier] = {"error": res1["error"]}
+            continue
+
+        print(f"[{clean_url}] Tier {tier.upper()} Cold: TTFT={res1['ttft_sec']}s ({res1['prefill_tok_per_sec']} tok/s), Decode={res1['decode_tok_per_sec']} tok/s", flush=True)
+
+        res2 = None
+        if prefix_cache:
+            time.sleep(1)
+            print(f"[{clean_url}] Running Tier {tier.upper()} Warm Pass...", flush=True)
+            res2 = run_single_benchmark(clean_url, detected_model, prompt, max_tokens, api_key)
+            if "error" not in res2:
+                speedup = round(res1["ttft_sec"] / max(0.001, res2["ttft_sec"]), 2)
+                print(f"[{clean_url}] Tier {tier.upper()} Warm: TTFT={res2['ttft_sec']}s ({speedup}x speedup)", flush=True)
+
+        results[tier] = {
+            "cold": res1,
+            "warm": res2
+        }
+
+    return clean_url, detected_model, results
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Centralized LLM Benchmark Harness")
-    parser.add_argument("--server", required=True, help="Base server URL (e.g. http://ml-2:8080/v1)")
-    parser.add_argument("--model", help="Model name (auto-detected if omitted)")
-    parser.add_argument("--api-key", help="Optional API key for authorization")
+    parser = argparse.ArgumentParser(description="Centralized Parallel Multi-Node LLM Benchmark Harness")
+    parser.add_argument("--servers", "-s", nargs="+", default=["http://ml-1-wsl:8080/v1", "http://ml-2:8080/v1", "http://ml-3:8080/v1"],
+                        help="List of server URLs (e.g. http://ml-1-wsl:8080/v1 http://ml-2:8080/v1)")
+    parser.add_argument("--models", "-m", nargs="*", default=[], help="Optional list of model names corresponding to servers")
+    parser.add_argument("--api-key", help="Optional API key")
     parser.add_argument("--tiers", default="2k,50k,125k", help="Comma-separated tiers to run (2k,50k,125k)")
     parser.add_argument("--max-tokens", type=int, default=128, help="Number of tokens to generate per test")
-    parser.add_argument("--prefix-cache", action="store_true", help="Enable 2-pass prefix cache hit evaluation")
+    parser.add_argument("--prefix-cache", action="store_true", default=True, help="Enable 2-pass prefix cache evaluation")
+    parser.add_argument("--output-json", default="benchmark_results.json", help="Path to save raw results JSON")
 
     args = parser.parse_args()
-
-    model_name = args.model or get_default_model(args.server, args.api_key)
     tiers = [t.strip().lower() for t in args.tiers.split(",")]
 
     print("=============================================================================")
-    print(f" LLM CENTRALIZED BENCHMARK HARNESS")
-    print(f" Target Server : {args.server}")
-    print(f" Target Model  : {model_name}")
+    print(" CONCURRENT MULTI-NODE BENCHMARK HARNESS")
+    print(f" Target Servers: {', '.join(args.servers)}")
     print(f" Tiers to Test : {', '.join(tiers)}")
     print(f" Prefix Cache  : {'Enabled (2-pass)' if args.prefix_cache else 'Disabled (1-pass)'}")
     print("=============================================================================\n")
 
-    summary_results = {}
+    host_tasks = []
+    for i, s_url in enumerate(args.servers):
+        m_name = args.models[i] if i < len(args.models) else None
+        host_tasks.append((s_url, m_name))
 
-    for tier in tiers:
-        if tier not in PROMPT_TIERS:
-            print(f"[SKIP] Unknown tier: {tier}")
-            continue
-
-        target_tokens = PROMPT_TIERS[tier]
-        print(f"--- Running Tier: {tier.upper()} (~{target_tokens} tokens) ---")
-        prompt = generate_prompt(target_tokens)
-
-        # Clear server cache prior to Pass 1 to ensure a true cold start
-        if reset_server_cache(args.server, args.api_key):
-            print("  [Cache Reset] Server cache cleared for cold pass.")
-
-        # Pass 1: Cold Cache
-        print(f"  [Pass 1 - Cold Cache] Submitting request...")
-        res1 = run_single_benchmark(args.server, model_name, prompt, args.max_tokens, args.api_key)
-
-        if "error" in res1:
-            print(f"  [ERROR] Pass 1 Failed: {res1['error']}")
-            summary_results[tier] = {"error": res1["error"]}
-            continue
-
-        print(f"    * TTFT (Prefill): {res1['ttft_sec']}s ({res1['prefill_tok_per_sec']} tok/s)")
-        print(f"    * Decode Speed  : {res1['decode_tok_per_sec']} tok/s ({res1['gen_tokens']} tokens generated)")
-
-        res2 = None
-        if args.prefix_cache:
-            time.sleep(1)
-            print(f"  [Pass 2 - Warm Cache] Resubmitting identical prefix...")
-            res2 = run_single_benchmark(args.server, model_name, prompt, args.max_tokens, args.api_key)
-
-            if "error" not in res2:
-                speedup = round(res1["ttft_sec"] / max(0.001, res2["ttft_sec"]), 2)
-                print(f"    * TTFT (Warm)   : {res2['ttft_sec']}s ({res2['prefill_tok_per_sec']} tok/s)")
-                print(f"    * Cache Speedup : {speedup}x TTFT reduction")
-
-        summary_results[tier] = {
-            "cold": res1,
-            "warm": res2
+    all_results = {}
+    with ThreadPoolExecutor(max_workers=len(host_tasks)) as executor:
+        futures = {
+            executor.submit(benchmark_host, s_url, m_name, tiers, args.max_tokens, args.prefix_cache, args.api_key): s_url
+            for s_url, m_name in host_tasks
         }
-        print()
+        for future in as_completed(futures):
+            s_url = futures[future]
+            try:
+                clean_url, detected_model, results = future.result()
+                all_results[clean_url] = {
+                    "model": detected_model,
+                    "tiers": results
+                }
+            except Exception as e:
+                print(f"[{s_url}] Execution error: {e}")
+                all_results[s_url] = {"error": str(e)}
 
-    # Print Markdown Table Report
-    print("\n" + "=" * 78)
-    print(" BENCHMARK SUMMARY REPORT")
-    print("=" * 78)
-    print(f" Server: {args.server} | Model: {model_name}\n")
-    print(f"| Tier | Prompt Tokens | Cold TTFT | Prefill Speed | Decode Speed | Warm TTFT | Cache Speedup |")
-    print(f"| :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+    # Save to JSON
+    with open(args.output_json, "w") as f:
+        json.dump(all_results, f, indent=2)
+    print(f"\n[Saved] Benchmark results saved to {args.output_json}")
 
-    for tier, data in summary_results.items():
-        if "error" in data:
-            print(f"| {tier.upper()} | Error | - | - | - | - | - |")
+    # Print Formatted Report
+    print("\n" + "=" * 90)
+    print(" PARALLEL BENCHMARK COMPARISON REPORT")
+    print("=" * 90)
+    print(f"| Host / Server | Tier | Prompt Tokens | Cold TTFT | Prefill Speed | Decode Speed | Warm TTFT | Cache Speedup |")
+    print(f"| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+
+    for s_url, h_data in all_results.items():
+        if "error" in h_data:
+            print(f"| {s_url} | Error | - | - | - | - | - | - |")
             continue
-        c = data["cold"]
-        w = data.get("warm")
-        warm_ttft_str = f"{w['ttft_sec']}s" if w else "N/A"
-        speedup_str = f"{round(c['ttft_sec'] / max(0.001, w['ttft_sec']), 2)}x" if w else "N/A"
-
-        print(
-            f"| {tier.upper()} | ~{c['prompt_tokens_est']} | {c['ttft_sec']}s | "
-            f"{c['prefill_tok_per_sec']} tok/s | {c['decode_tok_per_sec']} tok/s | "
-            f"{warm_ttft_str} | {speedup_str} |"
-        )
-    print("=" * 78)
+        for tier, t_data in h_data.get("tiers", {}).items():
+            if "error" in t_data:
+                print(f"| {s_url} | {tier.upper()} | Error | - | - | - | - | - |")
+                continue
+            c = t_data["cold"]
+            w = t_data.get("warm")
+            warm_ttft_str = f"{w['ttft_sec']}s" if w else "N/A"
+            speedup_str = f"{round(c['ttft_sec'] / max(0.001, w['ttft_sec']), 2)}x" if w else "N/A"
+            print(
+                f"| {s_url} | {tier.upper()} | ~{c['prompt_tokens_est']} | {c['ttft_sec']}s | "
+                f"{c['prefill_tok_per_sec']} tok/s | {c['decode_tok_per_sec']} tok/s | "
+                f"{warm_ttft_str} | {speedup_str} |"
+            )
+    print("=" * 90)
 
 
 if __name__ == "__main__":

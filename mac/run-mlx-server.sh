@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Launches the Qwen3.8-27B-heretic-ara MLX VLM server.
+# Launches the Qwen3.8-27B-heretic-ara MLX VLM server with DFlash Speculative Decoding.
 set -euo pipefail
 
 # Ensure standard Homebrew / local python paths are available
@@ -17,6 +17,7 @@ fi
 
 # ---- Model path -------------------------------------------------------------
 MODEL_PATH=${MODEL_PATH:-"$HOME/.qwen/models/Qwen3.8-27B-heretic-ara-mxfp4"}
+DRAFT_MODEL=${DRAFT_MODEL:-"jfan/Qwen3.8-27B-heretic-dflash"}
 
 if [[ ! -d "$MODEL_PATH" ]]; then
     echo "[qwen38] ERROR: Model directory not found: $MODEL_PATH" >&2
@@ -48,6 +49,7 @@ mkdir -p "$APC_DISK_PATH"
 
 echo "[qwen38] Starting mlx_vlm.server with $PYTHON_BIN"
 echo "[qwen38] Model: $MODEL_PATH"
+echo "[qwen38] Draft Model: $DRAFT_MODEL"
 echo "[qwen38] Host: $MLX_HOST  Port: $MLX_PORT"
 echo "[qwen38] KV bits: $KV_BITS ($KV_QUANT_SCHEME)  Max KV size: $MAX_KV_SIZE  Prefill step: $PREFILL_STEP_SIZE"
 
@@ -57,6 +59,9 @@ exec "$PYTHON_BIN" -m mlx_vlm.server \
     --host "$MLX_HOST" \
     --port "$MLX_PORT" \
     --model "$MODEL_PATH" \
+    --draft-model "$DRAFT_MODEL" \
+    --draft-kind dflash \
+    --trust-remote-code \
     --kv-bits "$KV_BITS" \
     --kv-quant-scheme "$KV_QUANT_SCHEME" \
     --kv-group-size "$KV_GROUP_SIZE" \
