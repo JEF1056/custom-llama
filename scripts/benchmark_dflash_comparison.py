@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Benchmark comparison script for ml-2 and ml-3:
-Runs a benchmark suite with and without DFlash speculative decoding.
-Collects decode tok/s, prefill tok/s, latency, peak memory, and acceptance rate.
+Benchmark comparison script for Qwen3.8-27B-heretic-ara:
+Compares Native Autoregressive Decoding vs DFlash Speculative Decoding (draft_num_tokens=3).
+Tests across multi-language coding, mathematics, and technical reasoning prompts.
 """
 
-import time
 import json
+import time
 import urllib.request
 import subprocess
 
-BENCH_PROMPTS = [
+PROMPTS = [
     ("Python Fibonacci", "Write a Python function to compute the Fibonacci sequence up to n elements with type annotations and docstring."),
     ("Rust Concurrency", "Implement a thread-safe in-memory cache in Rust using Arc and Mutex with get and insert methods."),
     ("C++ QuickSort", "Write an efficient in-place generic template QuickSort function in C++."),
@@ -23,7 +23,7 @@ NODES = ["ml-2", "ml-3"]
 
 def start_server(node: str, enable_dflash: bool):
     print(f"\n>>> Starting server on {node} (DFlash Enabled: {enable_dflash})...", flush=True)
-    dflash_args = "--draft-model jfan/Qwen3.8-27B-heretic-dflash --draft-kind dflash" if enable_dflash else ""
+    dflash_args = "--draft-model jfan/Qwen3.8-27B-heretic-dflash --draft-kind dflash --draft-num-tokens 3" if enable_dflash else ""
     
     script = f"""#!/usr/bin/env bash
 MODEL_PATH="/Users/jfan/.qwen/models/Qwen3.8-27B-heretic-ara-mxfp4"
@@ -73,81 +73,79 @@ def run_benchmark_for_mode(enable_dflash: bool):
             continue
 
     time.sleep(5)
-    results = {}
+    results = {node: {} for node in NODES}
 
     for node in NODES:
-        results[node] = []
         print(f"\n--- Running Benchmark Prompts on {node} ({mode_name}) ---", flush=True)
-        for label, prompt in BENCH_PROMPTS:
-            print(f"  > Testing [{label}]...", flush=True)
+        for task_name, prompt in PROMPTS:
+            print(f"  > Testing [{task_name}]...", flush=True)
             payload = {
                 "model": "/Users/jfan/.qwen/models/Qwen3.8-27B-heretic-ara-mxfp4",
-                "messages": [
-                    {"role": "user", "content": prompt}
-                ],
-                "max_tokens": 128,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 512,
                 "temperature": 0.0,
-                "stream": False
+                "stream": True,
             }
-            req = urllib.request.Request(
-                f"http://{node}:8080/v1/chat/completions",
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"}
-            )
-            t0 = time.time()
             try:
+                t_start = time.time()
+                req = urllib.request.Request(
+                    f"http://{node}:8080/v1/chat/completions",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"}
+                )
+                timings = {}
+                tokens_count = 0
                 with urllib.request.urlopen(req, timeout=180) as resp:
-                    data = json.loads(resp.read().decode())
-                    elapsed = time.time() - t0
-                    timings = data.get("timings", {})
-                    pred_s = timings.get("predicted_per_second", 0)
-                    prompt_s = timings.get("prompt_per_second", 0)
-                    peak_mem = timings.get("peak_memory", 0)
-                    draft_n = timings.get("draft_n", 0)
-                    draft_accepted = timings.get("draft_n_accepted", 0)
-                    accept_rate = (draft_accepted / draft_n * 100) if (draft_n and draft_n > 0) else 0.0
-
-                    print(f"    Decode: {pred_s:.2f} tok/s | Prefill: {prompt_s:.1f} tok/s | Latency: {elapsed:.2f}s | Acc: {accept_rate:.1f}% ({draft_accepted}/{draft_n})", flush=True)
-                    results[node].append({
-                        "label": label,
-                        "pred_tok_s": pred_s,
-                        "prompt_tok_s": prompt_s,
-                        "latency_s": elapsed,
-                        "peak_mem_gb": peak_mem,
-                        "draft_n": draft_n,
-                        "draft_accepted": draft_accepted,
-                        "accept_rate": accept_rate
-                    })
+                    for line in resp:
+                        line = line.decode("utf-8").strip()
+                        if line.startswith("data: ") and not line.endswith("[DONE]"):
+                            try:
+                                chunk = json.loads(line[6:])
+                                tokens_count += 1
+                                if "timings" in chunk and chunk["timings"]:
+                                    timings = chunk["timings"]
+                            except Exception:
+                                pass
+                latency = time.time() - t_start
+                dec_tps = timings.get("predicted_per_second", tokens_count / latency if latency > 0 else 0)
+                pref_tps = timings.get("prompt_per_second", 0)
+                draft_acc = (timings.get("draft_n_accepted", 0) / timings.get("draft_n", 1)) * 100 if timings.get("draft_n") else 0.0
+                
+                results[node][task_name] = {
+                    "decode_tps": dec_tps,
+                    "prefill_tps": pref_tps,
+                    "latency": latency,
+                    "draft_acc": draft_acc,
+                    "accepted": timings.get("draft_n_accepted"),
+                    "drafted": timings.get("draft_n")
+                }
+                print(f"    Decode: {dec_tps:.2f} tok/s | Prefill: {pref_tps:.1f} tok/s | Latency: {latency:.2f}s | Acc: {draft_acc:.1f}% ({timings.get('draft_n_accepted')}/{timings.get('draft_n')})", flush=True)
             except Exception as e:
-                print(f"    Error on [{label}]: {e}", flush=True)
+                print(f"    Error on [{task_name}]: {e}", flush=True)
+                results[node][task_name] = {"decode_tps": 0.0, "latency": 0.0, "draft_acc": 0.0}
 
     return results
 
 
 def main():
-    # 1. Run WITH DFlash
-    dflash_results = run_benchmark_for_mode(enable_dflash=True)
-
-    # 2. Run WITHOUT DFlash (Native)
-    native_results = run_benchmark_for_mode(enable_dflash=False)
+    with_dflash = run_benchmark_for_mode(enable_dflash=True)
+    without_dflash = run_benchmark_for_mode(enable_dflash=False)
 
     print("\n=======================================================", flush=True)
-    print(" FINAL COMPARATIVE BENCHMARK SUMMARY (CURRENT PRE-THINK DFLASH MODEL)", flush=True)
-    print("=======================================================", flush=True)
-    
+    print(" FINAL COMPARATIVE BENCHMARK SUMMARY (HIGH CONVERGENCE DFLASH)", flush=True)
+    print("=======================================================\n", flush=True)
+
     for node in NODES:
-        print(f"\n=================== NODE: {node.upper()} ===================", flush=True)
+        print(f"=================== NODE: {node.upper()} ===================", flush=True)
         print(f"{'Prompt Task':<24} | {'Native Decode':<14} | {'DFlash Decode':<14} | {'DFlash Acc %':<12} | {'Speedup':<8}")
         print("-" * 80)
-        df_list = dflash_results.get(node, [])
-        nat_list = native_results.get(node, [])
-        for i in range(len(df_list)):
-            lbl = df_list[i]["label"]
-            df_dec = df_list[i]["pred_tok_s"]
-            nat_dec = nat_list[i]["pred_tok_s"] if i < len(nat_list) else 0
-            acc = df_list[i]["accept_rate"]
-            speedup = f"{df_dec / nat_dec:.2f}x" if nat_dec > 0 else "N/A"
-            print(f"{lbl:<24} | {nat_dec:>7.2f} tok/s   | {df_dec:>7.2f} tok/s   | {acc:>6.1f}%      | {speedup:>6}")
+        for task_name, _ in PROMPTS:
+            nat = without_dflash.get(node, {}).get(task_name, {}).get("decode_tps", 0.0)
+            dfl = with_dflash.get(node, {}).get(task_name, {}).get("decode_tps", 0.0)
+            acc = with_dflash.get(node, {}).get(task_name, {}).get("draft_acc", 0.0)
+            speedup = (dfl / nat) if nat > 0 else 0.0
+            print(f"{task_name:<24} | {nat:>8.2f} tok/s   | {dfl:>8.2f} tok/s   | {acc:>7.1f}%      | {speedup:>5.2f}x")
+        print()
 
 
 if __name__ == "__main__":
