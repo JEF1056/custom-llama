@@ -49,7 +49,7 @@ def parse_args():
     parser.add_argument("--cache-dir", type=str, default="/workspace-data/dataset-cache")
     parser.add_argument("--num-samples", type=int, default=10000)
     parser.add_argument("--chunk-size", type=int, default=500)
-    parser.add_argument("--seq-len", type=int, default=1024)
+    parser.add_argument("--seq-len", type=int, default=4128)
     return parser.parse_args()
 
 
@@ -126,7 +126,7 @@ def build_interleaved_stream(cache_dir: str):
 
 
 class BackgroundPrefetcher(threading.Thread):
-    """Prefetches and tokenizes sequences with a compact 16-element bounded buffer."""
+    """Prefetches, tokenizes, and packs continuous sequences up to seq_len."""
     def __init__(self, stream, tokenizer, seq_len: int, max_queue_size: int = 16):
         super().__init__(daemon=True)
         self.stream = stream
@@ -136,6 +136,7 @@ class BackgroundPrefetcher(threading.Thread):
         self.stopped = False
 
     def run(self):
+        accum_tokens = []
         for messages in self.stream:
             if self.stopped:
                 break
@@ -143,9 +144,17 @@ class BackgroundPrefetcher(threading.Thread):
                 continue
             try:
                 text = self.tokenizer.apply_chat_template(messages, tokenize=False)
-                tokens = self.tokenizer(text, max_length=self.seq_len, truncation=True, return_tensors="pt")["input_ids"]
-                if tokens.shape[1] >= 18:
-                    self.queue.put(tokens, block=True)
+                toks = self.tokenizer(text, truncation=False, return_tensors="pt")["input_ids"][0]
+                accum_tokens.append(toks)
+                total_len = sum(t.shape[0] for t in accum_tokens)
+
+                while total_len >= self.seq_len:
+                    cat_toks = torch.cat(accum_tokens, dim=0)
+                    chunk = cat_toks[: self.seq_len].unsqueeze(0)
+                    rem = cat_toks[self.seq_len :]
+                    accum_tokens = [rem] if rem.shape[0] > 0 else []
+                    total_len = sum(t.shape[0] for t in accum_tokens)
+                    self.queue.put(chunk, block=True)
             except Exception:
                 continue
         self.queue.put(None)

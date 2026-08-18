@@ -34,7 +34,7 @@ KV_QUANT_SCHEME=${KV_QUANT_SCHEME:-"uniform"}
 KV_GROUP_SIZE=${KV_GROUP_SIZE:-"64"}
 MAX_KV_SIZE=${MAX_KV_SIZE:-"131072"}
 PREFILL_STEP_SIZE=${PREFILL_STEP_SIZE:-"2048"}
-DRAFT_NUM_TOKENS=${DRAFT_NUM_TOKENS:-"3"}
+DRAFT_BLOCK_SIZE=${DRAFT_BLOCK_SIZE:-"4"}
 
 # ---- APC (Automatic Prefix Caching) -------------------------------------------
 export APC_ENABLED=1
@@ -46,11 +46,12 @@ export APC_DISK_MAX_GB=40
 export APC_DISK_SHARD_MAX_BLOCKS=1024
 export APC_DISK_WORKERS=4
 export MLX_METAL_FAST_SYNCHRONIZATION=1
+export MLX_VLM_DRAFT_BLOCK_SIZE="$DRAFT_BLOCK_SIZE"
 mkdir -p "$APC_DISK_PATH"
 
 echo "[qwen38] Starting mlx_vlm.server with $PYTHON_BIN"
 echo "[qwen38] Model: $MODEL_PATH"
-echo "[qwen38] Draft Model: $DRAFT_MODEL (Tokens: $DRAFT_NUM_TOKENS)"
+echo "[qwen38] Draft Model: $DRAFT_MODEL (Block Size: $DRAFT_BLOCK_SIZE)"
 echo "[qwen38] Host: $MLX_HOST  Port: $MLX_PORT"
 echo "[qwen38] KV bits: $KV_BITS ($KV_QUANT_SCHEME)  Max KV size: $MAX_KV_SIZE  Prefill step: $PREFILL_STEP_SIZE"
 
@@ -62,7 +63,7 @@ exec "$PYTHON_BIN" -m mlx_vlm.server \
     --model "$MODEL_PATH" \
     --draft-model "$DRAFT_MODEL" \
     --draft-kind dflash \
-    --draft-num-tokens "$DRAFT_NUM_TOKENS" \
+    --draft-block-size "$DRAFT_BLOCK_SIZE" \
     --trust-remote-code \
     --kv-bits "$KV_BITS" \
     --kv-quant-scheme "$KV_QUANT_SCHEME" \

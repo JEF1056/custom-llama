@@ -110,6 +110,11 @@ class DFlashAttention(nn.Module):
         ctx_pos_emb: Tuple[torch.Tensor, torch.Tensor],
         prop_pos_emb: Tuple[torch.Tensor, torch.Tensor],
     ) -> torch.Tensor:
+        if self.is_sliding and self.sliding_window is not None and target_hidden.shape[1] > self.sliding_window:
+            target_hidden = target_hidden[:, -self.sliding_window:]
+            ctx_cos, ctx_sin = ctx_pos_emb
+            ctx_pos_emb = (ctx_cos[:, -self.sliding_window:], ctx_sin[:, -self.sliding_window:])
+
         bsz, q_len = hidden_states.shape[:-1]
         ctx_len = target_hidden.shape[1]
 
@@ -195,6 +200,7 @@ class DFlashDraftModel(nn.Module):
     def __init__(self, config: DFlashConfig):
         super().__init__()
         self.config = config
+        self.gradient_checkpointing = False
         concat_dim = len(config.target_layer_ids) * config.hidden_size
         self.fc = nn.Linear(concat_dim, config.hidden_size, bias=False)
         self.hidden_norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -207,6 +213,10 @@ class DFlashDraftModel(nn.Module):
             max_position_embeddings=config.max_position_embeddings,
             base=config.rope_theta,
         )
+
+    def gradient_checkpointing_enable(self):
+        """Enables gradient checkpointing for all decoder layers to save activation memory."""
+        self.gradient_checkpointing = True
 
     def forward(
         self,
@@ -222,12 +232,22 @@ class DFlashDraftModel(nn.Module):
         prop_pos_emb = self.rotary_emb(hidden_states, prop_position_ids)
 
         for layer in self.layers:
-            hidden_states = layer(
-                hidden_states=hidden_states,
-                target_hidden=target_hidden,
-                ctx_pos_emb=ctx_pos_emb,
-                prop_pos_emb=prop_pos_emb,
-            )
+            if self.gradient_checkpointing and self.training:
+                hidden_states = torch.utils.checkpoint.checkpoint(
+                    layer,
+                    hidden_states,
+                    target_hidden,
+                    ctx_pos_emb,
+                    prop_pos_emb,
+                    use_reentrant=False,
+                )
+            else:
+                hidden_states = layer(
+                    hidden_states=hidden_states,
+                    target_hidden=target_hidden,
+                    ctx_pos_emb=ctx_pos_emb,
+                    prop_pos_emb=prop_pos_emb,
+                )
 
         return self.norm(hidden_states)
 
