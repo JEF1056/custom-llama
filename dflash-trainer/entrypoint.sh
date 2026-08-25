@@ -32,7 +32,7 @@ mkdir -p "$FEATURES_DIR" "$FIXED_VAL_DIR" "$OUTPUT_DIR" "$CACHE_DIR"
 
 EXPECTED_SHARDS=$(( NUM_SAMPLES / CHUNK_SIZE ))
 SHARD_COUNT=$(find "$FEATURES_DIR" -name "shard_*.pt*" 2>/dev/null | wc -l)
-PROJ_EXISTS=$(test -f "$FEATURES_DIR/embed.safetensors" && echo "yes" || echo "no")
+PROJ_EXISTS=$(test -f "$FEATURES_DIR/projection_weights.pt" && echo "yes" || echo "no")
 
 if [ "$SHARD_COUNT" -ge "$EXPECTED_SHARDS" ] && [ "$PROJ_EXISTS" = "yes" ]; then
     echo ">>> Found complete Phase 1 features ($SHARD_COUNT/$EXPECTED_SHARDS shards + embed.safetensors)."
