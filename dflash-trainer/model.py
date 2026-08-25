@@ -89,56 +89,38 @@ class RotaryEmbedding(nn.Module):
         return cos, sin
 
 
-class DynamicConv1D(nn.Module):
-    """
-    2-Tap Dynamic Convolution for DFlash 2.
-    base_kernel shape: [2, 2, hidden_size]
-    kernel_projection weight shape: [1280, hidden_size]
-    where 1280 = 2 * 2 * (hidden_size // conv_group_size) = 4 * 320
-    """
+class GroupedDynamicCausalConv(nn.Module):
     def __init__(self, hidden_size: int = 5120, kernel_size: int = 2, group_size: int = 16):
         super().__init__()
         self.hidden_size = hidden_size
         self.kernel_size = kernel_size
         self.group_size = group_size
-        self.num_groups = hidden_size // group_size  # 320
-        self.proj_dim = 2 * kernel_size * self.num_groups  # 1280
+        self.num_groups = hidden_size // group_size
+        self.proj_dim = 2 * kernel_size * self.num_groups
 
         self.base_kernel = nn.Parameter(torch.zeros(2, kernel_size, hidden_size))
         self.kernel_projection = nn.Linear(hidden_size, self.proj_dim, bias=False)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: [bsz, seq_len, hidden_size]
-        bsz, seq_len, hidden_size = x.shape
-        if seq_len < self.kernel_size:
-            return x
-
-        # 1. Project dynamic kernels
-        # [bsz, seq_len, 2, 2, num_groups]
-        dynamic_k = self.kernel_projection(x).view(bsz, seq_len, 2, self.kernel_size, self.num_groups)
-        # Expand num_groups to hidden_size by repeat_interleave
-        dynamic_k = dynamic_k.repeat_interleave(self.group_size, dim=-1)  # [bsz, seq_len, 2, 2, hidden_size]
-
-        # 2. Combine base kernel + dynamic kernel
-        # base_kernel: [2, 2, hidden_size] -> broadcast to [bsz, seq_len, 2, 2, hidden_size]
-        combined_k = self.base_kernel.unsqueeze(0).unsqueeze(0) + dynamic_k
-
-        # 3. 2-tap forward convolution along sequence length
-        # Pad left by (kernel_size - 1) for causal dependency within block
-        x_pad = F.pad(x, (0, 0, self.kernel_size - 1, 0))  # [bsz, seq_len + 1, hidden_size]
-        
-        # Tap 0 and Tap 1 convolutions
+    def _convolve(self, x: torch.Tensor, dynamic_k: torch.Tensor, base_k: torch.Tensor) -> torch.Tensor:
+        bsz, seq_len, _ = x.shape
+        dynamic_k = dynamic_k.repeat_interleave(self.group_size, dim=-1)
+        k = base_k.unsqueeze(0).unsqueeze(0) + dynamic_k
+        x_pad = F.pad(x, (0, 0, self.kernel_size - 1, 0))
         out = torch.zeros_like(x)
-        for tap in range(2):
-            k_tap = combined_k[:, :, tap]  # [bsz, seq_len, kernel_size, hidden_size]
-            tap_out = (
-                x_pad[:, 1 : seq_len + 1] * k_tap[:, :, 0]
-                + x_pad[:, 0 : seq_len] * k_tap[:, :, 1]
-            )
-            out = out + tap_out
+        for offset in range(self.kernel_size):
+            k_offset = k[:, :, offset]
+            x_shifted = x_pad[:, self.kernel_size - 1 - offset : self.kernel_size - 1 - offset + seq_len]
+            out = out + x_shifted * k_offset
+        return out
 
-        return x + out
+    def prepare(self, hidden: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        bsz, seq_len, _ = hidden.shape
+        dynamic = self.kernel_projection(hidden).view(bsz, seq_len, 2, self.kernel_size, self.num_groups)
+        prepared = self._convolve(hidden, dynamic[:, :, 0], self.base_kernel[0])
+        return prepared, dynamic[:, :, 1]
 
+    def finish(self, hidden: torch.Tensor, dynamic_tap1: torch.Tensor) -> torch.Tensor:
+        return self._convolve(hidden, dynamic_tap1, self.base_kernel[1])
 
 class CandidateSelector(nn.Module):
     """
@@ -189,96 +171,17 @@ class DFlash2Attention(nn.Module):
         ctx_pos_emb: Tuple[torch.Tensor, torch.Tensor],
         prop_pos_emb: Tuple[torch.Tensor, torch.Tensor],
     ) -> torch.Tensor:
-        if self.is_sliding and self.sliding_window is not None and target_hidden.shape[1] > self.sliding_window:
-            target_hidden = target_hidden[:, -self.sliding_window:]
-            ctx_cos, ctx_sin = ctx_pos_emb
-            ctx_pos_emb = (ctx_cos[:, -self.sliding_window:], ctx_sin[:, -self.sliding_window:])
-
-        bsz, q_len = hidden_states.shape[:-1]
-        ctx_len = target_hidden.shape[1]
-
-        q = self.q_proj(hidden_states)
-        q = q.view(bsz, q_len, self.n_heads, self.head_dim)
-        q = self.q_norm(q).transpose(1, 2)
-        q_cos, q_sin = prop_pos_emb
-        q = apply_rotary_pos_emb_single(q, q_cos, q_sin)
-
-        k_ctx = self.k_proj(target_hidden).view(bsz, ctx_len, self.n_kv_heads, self.head_dim)
-        v_ctx = self.v_proj(target_hidden).view(bsz, ctx_len, self.n_kv_heads, self.head_dim)
-        k_ctx = self.k_norm(k_ctx).transpose(1, 2)
-        v_ctx = v_ctx.transpose(1, 2)
-        ctx_cos, ctx_sin = ctx_pos_emb
-        k_ctx = apply_rotary_pos_emb_single(k_ctx, ctx_cos, ctx_sin)
-
-        k_prop = self.k_proj(hidden_states).view(bsz, q_len, self.n_kv_heads, self.head_dim)
-        v_prop = self.v_proj(hidden_states).view(bsz, q_len, self.n_kv_heads, self.head_dim)
-        k_prop = self.k_norm(k_prop).transpose(1, 2)
-        v_prop = v_prop.transpose(1, 2)
-        k_prop = apply_rotary_pos_emb_single(k_prop, q_cos, q_sin)
-
-        k = torch.cat([k_ctx, k_prop], dim=2)
-        v = torch.cat([v_ctx, v_prop], dim=2)
-
-        if self.n_heads != self.n_kv_heads:
-            ratio = self.n_heads // self.n_kv_heads
-            k = k.repeat_interleave(ratio, dim=1)
-            v = v.repeat_interleave(ratio, dim=1)
-
-        attn_out = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
-        attn_out = attn_out.transpose(1, 2).contiguous().view(bsz, q_len, -1)
-        return self.o_proj(attn_out)
-
-
-class Qwen3MLP(nn.Module):
-    def __init__(self, dim: int, hidden_dim: int):
-        super().__init__()
-        self.gate_proj = nn.Linear(dim, hidden_dim, bias=False)
-        self.down_proj = nn.Linear(hidden_dim, dim, bias=False)
-        self.up_proj = nn.Linear(dim, hidden_dim, bias=False)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
-
-
-class DFlash2DecoderLayer(nn.Module):
-    def __init__(self, config: DFlash2Config, layer_idx: int):
-        super().__init__()
-        self.attention_conv = DynamicConv1D(
-            hidden_size=config.hidden_size,
-            kernel_size=config.conv_kernel_size,
-            group_size=config.conv_group_size
-        )
-        self.self_attn = DFlash2Attention(config, layer_idx)
-        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        
-        self.mlp_conv = DynamicConv1D(
-            hidden_size=config.hidden_size,
-            kernel_size=config.conv_kernel_size,
-            group_size=config.conv_group_size
-        )
-        self.mlp = Qwen3MLP(config.hidden_size, config.intermediate_size)
-        self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        target_hidden: torch.Tensor,
-        ctx_pos_emb: Tuple[torch.Tensor, torch.Tensor],
-        prop_pos_emb: Tuple[torch.Tensor, torch.Tensor],
-    ) -> torch.Tensor:
-        # 1. Attention Conv + Self Attention Block
-        hidden_states = self.attention_conv(hidden_states)
         residual = hidden_states
-        h = self.input_layernorm(hidden_states)
+        h, kernel_attn = self.attention_conv.prepare(self.input_layernorm(hidden_states))
         h = self.self_attn(h, target_hidden, ctx_pos_emb, prop_pos_emb)
-        hidden_states = residual + h
+        hidden_states = residual + self.attention_conv.finish(h, kernel_attn)
 
-        # 2. MLP Conv + Feed Forward Block
-        hidden_states = self.mlp_conv(hidden_states)
         residual = hidden_states
-        h = self.post_attention_layernorm(hidden_states)
+        h, kernel_mlp = self.mlp_conv.prepare(self.post_attention_layernorm(hidden_states))
         h = self.mlp(h)
-        return residual + h
+        hidden_states = residual + self.mlp_conv.finish(h, kernel_mlp)
+        
+        return hidden_states
 
 
 class DFlash2DraftModel(nn.Module):

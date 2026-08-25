@@ -455,7 +455,20 @@ def main():
 
                 # DFlash 2 Candidate Selector Loss
                 if k > 2:
-                    selector_logits = selector_feat[:, 1:-1] @ drafter.candidate_selector.successor_codebook.T
+                    # selector_feat: [bsz, k, rank]
+                    # predecessor is the actual token that generated the next candidate
+                    # The token sequence for the block is block_tok. 
+                    # block_tok[:, 0] is the anchor, block_tok[:, 1:] are the drafted tokens.
+                    # For predicting targets[:, 1:] (which is block_tok[:, 2:]), the predecessor is block_tok[:, 1:-1].
+                    predecessor_ids = block_tok[:, 1:-1].contiguous() # [bsz, k-2]
+                    pred_emb = drafter.candidate_selector.predecessor_codebook[predecessor_ids] # [bsz, k-2, rank]
+                    
+                    # Compute the transition features
+                    transition_feat = pred_emb * selector_feat[:, 1:-1] # [bsz, k-2, rank]
+                    
+                    # Compute logits over vocab
+                    selector_logits = transition_feat @ drafter.candidate_selector.successor_codebook.T # [bsz, k-2, vocab_size]
+                    
                     loss_selector = F.cross_entropy(
                         selector_logits.reshape(-1, config.vocab_size),
                         targets[:, 1:].reshape(-1),
@@ -463,7 +476,6 @@ def main():
                     loss = loss_ce + 0.1 * loss_selector
                 else:
                     loss = loss_ce
-
                 loss_scaled = loss / args.grad_accum_steps
 
             loss_scaled.backward()
