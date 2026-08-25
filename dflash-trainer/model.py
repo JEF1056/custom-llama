@@ -1,6 +1,7 @@
 """
-DFlash Draft Model Architecture Definition.
-100% Parameter, Architecture, and Key Match with official z-lab/Qwen3.6-27B-DFlash.
+DFlash 2 Draft Model Architecture Definition.
+100% Parameter, Architecture, and Key Match with official z-lab/Qwen3.8-27B-DFlash2.
+Includes 2-Tap Dynamic Convolutions and Candidate Path Selector Codebooks.
 """
 
 from dataclasses import dataclass, field
@@ -13,7 +14,7 @@ import torch.nn.functional as F
 
 
 @dataclass
-class DFlashConfig:
+class DFlash2Config:
     hidden_size: int = 5120
     intermediate_size: int = 17408
     num_hidden_layers: int = 5
@@ -24,9 +25,9 @@ class DFlashConfig:
     vocab_size: int = 248320
     max_position_embeddings: int = 262144
     rope_theta: float = 10000000.0
-    block_size: int = 16
+    block_size: int = 8
     mask_token_id: int = 248070
-    target_layer_ids: List[int] = field(default_factory=lambda: [1, 16, 31, 46, 61])
+    target_layer_ids: List[int] = field(default_factory=lambda: [5, 19, 33, 47, 61])
     num_target_layers: int = 64
     sliding_window: int = 2048
     layer_types: List[str] = field(default_factory=lambda: [
@@ -34,10 +35,14 @@ class DFlashConfig:
         "sliding_attention",
         "sliding_attention",
         "sliding_attention",
-        "full_attention"
+        "sliding_attention"
     ])
     attention_bias: bool = False
     attention_dropout: float = 0.0
+    conv_kernel_size: int = 2
+    conv_group_size: int = 16
+    selector_rank: int = 256
+    selector_top_k: int = 16
 
 
 class RMSNorm(nn.Module):
@@ -47,8 +52,10 @@ class RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(dim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        variance = x.pow(2).mean(-1, keepdim=True)
-        return x * torch.rsqrt(variance + self.eps) * self.weight
+        input_dtype = x.dtype
+        x_fp32 = x.float()
+        variance = x_fp32.pow(2).mean(-1, keepdim=True)
+        return (x_fp32 * torch.rsqrt(variance + self.eps)).to(input_dtype) * self.weight
 
 
 def rotate_half(x: torch.Tensor) -> torch.Tensor:
@@ -73,7 +80,6 @@ class RotaryEmbedding(nn.Module):
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
     def forward(self, x: torch.Tensor, position_ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        # position_ids: [bsz, seq_len]
         inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
         position_ids_expanded = position_ids[:, None, :].float()
         freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
@@ -83,8 +89,81 @@ class RotaryEmbedding(nn.Module):
         return cos, sin
 
 
-class DFlashAttention(nn.Module):
-    def __init__(self, config: DFlashConfig, layer_idx: int):
+class DynamicConv1D(nn.Module):
+    """
+    2-Tap Dynamic Convolution for DFlash 2.
+    base_kernel shape: [2, 2, hidden_size]
+    kernel_projection weight shape: [1280, hidden_size]
+    where 1280 = 2 * 2 * (hidden_size // conv_group_size) = 4 * 320
+    """
+    def __init__(self, hidden_size: int = 5120, kernel_size: int = 2, group_size: int = 16):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.kernel_size = kernel_size
+        self.group_size = group_size
+        self.num_groups = hidden_size // group_size  # 320
+        self.proj_dim = 2 * kernel_size * self.num_groups  # 1280
+
+        self.base_kernel = nn.Parameter(torch.zeros(2, kernel_size, hidden_size))
+        self.kernel_projection = nn.Linear(hidden_size, self.proj_dim, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [bsz, seq_len, hidden_size]
+        bsz, seq_len, hidden_size = x.shape
+        if seq_len < self.kernel_size:
+            return x
+
+        # 1. Project dynamic kernels
+        # [bsz, seq_len, 2, 2, num_groups]
+        dynamic_k = self.kernel_projection(x).view(bsz, seq_len, 2, self.kernel_size, self.num_groups)
+        # Expand num_groups to hidden_size by repeat_interleave
+        dynamic_k = dynamic_k.repeat_interleave(self.group_size, dim=-1)  # [bsz, seq_len, 2, 2, hidden_size]
+
+        # 2. Combine base kernel + dynamic kernel
+        # base_kernel: [2, 2, hidden_size] -> broadcast to [bsz, seq_len, 2, 2, hidden_size]
+        combined_k = self.base_kernel.unsqueeze(0).unsqueeze(0) + dynamic_k
+
+        # 3. 2-tap forward convolution along sequence length
+        # Pad left by (kernel_size - 1) for causal dependency within block
+        x_pad = F.pad(x, (0, 0, self.kernel_size - 1, 0))  # [bsz, seq_len + 1, hidden_size]
+        
+        # Tap 0 and Tap 1 convolutions
+        out = torch.zeros_like(x)
+        for tap in range(2):
+            k_tap = combined_k[:, :, tap]  # [bsz, seq_len, kernel_size, hidden_size]
+            tap_out = (
+                x_pad[:, 1 : seq_len + 1] * k_tap[:, :, 0]
+                + x_pad[:, 0 : seq_len] * k_tap[:, :, 1]
+            )
+            out = out + tap_out
+
+        return x + out
+
+
+class CandidateSelector(nn.Module):
+    """
+    DFlash 2 Candidate Path Selector Codebooks.
+    hidden_projection: [256, hidden_size]
+    predecessor_codebook: [vocab_size, 256]
+    successor_codebook: [vocab_size, 256]
+    """
+    def __init__(self, hidden_size: int = 5120, vocab_size: int = 248320, rank: int = 256):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.vocab_size = vocab_size
+        self.rank = rank
+
+        self.hidden_projection = nn.Linear(hidden_size, rank, bias=False)
+        self.predecessor_codebook = nn.Parameter(torch.zeros(vocab_size, rank))
+        self.successor_codebook = nn.Parameter(torch.zeros(vocab_size, rank))
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        # hidden_states: [bsz, block_size, hidden_size] -> [bsz, block_size, rank]
+        return self.hidden_projection(hidden_states)
+
+
+class DFlash2Attention(nn.Module):
+    def __init__(self, config: DFlash2Config, layer_idx: int):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
@@ -118,30 +197,26 @@ class DFlashAttention(nn.Module):
         bsz, q_len = hidden_states.shape[:-1]
         ctx_len = target_hidden.shape[1]
 
-        # 1. Query projection + norm + RoPE (at proposal positions [S .. S+L-1])
         q = self.q_proj(hidden_states)
         q = q.view(bsz, q_len, self.n_heads, self.head_dim)
-        q = self.q_norm(q).transpose(1, 2)  # [bsz, n_heads, q_len, head_dim]
+        q = self.q_norm(q).transpose(1, 2)
         q_cos, q_sin = prop_pos_emb
         q = apply_rotary_pos_emb_single(q, q_cos, q_sin)
 
-        # 2. Context Key/Value projection + norm + RoPE (at context positions [0 .. S-1])
         k_ctx = self.k_proj(target_hidden).view(bsz, ctx_len, self.n_kv_heads, self.head_dim)
         v_ctx = self.v_proj(target_hidden).view(bsz, ctx_len, self.n_kv_heads, self.head_dim)
-        k_ctx = self.k_norm(k_ctx).transpose(1, 2)  # [bsz, n_kv_heads, ctx_len, head_dim]
+        k_ctx = self.k_norm(k_ctx).transpose(1, 2)
         v_ctx = v_ctx.transpose(1, 2)
         ctx_cos, ctx_sin = ctx_pos_emb
         k_ctx = apply_rotary_pos_emb_single(k_ctx, ctx_cos, ctx_sin)
 
-        # 3. Proposal Key/Value projection + norm + RoPE (at proposal positions [S .. S+L-1])
         k_prop = self.k_proj(hidden_states).view(bsz, q_len, self.n_kv_heads, self.head_dim)
         v_prop = self.v_proj(hidden_states).view(bsz, q_len, self.n_kv_heads, self.head_dim)
-        k_prop = self.k_norm(k_prop).transpose(1, 2)  # [bsz, n_kv_heads, q_len, head_dim]
+        k_prop = self.k_norm(k_prop).transpose(1, 2)
         v_prop = v_prop.transpose(1, 2)
         k_prop = apply_rotary_pos_emb_single(k_prop, q_cos, q_sin)
 
-        # 4. Concatenate Context + Proposal Keys & Values
-        k = torch.cat([k_ctx, k_prop], dim=2)  # [bsz, n_kv_heads, ctx_len + q_len, head_dim]
+        k = torch.cat([k_ctx, k_prop], dim=2)
         v = torch.cat([v_ctx, v_prop], dim=2)
 
         if self.n_heads != self.n_kv_heads:
@@ -149,7 +224,6 @@ class DFlashAttention(nn.Module):
             k = k.repeat_interleave(ratio, dim=1)
             v = v.repeat_interleave(ratio, dim=1)
 
-        # Standard non-causal Flash Attention across context + draft proposal block
         attn_out = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
         attn_out = attn_out.transpose(1, 2).contiguous().view(bsz, q_len, -1)
         return self.o_proj(attn_out)
@@ -166,12 +240,23 @@ class Qwen3MLP(nn.Module):
         return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
 
 
-class DFlashDecoderLayer(nn.Module):
-    def __init__(self, config: DFlashConfig, layer_idx: int):
+class DFlash2DecoderLayer(nn.Module):
+    def __init__(self, config: DFlash2Config, layer_idx: int):
         super().__init__()
-        self.self_attn = DFlashAttention(config, layer_idx)
-        self.mlp = Qwen3MLP(config.hidden_size, config.intermediate_size)
+        self.attention_conv = DynamicConv1D(
+            hidden_size=config.hidden_size,
+            kernel_size=config.conv_kernel_size,
+            group_size=config.conv_group_size
+        )
+        self.self_attn = DFlash2Attention(config, layer_idx)
         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        
+        self.mlp_conv = DynamicConv1D(
+            hidden_size=config.hidden_size,
+            kernel_size=config.conv_kernel_size,
+            group_size=config.conv_group_size
+        )
+        self.mlp = Qwen3MLP(config.hidden_size, config.intermediate_size)
         self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(
@@ -181,41 +266,53 @@ class DFlashDecoderLayer(nn.Module):
         ctx_pos_emb: Tuple[torch.Tensor, torch.Tensor],
         prop_pos_emb: Tuple[torch.Tensor, torch.Tensor],
     ) -> torch.Tensor:
+        # 1. Attention Conv + Self Attention Block
+        hidden_states = self.attention_conv(hidden_states)
         residual = hidden_states
         h = self.input_layernorm(hidden_states)
         h = self.self_attn(h, target_hidden, ctx_pos_emb, prop_pos_emb)
         hidden_states = residual + h
 
+        # 2. MLP Conv + Feed Forward Block
+        hidden_states = self.mlp_conv(hidden_states)
         residual = hidden_states
         h = self.post_attention_layernorm(hidden_states)
         h = self.mlp(h)
         return residual + h
 
 
-class DFlashDraftModel(nn.Module):
+class DFlash2DraftModel(nn.Module):
     """
-    Official 100% Reference DFlashDraftModel matching z-lab/Qwen3.6-27B-DFlash.
+    Official 100% Reference DFlash 2 Draft Model matching z-lab/Qwen3.8-27B-DFlash2.
+    Contains exactly 81 weight tensors.
     """
 
-    def __init__(self, config: DFlashConfig):
+    def __init__(self, config: Optional[DFlash2Config] = None):
         super().__init__()
-        self.config = config
+        self.config = config or DFlash2Config()
         self.gradient_checkpointing = False
-        concat_dim = len(config.target_layer_ids) * config.hidden_size
-        self.fc = nn.Linear(concat_dim, config.hidden_size, bias=False)
-        self.hidden_norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        
+        concat_dim = len(self.config.target_layer_ids) * self.config.hidden_size
+        self.fc = nn.Linear(concat_dim, self.config.hidden_size, bias=False)
+        self.hidden_norm = RMSNorm(self.config.hidden_size, eps=self.config.rms_norm_eps)
+        
+        self.candidate_selector = CandidateSelector(
+            hidden_size=self.config.hidden_size,
+            vocab_size=self.config.vocab_size,
+            rank=self.config.selector_rank
+        )
+
         self.layers = nn.ModuleList([
-            DFlashDecoderLayer(config, i) for i in range(config.num_hidden_layers)
+            DFlash2DecoderLayer(self.config, i) for i in range(self.config.num_hidden_layers)
         ])
-        self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.norm = RMSNorm(self.config.hidden_size, eps=self.config.rms_norm_eps)
         self.rotary_emb = RotaryEmbedding(
-            dim=config.head_dim,
-            max_position_embeddings=config.max_position_embeddings,
-            base=config.rope_theta,
+            dim=self.config.head_dim,
+            max_position_embeddings=self.config.max_position_embeddings,
+            base=self.config.rope_theta,
         )
 
     def gradient_checkpointing_enable(self):
-        """Enables gradient checkpointing for all decoder layers to save activation memory."""
         self.gradient_checkpointing = True
 
     def forward(
@@ -224,7 +321,9 @@ class DFlashDraftModel(nn.Module):
         target_hidden: torch.Tensor,
         ctx_position_ids: torch.Tensor,
         prop_position_ids: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # noise_embedding: [bsz, block_size, hidden_size]
+        # target_hidden: [bsz, ctx_len, 5 * hidden_size]
         hidden_states = noise_embedding
         target_hidden = self.hidden_norm(self.fc(target_hidden))
 
@@ -249,32 +348,33 @@ class DFlashDraftModel(nn.Module):
                     prop_pos_emb=prop_pos_emb,
                 )
 
-        return self.norm(hidden_states)
+        normed_h = self.norm(hidden_states)
+        selector_feat = self.candidate_selector(normed_h)
+        return normed_h, selector_feat
 
     def export_mlx_safetensors(self, output_dir: str):
-        """Export weights and config.json matching official z-lab repository format."""
         os.makedirs(output_dir, exist_ok=True)
         from safetensors.torch import save_file
 
         state_dict = {}
         for k, v in self.state_dict().items():
             if k.startswith("rotary_emb."):
-                continue  # Rotary inv_freq buffers not needed in safetensors
+                continue
             state_dict[k] = v.contiguous().to(torch.bfloat16)
 
         save_file(state_dict, os.path.join(output_dir, "model.safetensors"))
 
         cfg_dict = {
-            "architectures": ["DFlashDraftModel"],
+            "architectures": ["DFlash2DraftModel"],
             "attention_bias": False,
             "attention_dropout": 0.0,
-            "auto_map": {
-                "AutoModel": "dflash.DFlashDraftModel"
-            },
-            "block_size": self.config.block_size,
-            "bos_token_id": None,
             "dflash_config": {
+                "block_size": self.config.block_size,
+                "conv_group_size": self.config.conv_group_size,
+                "conv_kernel_size": self.config.conv_kernel_size,
                 "mask_token_id": self.config.mask_token_id,
+                "selector_rank": self.config.selector_rank,
+                "selector_top_k": self.config.selector_top_k,
                 "target_layer_ids": list(self.config.target_layer_ids),
             },
             "dtype": "bfloat16",
@@ -294,15 +394,22 @@ class DFlashDraftModel(nn.Module):
             "num_target_layers": self.config.num_target_layers,
             "pad_token_id": 248044,
             "rms_norm_eps": self.config.rms_norm_eps,
+            "rope_parameters": {
+                "rope_theta": self.config.rope_theta,
+                "rope_type": "default"
+            },
             "sliding_window": self.config.sliding_window,
             "tie_word_embeddings": False,
-            "transformers_version": "5.5.3",
+            "transformers_version": "5.15.0",
             "use_cache": True,
             "use_sliding_window": True,
-            "vocab_size": self.config.vocab_size,
-            "rope_theta": self.config.rope_theta,
-            "rope_scaling": None,
+            "vocab_size": self.config.vocab_size
         }
 
         with open(os.path.join(output_dir, "config.json"), "w") as f:
             json.dump(cfg_dict, f, indent=2)
+
+
+# Aliases for backward compatibility
+DFlashDraftModel = DFlash2DraftModel
+DFlashConfig = DFlash2Config
