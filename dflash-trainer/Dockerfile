@@ -18,7 +18,8 @@ RUN pip install --no-cache-dir \
     datasets \
     safetensors \
     sentencepiece \
-    bitsandbytes
+    bitsandbytes \
+    zstandard
 
 WORKDIR /workspace
 
