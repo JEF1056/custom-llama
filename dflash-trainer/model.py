@@ -114,6 +114,7 @@ class GroupedDynamicCausalConv(nn.Module):
         return out
 
     def prepare(self, hidden: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        from typing import Tuple
         bsz, seq_len, _ = hidden.shape
         dynamic = self.kernel_projection(hidden).view(bsz, seq_len, 2, self.kernel_size, self.num_groups)
         prepared = self._convolve(hidden, dynamic[:, :, 0], self.base_kernel[0])
@@ -163,6 +164,83 @@ class DFlash2Attention(nn.Module):
         self.o_proj = nn.Linear(self.n_heads * self.head_dim, dim, bias=config.attention_bias)
         self.q_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
         self.k_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        target_hidden: torch.Tensor,
+        ctx_pos_emb: Tuple[torch.Tensor, torch.Tensor],
+        prop_pos_emb: Tuple[torch.Tensor, torch.Tensor],
+    ) -> torch.Tensor:
+        if self.is_sliding and self.sliding_window is not None and target_hidden.shape[1] > self.sliding_window:
+            target_hidden = target_hidden[:, -self.sliding_window:]
+            ctx_cos, ctx_sin = ctx_pos_emb
+            ctx_pos_emb = (ctx_cos[:, -self.sliding_window:], ctx_sin[:, -self.sliding_window:])
+
+        bsz, q_len = hidden_states.shape[:-1]
+        ctx_len = target_hidden.shape[1]
+
+        q = self.q_proj(hidden_states)
+        q = q.view(bsz, q_len, self.n_heads, self.head_dim)
+        q = self.q_norm(q).transpose(1, 2)
+        q_cos, q_sin = prop_pos_emb
+        q = apply_rotary_pos_emb_single(q, q_cos, q_sin)
+
+        k_ctx = self.k_proj(target_hidden).view(bsz, ctx_len, self.n_kv_heads, self.head_dim)
+        v_ctx = self.v_proj(target_hidden).view(bsz, ctx_len, self.n_kv_heads, self.head_dim)
+        k_ctx = self.k_norm(k_ctx).transpose(1, 2)
+        v_ctx = v_ctx.transpose(1, 2)
+        ctx_cos, ctx_sin = ctx_pos_emb
+        k_ctx = apply_rotary_pos_emb_single(k_ctx, ctx_cos, ctx_sin)
+
+        k_prop = self.k_proj(hidden_states).view(bsz, q_len, self.n_kv_heads, self.head_dim)
+        v_prop = self.v_proj(hidden_states).view(bsz, q_len, self.n_kv_heads, self.head_dim)
+        k_prop = self.k_norm(k_prop).transpose(1, 2)
+        v_prop = v_prop.transpose(1, 2)
+        k_prop = apply_rotary_pos_emb_single(k_prop, q_cos, q_sin)
+
+        k = torch.cat([k_ctx, k_prop], dim=2)
+        v = torch.cat([v_ctx, v_prop], dim=2)
+
+        if self.n_heads != self.n_kv_heads:
+            ratio = self.n_heads // self.n_kv_heads
+            k = k.repeat_interleave(ratio, dim=1)
+            v = v.repeat_interleave(ratio, dim=1)
+
+        attn_out = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
+        attn_out = attn_out.transpose(1, 2).contiguous().view(bsz, q_len, -1)
+        return self.o_proj(attn_out)
+
+
+class Qwen3MLP(nn.Module):
+    def __init__(self, dim: int, hidden_dim: int):
+        super().__init__()
+        self.gate_proj = nn.Linear(dim, hidden_dim, bias=False)
+        self.down_proj = nn.Linear(hidden_dim, dim, bias=False)
+        self.up_proj = nn.Linear(dim, hidden_dim, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
+
+
+class DFlash2DecoderLayer(nn.Module):
+    def __init__(self, config: DFlash2Config, layer_idx: int):
+        super().__init__()
+        self.attention_conv = GroupedDynamicCausalConv(
+            hidden_size=config.hidden_size,
+            kernel_size=config.conv_kernel_size,
+            group_size=config.conv_group_size
+        )
+        self.self_attn = DFlash2Attention(config, layer_idx)
+        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        
+        self.mlp_conv = GroupedDynamicCausalConv(
+            hidden_size=config.hidden_size,
+            kernel_size=config.conv_kernel_size,
+            group_size=config.conv_group_size
+        )
+        self.mlp = Qwen3MLP(config.hidden_size, config.intermediate_size)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(
         self,
