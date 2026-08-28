@@ -97,4 +97,22 @@ else
         "$SRC_GGUF" "$OUT_GGUF" "$QUANT_TYPE"
 fi
 
+# Quantize DFlash2 drafter to iq4_kss
+DFLASH_SRC_GGUF=${DFLASH_SRC_GGUF:-"$SRC_DIR/Qwen3.8-27B-DFlash2-BF16.gguf"}
+DFLASH_OUT_GGUF=${DFLASH_OUT_GGUF:-"/models/Qwen3.8-27B-DFlash2-iq4_kss.gguf"}
+if [[ ! -f "$DFLASH_SRC_GGUF" && -f "$SRC_DIR/Qwen3.8-27B-DFlash2-Q8_0.gguf" ]]; then
+    DFLASH_SRC_GGUF="$SRC_DIR/Qwen3.8-27B-DFlash2-Q8_0.gguf"
+fi
+
+if [[ -f "$DFLASH_SRC_GGUF" ]]; then
+    if [[ -f "$DFLASH_OUT_GGUF" && -s "$DFLASH_OUT_GGUF" ]]; then
+        echo "[quantize] Target quantized DFlash2 GGUF already exists: $DFLASH_OUT_GGUF (skipping quantize)"
+    else
+        echo "[quantize] Quantizing DFlash2 $DFLASH_SRC_GGUF -> $DFLASH_OUT_GGUF (pure $QUANT_TYPE)"
+        "$LLAMA_BIN_DIR/llama-quantize" \
+            --allow-requantize \
+            "$DFLASH_SRC_GGUF" "$DFLASH_OUT_GGUF" "$QUANT_TYPE"
+    fi
+fi
+
 echo "[quantize] done: $OUT_GGUF"
