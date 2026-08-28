@@ -260,7 +260,7 @@ cat << 'EOF' > "$CONFIG_DEST"
           "tools": true,
           "attachment": true,
           "limit": {
-            "context": 262144,
+            "context": 100000,
             "output": 8192
           }
         }

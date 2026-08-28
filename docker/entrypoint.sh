@@ -26,9 +26,8 @@ NGL=${NGL:-999}
 # Flash attention. GPU-only feature; set to off for CPU-only deployments
 # (the cpu Compose services set FLASH_ATTN=off automatically).
 FLASH_ATTN=${FLASH_ATTN:-on}
-# Context window in tokens. Default = the model's full native 262144. Set
-# CTX=0 to let ik_llama auto-fit context to available VRAM instead.
-CTX=${CTX:-262144}
+# Context window in tokens. Default = 200,000 tokens (100k tokens per slot for 2 parallel slots).
+CTX=${CTX:-200000}
 # KV-cache data type for the 10 full-attention layers (the 30 DeltaNet layers
 # use a fixed-size recurrent state, independent of KV type/context length).
 # q4_0 is the recipe default (~1.5 GB at 262K, see migration plan section 4b).
@@ -45,10 +44,8 @@ KV_HADAMARD=${KV_HADAMARD:-1}
 CACHE_RAM_MIB=${CACHE_RAM_MIB:-8192}
 
 # Number of concurrent request slots. The server splits the KV context evenly
-# across slots, so N_PARALLEL slots cap a single sequence to CTX / N_PARALLEL
-# tokens. Keep this at 1 so one request can use the FULL CTX (needed for long
-# 100K+ context); raise it only for concurrent serving of shorter sequences.
-N_PARALLEL=${N_PARALLEL:-1}
+# across slots, so N_PARALLEL=2 with CTX=200000 provides 100k tokens per slot.
+N_PARALLEL=${N_PARALLEL:-2}
 
 # Model-loading memory behavior. Since the model is fully GPU-offloaded (NGL=999),
 # these mainly affect load-time staging, not steady-state decode throughput.
