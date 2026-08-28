@@ -76,6 +76,7 @@ ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64/stubs${LD_LIBRARY_PATH:+:${LD_LIBRARY
 # llama-quantize/llama-imatrix/llama-gguf-split, used by scripts/ for the
 # offline weights pipeline (run inside this same image, see docs/
 # iqllama-migration-plan.md Phase 2).
+ARG BUILD_JOBS=4
 RUN cmake -B build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DGGML_CUDA=ON \
@@ -84,7 +85,7 @@ RUN cmake -B build -G Ninja \
         -DLLAMA_CURL=ON \
         -DLLAMA_OPENSSL=ON \
         -DLLAMA_BUILD_SERVER=ON \
-    && cmake --build build --target llama-server llama-quantize llama-imatrix llama-gguf-split llama-bench -j
+    && cmake --build build --target llama-server llama-quantize llama-imatrix llama-gguf-split llama-bench -j ${BUILD_JOBS}
 
 # CMake scatters the shared libs (libggml*.so, libllama.so, libmtmd.so, ...)
 # across their respective build subdirectories rather than build/bin/; collect
