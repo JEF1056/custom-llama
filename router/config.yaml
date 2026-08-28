@@ -1,7 +1,9 @@
 server:
   host: "0.0.0.0"
   port: 40114
-  write_timeout: 0s
+  read_timeout: 10m
+  write_timeout: 15m
+  idle_timeout: 15m
 
 proxy:
   engine: "olla"
