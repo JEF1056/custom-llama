@@ -1,0 +1,101 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "./.opencode/plugins/olla-session.js"
+  ],
+  "provider": {
+    "olla": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "olla",
+      "options": {
+        "baseURL": "http://coolify:4000/olla/openai/v1",
+        "apiKey": "router-master-key"
+      },
+      "models": {
+        "qwen3.8-27b": {
+          "name": "Qwen3.8-27B (Olla)",
+          "tools": true,
+          "attachment": true,
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
+        },
+        "qwen3.6-35b": {
+          "name": "Qwen3.6-35B (Olla)",
+          "tools": true,
+          "attachment": true,
+          "limit": {
+            "context": 262144,
+            "output": 8192
+          }
+        }
+      }
+    },
+    "llama-ml1": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "llama-ml1",
+      "options": {
+        "baseURL": "http://100.118.67.28:8080/v1",
+        "apiKey": "sk-noauth"
+      },
+      "models": {
+        "/models/qwen3.8-27b": {
+          "name": "Qwen3.8-27B-CUDA (ml-1-wsl)",
+          "tools": true,
+          "attachment": true,
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
+        }
+      }
+    },
+    "llama-ml2": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "llama-ml2",
+      "options": {
+        "baseURL": "http://100.77.84.65:8080/v1",
+        "apiKey": "sk-noauth"
+      },
+      "models": {
+        "trohrbaugh/Qwen3.8-27B-heretic-ara": {
+          "name": "Qwen3.8-27B-MLX (ml-2)",
+          "tools": true,
+          "attachment": true,
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
+        }
+      }
+    },
+    "llama-ml3": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "llama-ml3",
+      "options": {
+        "baseURL": "http://100.93.207.60:8080/v1",
+        "apiKey": "sk-noauth"
+      },
+      "models": {
+        "trohrbaugh/Qwen3.8-27B-heretic-ara": {
+          "name": "Qwen3.8-27B-MLX (ml-3)",
+          "tools": true,
+          "attachment": true,
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
+        }
+      }
+    }
+  },
+  "model": "olla/qwen3.8-27b",
+  "mcp": {
+    "mcp-search-server": {
+      "type": "remote",
+      "enabled": true,
+      "url": "http://localhost:3100/"
+    }
+  }
+}
