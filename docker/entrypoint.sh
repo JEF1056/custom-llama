@@ -135,12 +135,13 @@ export LLAMA_CACHE=${LLAMA_CACHE:-/workspace/models}
 mkdir -p "$LLAMA_CACHE"
 
 # --- Assemble llama-server flags ---------------------------------------------
+ENABLE_JINJA=${ENABLE_JINJA:-1}
+
 SERVER_ARGS=(
     --host 0.0.0.0
     --port "$PORT"
     -ngl "$NGL"
     -fa "$FLASH_ATTN"
-    --jinja
     --parallel "$N_PARALLEL"
     -t "$THREADS"
     -tb "$THREADS_BATCH"
@@ -155,6 +156,10 @@ SERVER_ARGS=(
     --presence-penalty "$PRESENCE_PENALTY"
     --repeat-penalty "$REPEAT_PENALTY"
 )
+case "${ENABLE_JINJA,,}" in
+    0|false|no|off|"") ;;
+    *) SERVER_ARGS+=(--jinja) ;;
+esac
 case "${DISABLE_MMAP,,}" in
     0|false|no|off|"") ;;
     *) SERVER_ARGS+=(--no-mmap) ;;
