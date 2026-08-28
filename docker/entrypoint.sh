@@ -227,10 +227,25 @@ if [[ "$VISION_ON" == "1" ]]; then
         SERVER_ARGS+=(--mmproj "$MMPROJ_PATH")
     fi
 fi
+# Speculative Decoding Pipeline
+# ik_llama.cpp supports two-stage speculative chaining:
+#   Stage 1: Self-spec drafter (e.g. ngram-mod) — zero-latency CPU pattern lookup
+#   Stage 2: Neural drafter (MTP head or DFlash model) — GPU semantic speculative decode
+
+case "${ENABLE_NGRAM,,}" in
+    0|false|no|off|"") NGRAM_ON=0 ;;
+    *)                 NGRAM_ON=1 ;;
+esac
 case "${ENABLE_DFLASH,,}" in
     1|true|yes|on) DFLASH_ON=1 ;;
     *)             DFLASH_ON=0 ;;
 esac
+case "${ENABLE_MTP,,}" in
+    0|false|no|off|"") MTP_ON=0 ;;
+    *)                 MTP_ON=1 ;;
+esac
+
+# 1. Load DFlash draft weights if enabled
 if [[ "$DFLASH_ON" == "1" ]]; then
     DFLASH_PATH="/models/${DFLASH_FILE}"
     if [[ ! -f "$DFLASH_PATH" ]]; then
@@ -241,24 +256,18 @@ if [[ "$DFLASH_ON" == "1" ]]; then
             exit 1
         }
     fi
-    SERVER_ARGS+=(--model-draft "$DFLASH_PATH" --spec-type "dflash:n_max=${DFLASH_N_MAX},p_min=${DFLASH_P_MIN}")
+    SERVER_ARGS+=(--model-draft "$DFLASH_PATH")
 fi
-# MTP self-speculative decoding: no separate draft file - the trailing MTP
-# layer(s) are baked into the same GGUF. If the n-gram drafter is also
-# enabled, its --spec-type must be registered FIRST so it forms the first
-# (cheap) stage of the two-stage chain, with MTP as the second stage.
-case "${ENABLE_MTP,,}" in
-    0|false|no|off|"") MTP_ON=0 ;;
-    *)                 MTP_ON=1 ;;
-esac
-case "${ENABLE_NGRAM,,}" in
-    0|false|no|off|"") NGRAM_ON=0 ;;
-    *)                  NGRAM_ON=1 ;;
-esac
+
+# 2. Stage 1: Self-spec drafter (must be registered first)
 if [[ "$NGRAM_ON" == "1" ]]; then
     SERVER_ARGS+=(--spec-type "${NGRAM_TYPE}:n_max=${NGRAM_N_MAX},n_min=${NGRAM_N_MIN},ngram_size_n=${NGRAM_SIZE_N}")
 fi
-if [[ "$MTP_ON" == "1" && "$DFLASH_ON" == "0" ]]; then
+
+# 3. Stage 2: Neural drafter (DFlash draft model or native MTP head)
+if [[ "$DFLASH_ON" == "1" ]]; then
+    SERVER_ARGS+=(--spec-type "draft:n_max=${DFLASH_N_MAX},p_min=${DFLASH_P_MIN}")
+elif [[ "$MTP_ON" == "1" ]]; then
     SERVER_ARGS+=(--spec-type "mtp:n_max=${MTP_N_MAX},p_min=${MTP_P_MIN}")
     if [[ -n "$MTP_REQUANTIZE_OUTPUT_TYPE" ]]; then
         SERVER_ARGS+=(--mtp-requantize-output-tensor "$MTP_REQUANTIZE_OUTPUT_TYPE")
