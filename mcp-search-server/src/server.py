@@ -336,7 +336,7 @@ async def delete_file_api(request: Request) -> Response:
     return JSONResponse({"status": "success", "message": f"Deleted file: {filename}"})
 
 
-FILE_UI_HTML = """<!DOCTYPE html>
+FILE_UI_HTML = r"""<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>File Manager</title>
