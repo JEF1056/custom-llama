@@ -31,7 +31,7 @@ export const TpsPlugin = async () => {
         const tps = compTokens > 0 ? (compTokens / durationSec).toFixed(1) : "0.0"
 
         console.log(
-          `⚡ [Olla TPS] ${compTokens} tokens in ${durationSec.toFixed(2)}s (${tps} tok/s) | prompt: ${promptTokens} tok | total: ${totalTokens} tok`
+          `⚡ [TPS] ${compTokens} tokens in ${durationSec.toFixed(2)}s (${tps} tok/s) | prompt: ${promptTokens} tok | total: ${totalTokens} tok`
         )
       }
     },

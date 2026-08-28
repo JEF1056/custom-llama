@@ -85,9 +85,15 @@ TARGET_DIR="$(cd "$TARGET_DIR" 2>/dev/null && pwd || echo "$TARGET_DIR")"
 echo -e "${BLUE}=== OpenCode + Olla Cluster Installer ===${NC}"
 echo -e "Target Directory: ${GREEN}$TARGET_DIR${NC}"
 
-# Directories
+# -----------------------------------------------------------------------------
+# Clean up prior installation artifacts for a fresh install
+# -----------------------------------------------------------------------------
 PLUGIN_DIR="$TARGET_DIR/.opencode/plugins"
 LEGACY_PLUGIN_DIR="$TARGET_DIR/.opencode/plugin"
+
+echo -e "${YELLOW}Cleaning up prior installation artifacts for fresh install...${NC}"
+rm -rf "$PLUGIN_DIR" "$LEGACY_PLUGIN_DIR"
+rm -f "$TARGET_DIR/opencode.json.bak"*
 mkdir -p "$PLUGIN_DIR" "$LEGACY_PLUGIN_DIR"
 
 # -----------------------------------------------------------------------------
@@ -124,7 +130,7 @@ export const OllaSession = async () => {
 
 export default OllaSession
 EOF
-echo -e "  ${GREEN}✓${NC} Installed plugin: ${CYAN}.opencode/plugins/olla-session.js${NC}"
+echo -e "  ${GREEN}✓${NC} Installed fresh plugin: ${CYAN}.opencode/plugins/olla-session.js${NC}"
 
 # -----------------------------------------------------------------------------
 # Embedded Plugin: tps.js
@@ -163,7 +169,7 @@ export const TpsPlugin = async () => {
         const tps = compTokens > 0 ? (compTokens / durationSec).toFixed(1) : "0.0"
 
         console.log(
-          `⚡ [Olla TPS] ${compTokens} tokens in ${durationSec.toFixed(2)}s (${tps} tok/s) | prompt: ${promptTokens} tok | total: ${totalTokens} tok`
+          `⚡ [TPS] ${compTokens} tokens in ${durationSec.toFixed(2)}s (${tps} tok/s) | prompt: ${promptTokens} tok | total: ${totalTokens} tok`
         )
       }
     },
@@ -172,7 +178,7 @@ export const TpsPlugin = async () => {
 
 export default TpsPlugin
 EOF
-echo -e "  ${GREEN}✓${NC} Installed plugin: ${CYAN}.opencode/plugins/tps.js${NC}"
+echo -e "  ${GREEN}✓${NC} Installed fresh plugin: ${CYAN}.opencode/plugins/tps.js${NC}"
 
 # -----------------------------------------------------------------------------
 # Embedded Plugin: sticky-header.js (legacy/configurable fallback)
@@ -201,7 +207,7 @@ export const StickyHeader = async (options = {}) => {
 
 export default StickyHeader
 EOF
-echo -e "  ${GREEN}✓${NC} Installed plugin: ${CYAN}.opencode/plugin/sticky-header.js${NC}"
+echo -e "  ${GREEN}✓${NC} Installed fresh plugin: ${CYAN}.opencode/plugin/sticky-header.js${NC}"
 
 # -----------------------------------------------------------------------------
 # Embedded Config: opencode.json
@@ -209,8 +215,7 @@ echo -e "  ${GREEN}✓${NC} Installed plugin: ${CYAN}.opencode/plugin/sticky-hea
 CONFIG_DEST="$TARGET_DIR/opencode.json"
 if [[ -f "$CONFIG_DEST" && $FORCE_MODE -eq 0 ]]; then
     BACKUP_DEST="$CONFIG_DEST.bak.$(date +%s)"
-    echo -e "${YELLOW}Warning: $CONFIG_DEST already exists.${NC}"
-    echo -e "Creating backup -> ${YELLOW}$BACKUP_DEST${NC}"
+    echo -e "${YELLOW}Backing up existing config -> $BACKUP_DEST${NC}"
     cp "$CONFIG_DEST" "$BACKUP_DEST"
 fi
 
@@ -232,7 +237,7 @@ cat << 'EOF' > "$CONFIG_DEST"
       },
       "models": {
         "qwen3.8-27b": {
-          "name": "Qwen3.8-27B (Olla)",
+          "name": "Qwen3.8-27B (Olla Cluster)",
           "tools": true,
           "attachment": true,
           "limit": {
@@ -241,11 +246,95 @@ cat << 'EOF' > "$CONFIG_DEST"
           }
         },
         "qwen3.6-35b": {
-          "name": "Qwen3.6-35B (Olla)",
+          "name": "Qwen3.6-35B (Olla Cluster)",
           "tools": true,
           "attachment": true,
           "limit": {
             "context": 262144,
+            "output": 8192
+          }
+        }
+      }
+    },
+    "ml1": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "ml1",
+      "options": {
+        "baseURL": "http://100.118.67.28:8080/v1",
+        "apiKey": "sk-noauth"
+      },
+      "models": {
+        "qwen3.8-27b": {
+          "name": "Qwen3.8-27B-CUDA (ml-1-wsl Direct)",
+          "tools": true,
+          "attachment": true,
+          "limit": {
+            "context": 262144,
+            "output": 8192
+          }
+        },
+        "/models/qwen3.8-27b": {
+          "name": "Qwen3.8-27B-CUDA (ml-1-wsl Direct)",
+          "tools": true,
+          "attachment": true,
+          "limit": {
+            "context": 262144,
+            "output": 8192
+          }
+        }
+      }
+    },
+    "ml2": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "ml2",
+      "options": {
+        "baseURL": "http://100.77.84.65:8080/v1",
+        "apiKey": "sk-noauth"
+      },
+      "models": {
+        "trohrbaugh/Qwen3.8-27B-heretic-ara": {
+          "name": "Qwen3.8-27B-MLX (ml-2 Direct)",
+          "tools": true,
+          "attachment": true,
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
+        },
+        "/Users/jfan/.qwen/models/Qwen3.8-27B-heretic-ara-mxfp4": {
+          "name": "Qwen3.8-27B-MXFP4 (ml-2 Direct)",
+          "tools": true,
+          "attachment": true,
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
+        }
+      }
+    },
+    "ml3": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "ml3",
+      "options": {
+        "baseURL": "http://100.93.207.60:8080/v1",
+        "apiKey": "sk-noauth"
+      },
+      "models": {
+        "trohrbaugh/Qwen3.8-27B-heretic-ara": {
+          "name": "Qwen3.8-27B-MLX (ml-3 Direct)",
+          "tools": true,
+          "attachment": true,
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
+        },
+        "/Users/jfan/.qwen/models/Qwen3.8-27B-heretic-ara-mxfp4": {
+          "name": "Qwen3.8-27B-MXFP4 (ml-3 Direct)",
+          "tools": true,
+          "attachment": true,
+          "limit": {
+            "context": 131072,
             "output": 8192
           }
         }
@@ -259,50 +348,21 @@ cat << 'EOF' > "$CONFIG_DEST"
         "apiKey": "sk-noauth"
       },
       "models": {
+        "qwen3.8-27b": {
+          "name": "Qwen3.8-27B-CUDA (ml-1-wsl Direct)",
+          "tools": true,
+          "attachment": true,
+          "limit": {
+            "context": 262144,
+            "output": 8192
+          }
+        },
         "/models/qwen3.8-27b": {
-          "name": "Qwen3.8-27B-CUDA (ml-1-wsl)",
+          "name": "Qwen3.8-27B-CUDA (ml-1-wsl Direct)",
           "tools": true,
           "attachment": true,
           "limit": {
-            "context": 131072,
-            "output": 8192
-          }
-        }
-      }
-    },
-    "llama-ml2": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "llama-ml2",
-      "options": {
-        "baseURL": "http://100.77.84.65:8080/v1",
-        "apiKey": "sk-noauth"
-      },
-      "models": {
-        "trohrbaugh/Qwen3.8-27B-heretic-ara": {
-          "name": "Qwen3.8-27B-MLX (ml-2)",
-          "tools": true,
-          "attachment": true,
-          "limit": {
-            "context": 131072,
-            "output": 8192
-          }
-        }
-      }
-    },
-    "llama-ml3": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "llama-ml3",
-      "options": {
-        "baseURL": "http://100.93.207.60:8080/v1",
-        "apiKey": "sk-noauth"
-      },
-      "models": {
-        "trohrbaugh/Qwen3.8-27B-heretic-ara": {
-          "name": "Qwen3.8-27B-MLX (ml-3)",
-          "tools": true,
-          "attachment": true,
-          "limit": {
-            "context": 131072,
+            "context": 262144,
             "output": 8192
           }
         }
@@ -319,9 +379,11 @@ cat << 'EOF' > "$CONFIG_DEST"
   }
 }
 EOF
-echo -e "  ${GREEN}✓${NC} Installed config: ${CYAN}opencode.json${NC}"
+echo -e "  ${GREEN}✓${NC} Installed fresh config: ${CYAN}opencode.json${NC}"
 
-echo -e "\n${GREEN}=== Installation Complete! ===${NC}"
-echo -e "• Provider: ${BLUE}olla${NC} (default model: ${BLUE}olla/qwen3.8-27b${NC})"
-echo -e "• Plugins:  ${BLUE}github:JEF1056/harness${NC}, ${BLUE}olla-session${NC}, ${BLUE}tps${NC}"
-echo -e "• Headers:  ${BLUE}X-Olla-Session-ID${NC} active for persistent KV cache reuse"
+echo -e "\n${GREEN}=== Fresh Installation Complete! ===${NC}"
+echo -e "• Default Model: ${BLUE}olla/qwen3.8-27b${NC} (routed cluster with session affinity)"
+echo -e "• Direct Models: ${BLUE}ml1/qwen3.8-27b${NC} (direct to ml-1-wsl CUDA, bypasses Olla)"
+echo -e "                 ${BLUE}ml2/trohrbaugh/Qwen3.8-27B-heretic-ara${NC} (direct to ml-2 MLX)"
+echo -e "                 ${BLUE}ml3/trohrbaugh/Qwen3.8-27B-heretic-ara${NC} (direct to ml-3 MLX)"
+echo -e "• Plugins:       ${BLUE}github:JEF1056/harness${NC}, ${BLUE}olla-session${NC}, ${BLUE}tps${NC}"
