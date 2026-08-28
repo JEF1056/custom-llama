@@ -78,18 +78,28 @@ THREADS_BATCH=${THREADS_BATCH:-4}
 ENABLE_VISION=${ENABLE_VISION:-0}
 MMPROJ_FILE=${MMPROJ_FILE:-mmproj-BF16.gguf}
 
+# DFlash speculative drafter (z-lab/Qwen3.8-27B-DFlash2-GGUF)
+ENABLE_DFLASH=${ENABLE_DFLASH:-0}
+DFLASH_REPO=${DFLASH_REPO:-z-lab/Qwen3.8-27B-DFlash2-GGUF}
+DFLASH_FILE=${DFLASH_FILE:-Qwen3.8-27B-DFlash2-Q4_K_M.gguf}
+DFLASH_N_MAX=${DFLASH_N_MAX:-3}
+DFLASH_P_MIN=${DFLASH_P_MIN:-0.0}
+
 # MTP self-speculative decoding (DeepSeek-V3-style single trailing MTP layer,
 # baked into the same GGUF - no separate draft model file needed). Enabled by
 # default. MTP_N_MAX = max speculative tokens per round; MTP_P_MIN = minimum
 # acceptance probability (0.0 = accept greedily-consistent tokens only).
 ENABLE_MTP=${ENABLE_MTP:-1}
+if [[ "$ENABLE_DFLASH" == "1" || "$ENABLE_DFLASH" == "true" || "$ENABLE_DFLASH" == "yes" || "$ENABLE_DFLASH" == "on" ]]; then
+    ENABLE_MTP=0
+fi
 MTP_N_MAX=${MTP_N_MAX:-4}
 MTP_P_MIN=${MTP_P_MIN:-0.0}
 # Optionally requantize the MTP output head independently (e.g. higher-precision
 # head raises draft acceptance). Empty = use GGUF's baked-in precision.
 MTP_REQUANTIZE_OUTPUT_TYPE=${MTP_REQUANTIZE_OUTPUT_TYPE:-}
 
-# Optional n-gram lookup drafter: in ik_llama.cpp, mtmd/vision only supports single-stage MTP
+# Optional n-gram lookup drafter: in ik_llama.cpp, mtmd/vision only supports single-stage MTP/DFlash
 if [[ "$ENABLE_VISION" == "1" ]]; then
     ENABLE_NGRAM=0
 else
@@ -212,6 +222,22 @@ if [[ "$VISION_ON" == "1" ]]; then
         SERVER_ARGS+=(--mmproj "$MMPROJ_PATH")
     fi
 fi
+case "${ENABLE_DFLASH,,}" in
+    1|true|yes|on) DFLASH_ON=1 ;;
+    *)             DFLASH_ON=0 ;;
+esac
+if [[ "$DFLASH_ON" == "1" ]]; then
+    DFLASH_PATH="/models/${DFLASH_FILE}"
+    if [[ ! -f "$DFLASH_PATH" ]]; then
+        log "Downloading DFlash drafter from https://huggingface.co/${DFLASH_REPO}/resolve/main/${DFLASH_FILE}..."
+        mkdir -p /models
+        curl -fL "https://huggingface.co/${DFLASH_REPO}/resolve/main/${DFLASH_FILE}" -o "$DFLASH_PATH" || {
+            err "Failed to download DFlash drafter from ${DFLASH_REPO}/${DFLASH_FILE}"
+            exit 1
+        }
+    fi
+    SERVER_ARGS+=(--model-draft "$DFLASH_PATH" --spec-type "dflash:n_max=${DFLASH_N_MAX},p_min=${DFLASH_P_MIN}")
+fi
 # MTP self-speculative decoding: no separate draft file - the trailing MTP
 # layer(s) are baked into the same GGUF. If the n-gram drafter is also
 # enabled, its --spec-type must be registered FIRST so it forms the first
@@ -227,7 +253,7 @@ esac
 if [[ "$NGRAM_ON" == "1" ]]; then
     SERVER_ARGS+=(--spec-type "${NGRAM_TYPE}:n_max=${NGRAM_N_MAX},n_min=${NGRAM_N_MIN},ngram_size_n=${NGRAM_SIZE_N}")
 fi
-if [[ "$MTP_ON" == "1" ]]; then
+if [[ "$MTP_ON" == "1" && "$DFLASH_ON" == "0" ]]; then
     SERVER_ARGS+=(--spec-type "mtp:n_max=${MTP_N_MAX},p_min=${MTP_P_MIN}")
     if [[ -n "$MTP_REQUANTIZE_OUTPUT_TYPE" ]]; then
         SERVER_ARGS+=(--mtp-requantize-output-tensor "$MTP_REQUANTIZE_OUTPUT_TYPE")
