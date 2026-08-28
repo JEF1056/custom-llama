@@ -244,15 +244,6 @@ cat << 'EOF' > "$CONFIG_DEST"
             "context": 131072,
             "output": 8192
           }
-        },
-        "qwen3.6-35b": {
-          "name": "Qwen3.6-35B (Olla Cluster)",
-          "tools": true,
-          "attachment": true,
-          "limit": {
-            "context": 262144,
-            "output": 8192
-          }
         }
       }
     },
@@ -265,100 +256,7 @@ cat << 'EOF' > "$CONFIG_DEST"
       },
       "models": {
         "qwen3.8-27b": {
-          "name": "Qwen3.8-27B-CUDA (ml-1-wsl Direct)",
-          "tools": true,
-          "attachment": true,
-          "limit": {
-            "context": 262144,
-            "output": 8192
-          }
-        },
-        "/models/qwen3.8-27b": {
-          "name": "Qwen3.8-27B-CUDA (ml-1-wsl Direct)",
-          "tools": true,
-          "attachment": true,
-          "limit": {
-            "context": 262144,
-            "output": 8192
-          }
-        }
-      }
-    },
-    "ml2": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "ml2",
-      "options": {
-        "baseURL": "http://100.77.84.65:8080/v1",
-        "apiKey": "sk-noauth"
-      },
-      "models": {
-        "trohrbaugh/Qwen3.8-27B-heretic-ara": {
-          "name": "Qwen3.8-27B-MLX (ml-2 Direct)",
-          "tools": true,
-          "attachment": true,
-          "limit": {
-            "context": 131072,
-            "output": 8192
-          }
-        },
-        "/Users/jfan/.qwen/models/Qwen3.8-27B-heretic-ara-mxfp4": {
-          "name": "Qwen3.8-27B-MXFP4 (ml-2 Direct)",
-          "tools": true,
-          "attachment": true,
-          "limit": {
-            "context": 131072,
-            "output": 8192
-          }
-        }
-      }
-    },
-    "ml3": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "ml3",
-      "options": {
-        "baseURL": "http://100.93.207.60:8080/v1",
-        "apiKey": "sk-noauth"
-      },
-      "models": {
-        "trohrbaugh/Qwen3.8-27B-heretic-ara": {
-          "name": "Qwen3.8-27B-MLX (ml-3 Direct)",
-          "tools": true,
-          "attachment": true,
-          "limit": {
-            "context": 131072,
-            "output": 8192
-          }
-        },
-        "/Users/jfan/.qwen/models/Qwen3.8-27B-heretic-ara-mxfp4": {
-          "name": "Qwen3.8-27B-MXFP4 (ml-3 Direct)",
-          "tools": true,
-          "attachment": true,
-          "limit": {
-            "context": 131072,
-            "output": 8192
-          }
-        }
-      }
-    },
-    "llama-ml1": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "llama-ml1",
-      "options": {
-        "baseURL": "http://100.118.67.28:8080/v1",
-        "apiKey": "sk-noauth"
-      },
-      "models": {
-        "qwen3.8-27b": {
-          "name": "Qwen3.8-27B-CUDA (ml-1-wsl Direct)",
-          "tools": true,
-          "attachment": true,
-          "limit": {
-            "context": 262144,
-            "output": 8192
-          }
-        },
-        "/models/qwen3.8-27b": {
-          "name": "Qwen3.8-27B-CUDA (ml-1-wsl Direct)",
+          "name": "Qwen3.8-27B (ml-1-wsl Direct)",
           "tools": true,
           "attachment": true,
           "limit": {
@@ -383,7 +281,5 @@ echo -e "  ${GREEN}✓${NC} Installed fresh config: ${CYAN}opencode.json${NC}"
 
 echo -e "\n${GREEN}=== Fresh Installation Complete! ===${NC}"
 echo -e "• Default Model: ${BLUE}olla/qwen3.8-27b${NC} (routed cluster with session affinity)"
-echo -e "• Direct Models: ${BLUE}ml1/qwen3.8-27b${NC} (direct to ml-1-wsl CUDA, bypasses Olla)"
-echo -e "                 ${BLUE}ml2/trohrbaugh/Qwen3.8-27B-heretic-ara${NC} (direct to ml-2 MLX)"
-echo -e "                 ${BLUE}ml3/trohrbaugh/Qwen3.8-27B-heretic-ara${NC} (direct to ml-3 MLX)"
+echo -e "• Direct Model:  ${BLUE}ml1/qwen3.8-27b${NC} (direct to ml-1-wsl CUDA, bypasses Olla)"
 echo -e "• Plugins:       ${BLUE}github:JEF1056/harness${NC}, ${BLUE}olla-session${NC}, ${BLUE}tps${NC}"
