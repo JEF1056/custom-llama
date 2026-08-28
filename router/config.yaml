@@ -4,6 +4,7 @@ server:
   read_timeout: 10m
   write_timeout: 15m
   idle_timeout: 15m
+  read_header_timeout: 1m
 
 proxy:
   engine: "olla"
@@ -11,6 +12,9 @@ proxy:
   load_balancer: "least-connections"
   response_timeout: 15m
   read_timeout: 10m
+  timeout: 15m
+  response_header_timeout: 10m
+  connection_timeout: 10m
   sticky_sessions:
     enabled: true
     idle_ttl_seconds: 3600 # 1h sliding TTL; coding sessions have long think-time gaps
@@ -30,6 +34,7 @@ discovery:
         priority: 100
         check_interval: 5s # Reduce for faster detection
         check_timeout: 2s # Fail fast on timeouts
+        timeout: 15m
 
       - url: "http://100.77.84.65:8080"
         name: "ml-2-mlx"
@@ -37,6 +42,7 @@ discovery:
         priority: 95
         check_interval: 5s # Reduce for faster detection
         check_timeout: 2s # Fail fast on timeouts
+        timeout: 15m
 
       - url: "http://100.93.207.60:8080"
         name: "ml-3-mlx"
@@ -44,6 +50,7 @@ discovery:
         priority: 90
         check_interval: 5s # Reduce for faster detection
         check_timeout: 2s # Fail fast on timeouts
+        timeout: 15m
 
       - url: "http://100.66.209.104:8080"
         name: "ml-4-mlx"
