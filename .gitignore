@@ -7,3 +7,5 @@
 # Python bytecode
 __pycache__/
 *.pyc
+.opencode/cache/
+.opencode/node_modules/

@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 #
-# OpenCode + Olla Sticky Session Installer
-# Installs opencode.json and persistent session affinity plugins into any repository.
+# OpenCode + Olla Cluster Installer
+# Standalone installer for opencode.json, sticky session affinity, harness, and TPS tracking.
+# Can be run locally or streamed directly via curl:
+#   curl -sSL https://raw.githubusercontent.com/JEF1056/custom-llama/hosting/opencode/install.sh | bash
 #
 set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEMPLATES_DIR="$SCRIPT_DIR/templates"
 
 # Colors
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
@@ -19,19 +19,25 @@ show_help() {
     cat << 'EOF'
 Usage:
   ./install.sh [TARGET_DIR] [OPTIONS]
+  curl -sSL https://raw.githubusercontent.com/JEF1056/custom-llama/hosting/opencode/install.sh | bash -s -- [TARGET_DIR] [OPTIONS]
 
 Arguments:
   TARGET_DIR       Directory to install into (default: current working directory)
 
 Options:
   -g, --global     Install globally into ~/.config/opencode
-  -f, --force      Overwrite existing opencode.json without backup prompt
+  -f, --force      Overwrite existing opencode.json without backup
   -h, --help       Show this help message
 
 Examples:
-  ./install.sh                     # Install into current repo
-  ./install.sh /path/to/my-repo    # Install into specific repo
-  ./install.sh --global            # Install globally into user config
+  # Install into current repository
+  curl -sSL https://raw.githubusercontent.com/JEF1056/custom-llama/hosting/opencode/install.sh | bash
+
+  # Install into specific repository
+  curl -sSL https://raw.githubusercontent.com/JEF1056/custom-llama/hosting/opencode/install.sh | bash -s -- /path/to/repo
+
+  # Install globally
+  curl -sSL https://raw.githubusercontent.com/JEF1056/custom-llama/hosting/opencode/install.sh | bash -s -- --global
 EOF
 }
 
@@ -72,27 +78,134 @@ elif [[ -z "$TARGET_DIR" ]]; then
     TARGET_DIR="$(pwd)"
 fi
 
-# Resolve absolute path
+# Resolve target directory
+mkdir -p "$TARGET_DIR"
 TARGET_DIR="$(cd "$TARGET_DIR" 2>/dev/null && pwd || echo "$TARGET_DIR")"
 
-echo -e "${BLUE}=== OpenCode + Olla Installer ===${NC}"
+echo -e "${BLUE}=== OpenCode + Olla Cluster Installer ===${NC}"
 echo -e "Target Directory: ${GREEN}$TARGET_DIR${NC}"
 
-# Ensure target directory exists
-mkdir -p "$TARGET_DIR"
-
-# 1. Install plugins (.opencode/plugins and .opencode/plugin)
+# Directories
 PLUGIN_DIR="$TARGET_DIR/.opencode/plugins"
 LEGACY_PLUGIN_DIR="$TARGET_DIR/.opencode/plugin"
 mkdir -p "$PLUGIN_DIR" "$LEGACY_PLUGIN_DIR"
 
-echo -e "Installing session affinity plugins..."
-cp "$TEMPLATES_DIR/.opencode/plugins/olla-session.js" "$PLUGIN_DIR/olla-session.js"
-cp "$TEMPLATES_DIR/.opencode/plugin/sticky-header.js" "$LEGACY_PLUGIN_DIR/sticky-header.js"
-echo -e "  ${GREEN}✓${NC} $PLUGIN_DIR/olla-session.js"
-echo -e "  ${GREEN}✓${NC} $LEGACY_PLUGIN_DIR/sticky-header.js"
+# -----------------------------------------------------------------------------
+# Embedded Plugin: olla-session.js
+# -----------------------------------------------------------------------------
+cat << 'EOF' > "$PLUGIN_DIR/olla-session.js"
+/**
+ * Olla sticky-session affinity plugin for OpenCode.
+ *
+ * Injects a per-session `X-Olla-Session-ID` header on every LLM request so
+ * Olla's sticky-session router (key_sources: ["session_header"]) pins each
+ * OpenCode session to its own backend for KV-cache reuse across turns.
+ *
+ * Why the `chat.headers` hook: this hook fires per request and receives the
+ * actual `sessionID` for that request. Parallel subagents each run as their
+ * own child session with a distinct sessionID, ensuring each subagent gets
+ * a unique header value with no shared mutable state.
+ *
+ * Requires an OpenCode version that exposes the `chat.headers` hook.
+ */
+export const OllaSession = async () => {
+  return {
+    "chat.headers": async (input, output) => {
+      if (!output.headers) {
+        output.headers = {}
+      }
+      // Don't clobber an explicitly configured header
+      if (!output.headers["X-Olla-Session-ID"]) {
+        output.headers["X-Olla-Session-ID"] = input.sessionID || `session-${Date.now()}`
+      }
+    },
+  }
+}
 
-# 2. Install opencode.json
+export default OllaSession
+EOF
+echo -e "  ${GREEN}✓${NC} Installed plugin: ${CYAN}.opencode/plugins/olla-session.js${NC}"
+
+# -----------------------------------------------------------------------------
+# Embedded Plugin: tps.js
+# -----------------------------------------------------------------------------
+cat << 'EOF' > "$PLUGIN_DIR/tps.js"
+/**
+ * TPS (Tokens Per Second) & Generation Performance Tracker for OpenCode.
+ *
+ * Measures prompt processing time, completion latency, total tokens,
+ * and calculates output tokens/second (TPS) on every turn.
+ */
+export const TpsPlugin = async () => {
+  const requestTimers = new Map()
+
+  return {
+    "chat.headers": async (input, output) => {
+      const key = input.sessionID || "default"
+      requestTimers.set(key, {
+        start: performance.now(),
+        date: Date.now(),
+      })
+    },
+    "chat.response": async (input, output) => {
+      const key = input.sessionID || "default"
+      const timer = requestTimers.get(key)
+      if (!timer) return
+
+      const durationSec = (performance.now() - timer.start) / 1000
+      requestTimers.delete(key)
+
+      const usage = output?.usage || output?.response?.usage
+      if (usage && durationSec > 0) {
+        const promptTokens = usage.prompt_tokens ?? usage.promptTokens ?? 0
+        const compTokens = usage.completion_tokens ?? usage.completionTokens ?? 0
+        const totalTokens = usage.total_tokens ?? usage.totalTokens ?? (promptTokens + compTokens)
+        const tps = compTokens > 0 ? (compTokens / durationSec).toFixed(1) : "0.0"
+
+        console.log(
+          `⚡ [Olla TPS] ${compTokens} tokens in ${durationSec.toFixed(2)}s (${tps} tok/s) | prompt: ${promptTokens} tok | total: ${totalTokens} tok`
+        )
+      }
+    },
+  }
+}
+
+export default TpsPlugin
+EOF
+echo -e "  ${GREEN}✓${NC} Installed plugin: ${CYAN}.opencode/plugins/tps.js${NC}"
+
+# -----------------------------------------------------------------------------
+# Embedded Plugin: sticky-header.js (legacy/configurable fallback)
+# -----------------------------------------------------------------------------
+cat << 'EOF' > "$LEGACY_PLUGIN_DIR/sticky-header.js"
+/**
+ * Generic sticky-session header plugin.
+ *
+ * Injects a configurable header per LLM request, pinning each session to its
+ * own backend for KV-cache reuse (or any other sticky-session proxy that reads
+ * a session ID from a custom header).
+ */
+export const StickyHeader = async (options = {}) => {
+  const headerName = options.headerName || "X-Olla-Session-ID"
+  return {
+    "chat.headers": async (input, output) => {
+      if (!output.headers) {
+        output.headers = {}
+      }
+      if (!output.headers[headerName]) {
+        output.headers[headerName] = input.sessionID || `session-${Date.now()}`
+      }
+    },
+  }
+}
+
+export default StickyHeader
+EOF
+echo -e "  ${GREEN}✓${NC} Installed plugin: ${CYAN}.opencode/plugin/sticky-header.js${NC}"
+
+# -----------------------------------------------------------------------------
+# Embedded Config: opencode.json
+# -----------------------------------------------------------------------------
 CONFIG_DEST="$TARGET_DIR/opencode.json"
 if [[ -f "$CONFIG_DEST" && $FORCE_MODE -eq 0 ]]; then
     BACKUP_DEST="$CONFIG_DEST.bak.$(date +%s)"
@@ -101,9 +214,114 @@ if [[ -f "$CONFIG_DEST" && $FORCE_MODE -eq 0 ]]; then
     cp "$CONFIG_DEST" "$BACKUP_DEST"
 fi
 
-cp "$TEMPLATES_DIR/opencode.json" "$CONFIG_DEST"
-echo -e "  ${GREEN}✓${NC} $CONFIG_DEST"
+cat << 'EOF' > "$CONFIG_DEST"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "github:JEF1056/harness",
+    "./.opencode/plugins/olla-session.js",
+    "./.opencode/plugins/tps.js"
+  ],
+  "provider": {
+    "olla": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "olla",
+      "options": {
+        "baseURL": "http://coolify:4000/olla/openai/v1",
+        "apiKey": "router-master-key"
+      },
+      "models": {
+        "qwen3.8-27b": {
+          "name": "Qwen3.8-27B (Olla)",
+          "tools": true,
+          "attachment": true,
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
+        },
+        "qwen3.6-35b": {
+          "name": "Qwen3.6-35B (Olla)",
+          "tools": true,
+          "attachment": true,
+          "limit": {
+            "context": 262144,
+            "output": 8192
+          }
+        }
+      }
+    },
+    "llama-ml1": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "llama-ml1",
+      "options": {
+        "baseURL": "http://100.118.67.28:8080/v1",
+        "apiKey": "sk-noauth"
+      },
+      "models": {
+        "/models/qwen3.8-27b": {
+          "name": "Qwen3.8-27B-CUDA (ml-1-wsl)",
+          "tools": true,
+          "attachment": true,
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
+        }
+      }
+    },
+    "llama-ml2": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "llama-ml2",
+      "options": {
+        "baseURL": "http://100.77.84.65:8080/v1",
+        "apiKey": "sk-noauth"
+      },
+      "models": {
+        "trohrbaugh/Qwen3.8-27B-heretic-ara": {
+          "name": "Qwen3.8-27B-MLX (ml-2)",
+          "tools": true,
+          "attachment": true,
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
+        }
+      }
+    },
+    "llama-ml3": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "llama-ml3",
+      "options": {
+        "baseURL": "http://100.93.207.60:8080/v1",
+        "apiKey": "sk-noauth"
+      },
+      "models": {
+        "trohrbaugh/Qwen3.8-27B-heretic-ara": {
+          "name": "Qwen3.8-27B-MLX (ml-3)",
+          "tools": true,
+          "attachment": true,
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
+        }
+      }
+    }
+  },
+  "model": "olla/qwen3.8-27b",
+  "mcp": {
+    "mcp-search-server": {
+      "type": "remote",
+      "enabled": true,
+      "url": "http://localhost:3100/"
+    }
+  }
+}
+EOF
+echo -e "  ${GREEN}✓${NC} Installed config: ${CYAN}opencode.json${NC}"
 
-echo -e "${GREEN}=== Installation Complete! ===${NC}"
-echo -e "Provider configured: ${BLUE}olla${NC} (model: ${BLUE}olla/qwen3.8-27b${NC})"
-echo -e "Persistent session header: ${BLUE}X-Olla-Session-ID${NC} enabled for KV-cache reuse."
+echo -e "\n${GREEN}=== Installation Complete! ===${NC}"
+echo -e "• Provider: ${BLUE}olla${NC} (default model: ${BLUE}olla/qwen3.8-27b${NC})"
+echo -e "• Plugins:  ${BLUE}github:JEF1056/harness${NC}, ${BLUE}olla-session${NC}, ${BLUE}tps${NC}"
+echo -e "• Headers:  ${BLUE}X-Olla-Session-ID${NC} active for persistent KV cache reuse"
