@@ -63,6 +63,41 @@ model_registry:
     cleanup_interval: 10m
 
 model_aliases:
+  qwen3.8-27b:
+    - /models/qwen3.8-27b
+    - /models/qwen38-27b-heretic-ara-iq4_kss.gguf
+    - /Users/jfan/.qwen/models/Qwen3.8-27B-heretic-ara-mxfp4
+    - trohrbaugh/Qwen3.8-27B-heretic-ara
+    - heretic-org/Qwen3.8-27B-heretic-ara
+    - TheCluster/Qwen3.8-27B-Heretic-MLX-4bit
+  Qwen3.8-27B-heretic-ara:
+    - /models/qwen3.8-27b
+    - /models/qwen38-27b-heretic-ara-iq4_kss.gguf
+    - /Users/jfan/.qwen/models/Qwen3.8-27B-heretic-ara-mxfp4
+    - trohrbaugh/Qwen3.8-27B-heretic-ara
+    - heretic-org/Qwen3.8-27B-heretic-ara
+    - TheCluster/Qwen3.8-27B-Heretic-MLX-4bit
+  trohrbaugh/Qwen3.8-27B-heretic-ara:
+    - /models/qwen3.8-27b
+    - /models/qwen38-27b-heretic-ara-iq4_kss.gguf
+    - /Users/jfan/.qwen/models/Qwen3.8-27B-heretic-ara-mxfp4
+    - trohrbaugh/Qwen3.8-27B-heretic-ara
+    - heretic-org/Qwen3.8-27B-heretic-ara
+    - TheCluster/Qwen3.8-27B-Heretic-MLX-4bit
+  heretic-org/Qwen3.8-27B-heretic-ara:
+    - /models/qwen3.8-27b
+    - /models/qwen38-27b-heretic-ara-iq4_kss.gguf
+    - /Users/jfan/.qwen/models/Qwen3.8-27B-heretic-ara-mxfp4
+    - trohrbaugh/Qwen3.8-27B-heretic-ara
+    - heretic-org/Qwen3.8-27B-heretic-ara
+    - TheCluster/Qwen3.8-27B-Heretic-MLX-4bit
+  TheCluster/Qwen3.8-27B-Heretic-MLX-4bit:
+    - /models/qwen3.8-27b
+    - /models/qwen38-27b-heretic-ara-iq4_kss.gguf
+    - /Users/jfan/.qwen/models/Qwen3.8-27B-heretic-ara-mxfp4
+    - trohrbaugh/Qwen3.8-27B-heretic-ara
+    - heretic-org/Qwen3.8-27B-heretic-ara
+    - TheCluster/Qwen3.8-27B-Heretic-MLX-4bit
   qwen3.6-35b:
     - /models/qwen3.6-35b
     - /Users/jfan/.qwen/models/qwen36-mlx

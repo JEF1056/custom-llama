@@ -6,4 +6,4 @@ COPY config.yaml /app/config/config.local.yaml
 EXPOSE 40114
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD curl -f http://localhost:40114/internal/health || exit 1
+  CMD wget -q -O - http://localhost:40114/internal/health || exit 1
