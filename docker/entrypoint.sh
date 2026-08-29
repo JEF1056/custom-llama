@@ -155,6 +155,8 @@ SERVER_ARGS=(
     --cache-ram "$CACHE_RAM_MIB"
     --ctx-checkpoints "$CTX_CHECKPOINTS_N"
     --ctx-checkpoints-interval "$CTX_CHECKPOINTS_INTERVAL"
+    --slot-prompt-similarity 0.0
+    --cache-ram-similarity 0.0
     --cache-type-k "$KV_TYPE_K"
     --cache-type-v "$KV_TYPE_V"
     --recurrent-ckpt-mode auto
