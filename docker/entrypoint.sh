@@ -43,7 +43,11 @@ KV_HADAMARD=${KV_HADAMARD:-1}
 # Prompt caching: the server's context-checkpoint + prompt-state cache (full
 # sequence-state save/restore). Size its RAM budget in MiB (-1 = no limit,
 # 0 = disable).
-CACHE_RAM_MIB=${CACHE_RAM_MIB:-4096}
+CACHE_RAM_MIB=${CACHE_RAM_MIB:-1024}
+# Balanced checkpoint configuration for DeltaNet recurrent state resumption
+# with minimal VRAM overhead: 4 snapshots spaced every 8,192 tokens (~600MB VRAM).
+CTX_CHECKPOINTS_N=${CTX_CHECKPOINTS_N:-4}
+CTX_CHECKPOINTS_INTERVAL=${CTX_CHECKPOINTS_INTERVAL:-8192}
 
 # Number of concurrent request slots. The server splits the KV context evenly
 # across slots, so N_PARALLEL slots cap a single sequence to CTX / N_PARALLEL
@@ -62,14 +66,8 @@ DISABLE_MMAP=${DISABLE_MMAP:-0}
 USE_MLOCK=${USE_MLOCK:-0}
 
 # Physical batch size (-ub): max tokens processed per GPU pass during prompt
-# processing. Larger values raise pp throughput (more parallel work per kernel)
-# at the cost of VRAM for compute buffers; generation speed is unaffected.
-# Swept on RTX 3090 with ~13GB bring-up quant (see qwen36-bench-results.md):
-#   ub=256:  ~15.8GB, ~1818 tok/s  |  ub=512:  ~16.1GB, ~2580 tok/s (default)
-#   ub=1024: ~16.6GB, ~3192 tok/s  |  ub=2048: ~17.7GB, ~3567 tok/s (diminishing)
-# 1024 chosen: +24% pp throughput over default for only +3% VRAM, ~8GB headroom.
-# Raise toward 2048 for smaller quant with spare VRAM; lower toward 256 for larger.
-UBATCH_SIZE=${UBATCH_SIZE:-512}
+# processing. Larger values raise pp throughput (more parallel work per kernel).
+UBATCH_SIZE=${UBATCH_SIZE:-1024}
 THREADS=${THREADS:-16}
 THREADS_BATCH=${THREADS_BATCH:-4}
 
@@ -148,6 +146,8 @@ SERVER_ARGS=(
     -tb "$THREADS_BATCH"
     -ub "$UBATCH_SIZE"
     --cache-ram "$CACHE_RAM_MIB"
+    --ctx-checkpoints "$CTX_CHECKPOINTS_N"
+    --ctx-checkpoints-interval "$CTX_CHECKPOINTS_INTERVAL"
     --cache-type-k "$KV_TYPE_K"
     --cache-type-v "$KV_TYPE_V"
     --temp "$TEMP"
