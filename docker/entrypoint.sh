@@ -67,7 +67,11 @@ USE_MLOCK=${USE_MLOCK:-0}
 
 # Physical batch size (-ub): max tokens processed per GPU pass during prompt
 # processing. Sized to 512 for low activation VRAM overhead (~500MB buffer vs ~2GB at 1024).
-UBATCH_SIZE=${UBATCH_SIZE:-512}
+# Physical & logical batch sizes
+BATCH_SIZE=${BATCH_SIZE:-4096}
+UBATCH_SIZE=${UBATCH_SIZE:-1024}
+NGL=${NGL:-99}
+NGLD=${NGLD:-99}
 THREADS=${THREADS:-16}
 THREADS_BATCH=${THREADS_BATCH:-4}
 
@@ -98,16 +102,16 @@ MTP_P_MIN=${MTP_P_MIN:-0.0}
 # head raises draft acceptance). Set to iq4_kss for minimal VRAM footprint.
 MTP_REQUANTIZE_OUTPUT_TYPE=${MTP_REQUANTIZE_OUTPUT_TYPE:-iq4_kss}
 
-# Optional n-gram lookup drafter: in ik_llama.cpp, mtmd/vision only supports single-stage MTP/DFlash
+# Two-Stage N-Gram Lookup Drafter: tuned for code decode on single 24GB RTX 3090
 if [[ "$ENABLE_VISION" == "1" ]]; then
     ENABLE_NGRAM=0
 else
     ENABLE_NGRAM=${ENABLE_NGRAM:-1}
 fi
 NGRAM_TYPE=${NGRAM_TYPE:-ngram-mod}
-NGRAM_N_MAX=${NGRAM_N_MAX:-16}
+NGRAM_N_MAX=${NGRAM_N_MAX:-4}
 NGRAM_N_MIN=${NGRAM_N_MIN:-2}
-NGRAM_SIZE_N=${NGRAM_SIZE_N:-1024}
+NGRAM_SIZE_N=${NGRAM_SIZE_N:-16}
 
 # Sampling defaults. These set the server-side default generation params;
 # clients may still override them per request.
@@ -140,16 +144,21 @@ SERVER_ARGS=(
     --host 0.0.0.0
     --port "$PORT"
     -ngl "$NGL"
+    -ngld "$NGLD"
     -fa "$FLASH_ATTN"
     --parallel "$N_PARALLEL"
+    -b "$BATCH_SIZE"
+    -ub "$UBATCH_SIZE"
     -t "$THREADS"
     -tb "$THREADS_BATCH"
-    -ub "$UBATCH_SIZE"
     --cache-ram "$CACHE_RAM_MIB"
     --ctx-checkpoints "$CTX_CHECKPOINTS_N"
     --ctx-checkpoints-interval "$CTX_CHECKPOINTS_INTERVAL"
     --cache-type-k "$KV_TYPE_K"
     --cache-type-v "$KV_TYPE_V"
+    --recurrent-ckpt-mode auto
+    --merge-qkv
+    --parallel-tool-calls
     --temp "$TEMP"
     --top-p "$TOP_P"
     --top-k "$TOP_K"
