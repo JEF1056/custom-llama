@@ -26,10 +26,10 @@ NGL=${NGL:-999}
 # Flash attention. GPU-only feature; set to off for CPU-only deployments
 # (the cpu Compose services set FLASH_ATTN=off automatically).
 FLASH_ATTN=${FLASH_ATTN:-on}
-# Context window in tokens. Default = 131072 (131k tokens), which guarantees
-# ~4.8 GB of free VRAM headroom on a 24 GB RTX 3090 during long speculative
+# Context window in tokens. Default = 128000 (128k tokens), which guarantees
+# ample free VRAM headroom on a 24 GB RTX 3090 during long speculative
 # decoding turns. Set CTX=262144 if running on a 48 GB+ GPU.
-CTX=${CTX:-131072}
+CTX=${CTX:-128000}
 # KV-cache data type for the 10 full-attention layers (the 30 DeltaNet layers
 # use a fixed-size recurrent state, independent of KV type/context length).
 # q4_0 is the recipe default (~1.5 GB at 262K, see migration plan section 4b).
@@ -66,8 +66,8 @@ DISABLE_MMAP=${DISABLE_MMAP:-0}
 USE_MLOCK=${USE_MLOCK:-0}
 
 # Physical batch size (-ub): max tokens processed per GPU pass during prompt
-# processing. Larger values raise pp throughput (more parallel work per kernel).
-UBATCH_SIZE=${UBATCH_SIZE:-1024}
+# processing. Sized to 512 for low activation VRAM overhead (~500MB buffer vs ~2GB at 1024).
+UBATCH_SIZE=${UBATCH_SIZE:-512}
 THREADS=${THREADS:-16}
 THREADS_BATCH=${THREADS_BATCH:-4}
 
