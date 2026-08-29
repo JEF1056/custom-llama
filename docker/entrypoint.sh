@@ -39,13 +39,10 @@ KV_TYPE_V=${KV_TYPE_V:-$KV_TYPE}
 # migration plan section 0 item 1 / R2). Set 0 to disable.
 KV_HADAMARD=${KV_HADAMARD:-1}
 
-# Prompt caching: the server's context-checkpoint + prompt-state cache (full
-# sequence-state save/restore). Size its RAM budget in MiB (-1 = no limit,
-# 0 = disable).
-CACHE_RAM_MIB=${CACHE_RAM_MIB:-1024}
-# Balanced checkpoint configuration for DeltaNet recurrent state resumption
-# with minimal VRAM overhead: 4 snapshots spaced every 8,192 tokens (~600MB VRAM).
-CTX_CHECKPOINTS_N=${CTX_CHECKPOINTS_N:-4}
+# Prompt caching: the server's context-checkpoint + prompt-state cache.
+# Default to 0 (disabled) to prevent VRAM ballooning on single 24GB GPUs.
+CACHE_RAM_MIB=${CACHE_RAM_MIB:-0}
+CTX_CHECKPOINTS_N=${CTX_CHECKPOINTS_N:-0}
 CTX_CHECKPOINTS_INTERVAL=${CTX_CHECKPOINTS_INTERVAL:-8192}
 
 # Number of concurrent request slots. The server splits the KV context evenly
@@ -155,6 +152,9 @@ SERVER_ARGS=(
     -ub "$UBATCH_SIZE"
     -t "$THREADS"
     -tb "$THREADS_BATCH"
+    --cache-ram "$CACHE_RAM_MIB"
+    --ctx-checkpoints "$CTX_CHECKPOINTS_N"
+    --ctx-checkpoints-interval "$CTX_CHECKPOINTS_INTERVAL"
     --cache-type-k "$KV_TYPE_K"
     --cache-type-v "$KV_TYPE_V"
     --recurrent-ckpt-mode auto
@@ -169,13 +169,6 @@ SERVER_ARGS=(
     --presence-penalty "$PRESENCE_PENALTY"
     --repeat-penalty "$REPEAT_PENALTY"
 )
-
-if [[ -n "${CACHE_RAM_MIB:-}" && "$CACHE_RAM_MIB" -gt 0 ]]; then
-    SERVER_ARGS+=(--cache-ram "$CACHE_RAM_MIB")
-fi
-if [[ -n "${CTX_CHECKPOINTS_N:-}" && "$CTX_CHECKPOINTS_N" -gt 0 ]]; then
-    SERVER_ARGS+=(--ctx-checkpoints "$CTX_CHECKPOINTS_N" --ctx-checkpoints-interval "${CTX_CHECKPOINTS_INTERVAL:-8192}")
-fi
 case "${ENABLE_JINJA,,}" in
     0|false|no|off|"") ;;
     *) SERVER_ARGS+=(--jinja) ;;
