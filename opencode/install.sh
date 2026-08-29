@@ -241,8 +241,8 @@ cat << 'EOF' > "$CONFIG_DEST"
           "tools": true,
           "attachment": true,
           "limit": {
-            "context": 131072,
-            "output": 16384
+            "context": 160000,
+            "output": 32768
           }
         }
       }
@@ -261,7 +261,7 @@ cat << 'EOF' > "$CONFIG_DEST"
           "attachment": true,
           "limit": {
             "context": 160000,
-            "output": 16384
+            "output": 32768
           }
         }
       }

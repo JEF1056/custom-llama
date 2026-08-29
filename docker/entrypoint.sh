@@ -26,8 +26,8 @@ NGL=${NGL:-999}
 # Flash attention. GPU-only feature; set to off for CPU-only deployments
 # (the cpu Compose services set FLASH_ATTN=off automatically).
 FLASH_ATTN=${FLASH_ATTN:-on}
-# Context window in tokens. Default = 200000 (200k tokens), matching the 3090 profile.
-CTX_SIZE=${CTX_SIZE:-${CTX:-200000}}
+# Context window in tokens. Default = 160000 (160k tokens).
+CTX_SIZE=${CTX_SIZE:-${CTX:-160000}}
 CTX=${CTX:-$CTX_SIZE}
 # KV-cache data type for the 10 full-attention layers (the 30 DeltaNet layers
 # use a fixed-size recurrent state, independent of KV type/context length).
