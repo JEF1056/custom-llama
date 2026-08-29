@@ -68,22 +68,4 @@ else
         "$MMPROJ_BF16"
 fi
 
-# 4. DFlash2 Drafter GGUF (skip if exists)
-DFLASH_REPO=${DFLASH_REPO:-"z-lab/Qwen3.8-27B-DFlash2-GGUF"}
-DFLASH_SRC_FILE=${DFLASH_SRC_FILE:-"Qwen3.8-27B-DFlash2-BF16.gguf"}
-DFLASH_SRC_GGUF="$DEST_DIR/$DFLASH_SRC_FILE"
-if [[ -f "$DFLASH_SRC_GGUF" && -s "$DFLASH_SRC_GGUF" ]]; then
-    echo "[download] DFlash2 source GGUF already up to date: $DFLASH_SRC_GGUF"
-else
-    echo "[download] Downloading DFlash2 source GGUF ($DFLASH_SRC_FILE) from $DFLASH_REPO..."
-    hf download "$DFLASH_REPO" \
-        --include "$DFLASH_SRC_FILE" \
-        --local-dir "$DEST_DIR" || {
-            echo "[download] BF16 not found or download failed, attempting Q8_0 fallback..."
-            hf download "$DFLASH_REPO" \
-                --include "Qwen3.8-27B-DFlash2-Q8_0.gguf" \
-                --local-dir "$DEST_DIR"
-        }
-fi
-
 echo "[download] All source components verified in $DEST_DIR."
