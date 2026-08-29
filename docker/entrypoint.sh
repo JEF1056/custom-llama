@@ -155,9 +155,6 @@ SERVER_ARGS=(
     -ub "$UBATCH_SIZE"
     -t "$THREADS"
     -tb "$THREADS_BATCH"
-    --cache-ram "$CACHE_RAM_MIB"
-    --ctx-checkpoints "$CTX_CHECKPOINTS_N"
-    --ctx-checkpoints-interval "$CTX_CHECKPOINTS_INTERVAL"
     --cache-type-k "$KV_TYPE_K"
     --cache-type-v "$KV_TYPE_V"
     --recurrent-ckpt-mode auto
@@ -172,6 +169,13 @@ SERVER_ARGS=(
     --presence-penalty "$PRESENCE_PENALTY"
     --repeat-penalty "$REPEAT_PENALTY"
 )
+
+if [[ -n "${CACHE_RAM_MIB:-}" && "$CACHE_RAM_MIB" -gt 0 ]]; then
+    SERVER_ARGS+=(--cache-ram "$CACHE_RAM_MIB")
+fi
+if [[ -n "${CTX_CHECKPOINTS_N:-}" && "$CTX_CHECKPOINTS_N" -gt 0 ]]; then
+    SERVER_ARGS+=(--ctx-checkpoints "$CTX_CHECKPOINTS_N" --ctx-checkpoints-interval "${CTX_CHECKPOINTS_INTERVAL:-8192}")
+fi
 case "${ENABLE_JINJA,,}" in
     0|false|no|off|"") ;;
     *) SERVER_ARGS+=(--jinja) ;;
