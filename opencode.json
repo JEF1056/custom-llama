@@ -1,5 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "subagent_depth": 3,
   "plugin": [
     "github:JEF1056/harness",
     "./.opencode/plugins/olla-session.js",

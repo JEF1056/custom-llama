@@ -222,8 +222,9 @@ fi
 cat << 'EOF' > "$CONFIG_DEST"
 {
   "$schema": "https://opencode.ai/config.json",
+  "subagent_depth": 3,
   "plugin": [
-    "github:JEF1056/harness",
+    "github:JEF1056/harness#main",
     "./.opencode/plugins/olla-session.js",
     "./.opencode/plugins/tps.js"
   ],
@@ -272,7 +273,7 @@ cat << 'EOF' > "$CONFIG_DEST"
     "mcp-search-server": {
       "type": "remote",
       "enabled": true,
-      "url": "http://localhost:3100/"
+      "url": "http://100.118.67.28:3100/"
     }
   }
 }
