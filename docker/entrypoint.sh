@@ -43,7 +43,7 @@ KV_HADAMARD=${KV_HADAMARD:-1}
 # Prompt caching: the server's context-checkpoint + prompt-state cache (full
 # sequence-state save/restore). Size its RAM budget in MiB (-1 = no limit,
 # 0 = disable).
-CACHE_RAM_MIB=${CACHE_RAM_MIB:-8192}
+CACHE_RAM_MIB=${CACHE_RAM_MIB:-4096}
 
 # Number of concurrent request slots. The server splits the KV context evenly
 # across slots, so N_PARALLEL slots cap a single sequence to CTX / N_PARALLEL
@@ -69,7 +69,7 @@ USE_MLOCK=${USE_MLOCK:-0}
 #   ub=1024: ~16.6GB, ~3192 tok/s  |  ub=2048: ~17.7GB, ~3567 tok/s (diminishing)
 # 1024 chosen: +24% pp throughput over default for only +3% VRAM, ~8GB headroom.
 # Raise toward 2048 for smaller quant with spare VRAM; lower toward 256 for larger.
-UBATCH_SIZE=${UBATCH_SIZE:-1024}
+UBATCH_SIZE=${UBATCH_SIZE:-512}
 THREADS=${THREADS:-16}
 THREADS_BATCH=${THREADS_BATCH:-4}
 
@@ -94,11 +94,11 @@ ENABLE_MTP=${ENABLE_MTP:-1}
 if [[ "$ENABLE_DFLASH" == "1" || "$ENABLE_DFLASH" == "true" || "$ENABLE_DFLASH" == "yes" || "$ENABLE_DFLASH" == "on" ]]; then
     ENABLE_MTP=0
 fi
-MTP_N_MAX=${MTP_N_MAX:-4}
+MTP_N_MAX=${MTP_N_MAX:-3}
 MTP_P_MIN=${MTP_P_MIN:-0.0}
 # Optionally requantize the MTP output head independently (e.g. higher-precision
-# head raises draft acceptance). Empty = use GGUF's baked-in precision.
-MTP_REQUANTIZE_OUTPUT_TYPE=${MTP_REQUANTIZE_OUTPUT_TYPE:-}
+# head raises draft acceptance). Set to iq4_kss for minimal VRAM footprint.
+MTP_REQUANTIZE_OUTPUT_TYPE=${MTP_REQUANTIZE_OUTPUT_TYPE:-iq4_kss}
 
 # Optional n-gram lookup drafter: in ik_llama.cpp, mtmd/vision only supports single-stage MTP/DFlash
 if [[ "$ENABLE_VISION" == "1" ]]; then
