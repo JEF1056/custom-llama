@@ -26,10 +26,9 @@ NGL=${NGL:-999}
 # Flash attention. GPU-only feature; set to off for CPU-only deployments
 # (the cpu Compose services set FLASH_ATTN=off automatically).
 FLASH_ATTN=${FLASH_ATTN:-on}
-# Context window in tokens. Default = 160000 (160k tokens), which guarantees
-# ample free VRAM headroom on a 24 GB RTX 3090 during long speculative
-# decoding turns. Set CTX=262144 if running on a 48 GB+ GPU.
-CTX=${CTX:-160000}
+# Context window in tokens. Default = 200000 (200k tokens), matching the 3090 profile.
+CTX_SIZE=${CTX_SIZE:-${CTX:-200000}}
+CTX=${CTX:-$CTX_SIZE}
 # KV-cache data type for the 10 full-attention layers (the 30 DeltaNet layers
 # use a fixed-size recurrent state, independent of KV type/context length).
 # q4_0 is the recipe default (~1.5 GB at 262K, see migration plan section 4b).
@@ -53,7 +52,8 @@ CTX_CHECKPOINTS_INTERVAL=${CTX_CHECKPOINTS_INTERVAL:-8192}
 # across slots, so N_PARALLEL slots cap a single sequence to CTX / N_PARALLEL
 # tokens. Keep this at 1 so one request can use the FULL CTX (needed for long
 # 100K+ context); raise it only for concurrent serving of shorter sequences.
-N_PARALLEL=${N_PARALLEL:-1}
+NP=${NP:-${N_PARALLEL:-1}}
+N_PARALLEL=${N_PARALLEL:-$NP}
 
 # Model-loading memory behavior. Since the model is fully GPU-offloaded (NGL=999),
 # these mainly affect load-time staging, not steady-state decode throughput.
@@ -122,6 +122,10 @@ MIN_P=${MIN_P:-0.0}
 PRESENCE_PENALTY=${PRESENCE_PENALTY:-0.0}
 REPEAT_PENALTY=${REPEAT_PENALTY:-1.0}
 
+# Reasoning routing (thinking gate)
+REASONING=${REASONING:-off}
+REASONING_FORMAT=${REASONING_FORMAT:-deepseek}
+
 # Preserve thinking. When on (default), prior assistant turns keep their <think>
 # reasoning blocks when the conversation is re-rendered, instead of the template
 # stripping them from every turn before the last user query. Set 0 to strip.
@@ -159,6 +163,8 @@ SERVER_ARGS=(
     --recurrent-ckpt-mode auto
     --merge-qkv
     --parallel-tool-calls
+    --reasoning "$REASONING"
+    --reasoning-format "$REASONING_FORMAT"
     --temp "$TEMP"
     --top-p "$TOP_P"
     --top-k "$TOP_K"
