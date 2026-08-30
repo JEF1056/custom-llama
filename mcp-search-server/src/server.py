@@ -17,7 +17,6 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from src.config import settings
-from src.tools.advisor import advisor_handler
 from src.tools.browser import browser_handler
 from src.tools.code_run import code_run_handler
 from src.tools.deep_search import deep_search_handler
@@ -136,11 +135,10 @@ def create_server() -> FastMCP:
         stateless_http=False,
         instructions=(
             "Tools: web search, browser automation (discrete tools), "
-            "page fetch, Python execution, time, and an advisor LLM for reasoning.\n\n"
+            "page fetch, Python execution, and time.\n\n"
             "USE TOOLS PROACTIVELY. Do not answer from memory when a tool can verify. "
             "Search/fetch before stating any fact that may be outdated. Run code instead "
-            "of doing math in your head. Ask the advisor when reasoning gets hard. "
-            "Chain tools freely; a wrong guess costs more than a tool call.\n\n"
+            "of doing math in your head. Chain tools freely; a wrong guess costs more than a tool call.\n\n"
             "Which tool when:\n"
             "- Need a fact / find sources -> search (titles+snippets).\n"
             "- Read one known page -> fetch.\n"
@@ -153,7 +151,6 @@ def create_server() -> FastMCP:
             "- Discover what's clickable -> get_interactables() then use returned selectors.\n"
             "- See a page visually (layout, chart, confirm an action) -> browser_screenshot.\n"
             "- Math / parse / transform data (no web) -> code_run.\n"
-            "- Hard reasoning or design decision -> advisor.\n"
             "- Current time / timezone -> time_now.\n"
             "- Continue a previewed long result -> read_output.\n\n"
             "Output format: all tools return compact text. Tool results use `---` as a "
@@ -161,8 +158,6 @@ def create_server() -> FastMCP:
             "counts, etc.). Pagination hints show `read_output(handle=\"...\", offset=N)` "
             "calls you can follow directly.\n\n"
             "Tool guide:\n"
-            "- advisor(context, question): local reasoning LLM. Call early on complex tasks. "
-            "Returns: `[advisor: model]` header + response.\n"
             "- search(query): fast titles+snippets. Returns: `Search: \"...\" — N results` "
             "header + numbered list.\n"
             "- fetch(url): full page text. Returns: `[Title](url)` header + content + "
@@ -180,7 +175,7 @@ def create_server() -> FastMCP:
             "- read_output(handle, offset): paginate through large outputs. "
             "Follow the `read_output(handle=\"...\", offset=N)` in footers. "
             "Keep calling until the footer shows `End:`.\n\n"
-            "Typical chain: advisor → search/fetch (→ read_output if previewed) → code_run → answer."
+            "Typical chain: search/fetch (→ read_output if previewed) → code_run → answer."
         ),
     )
     return server
@@ -192,7 +187,6 @@ def register_tools(server: FastMCP) -> None:
     Args:
         server: The MCP server instance.
     """
-    advisor_handler(server)
     search_handler(server)
     fetch_handler(server)
     deep_search_handler(server)

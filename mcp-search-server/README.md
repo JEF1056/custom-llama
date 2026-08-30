@@ -12,20 +12,6 @@ An advanced MCP (Model Context Protocol) server for semantic web search with bro
 
 ## MCP Tools
 
-### `advisor`
-Ask the local LLM for expert reasoning on complex problems. Use this tool whenever
-you need deeper analysis, when you're stuck on a reasoning task, or when you need
-a second opinion on a plan.
-
-**Parameters:**
-- `context` (string): All relevant background for the question — be generous; the advisor only sees what you pass.
-- `question` (string): The specific question or task to reason about.
-
-**Returns:** Markdown — the advisor's response under a header naming the model.
-
-> **When to use:** Whenever you're unsure about an approach, need to reason through
-> a multi-step plan, or hit a dead end. Call it early and often.
-
 ### `search`
 Search the web for information using the configured search engine.
 
@@ -243,13 +229,10 @@ The MCP search server should be called in the following scenarios:
 
 2. **The user specifies URLs that need to be fetched**: When the user provides specific URLs and asks the agent to retrieve or analyze content from those pages, the agent should use the fetch tool or browser automation tools to access the content.
 
-3. **Complex reasoning tasks**: When faced with multi-step planning, debugging, or analysis, call the `advisor` tool to get expert reasoning from the local LLM before proceeding.
-
 ### Tool Categories
 
 | Category | Tools | Purpose |
 |----------|-------|---------|
-| **Expert Reasoning** | `advisor` | Call this whenever you're stuck, need a second opinion, or face a complex reasoning task. Use it liberally. |
 | **Search Tools** | `search`, `fetch`, `deep_search` | Quick information retrieval via HTTP requests and content extraction. |
 | **Browser Navigation** | `navigate_page`, `take_snapshot`, `page_state` | Navigate pages and get accessibility/structural context. |
 | **Browser Interaction** | `click`, `fill`, `get_text`, `evaluate` | Interact with page elements using CSS selectors. |
@@ -262,22 +245,18 @@ The MCP search server should be called in the following scenarios:
 
 ```
 1. Understand the problem
-   └── If complex or multi-step: call advisor(context, question) first
 
 2. Gather information
    ├── search/query: Find relevant pages
    ├── fetch: Extract content from specific URLs
    └── deep_search: Get results with extracted content
 
-3. Reason and plan
-   └── Call advisor() to validate approach or get guidance
-
-4. Execute
+3. Execute
    ├── Browser tools for JS-heavy pages
    └── code_run for computation
 
-5. Verify and iterate
-   └── Use advisor() again if results seem off or you need a different approach
+4. Verify and iterate
+   └── Re-search or re-fetch if results seem off or you need a different approach
 ```
 
 ### Example Scenarios
@@ -497,9 +476,8 @@ mcp-search-server/
 │   │   ├── __init__.py
 │   │   └── content.py      # Content extraction
 │   └── tools/
-│       ├── __init__.py
-│       ├── advisor.py      # Expert reasoning via local LLM
-│       ├── browser.py      # Browser automation tools
+ │       ├── __init__.py
+ │       ├── browser.py      # Browser automation tools
 │       ├── search.py       # Search tool
 │       ├── fetch.py        # Fetch tool
 │       ├── deep_search.py  # Deep search tool
@@ -507,9 +485,8 @@ mcp-search-server/
 │       ├── read_output.py  # read_output (large-output pagination)
 │       └── time_now.py     # time_now tool
 └── tests/
-    ├── __init__.py
-    ├── test_advisor.py     # Advisor tool tests
-    └── test_server.py
+     ├── __init__.py
+     └── test_server.py
 ```
 
 ## Search Engine Options
