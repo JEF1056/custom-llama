@@ -12,7 +12,6 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import torch
 from safetensors import safe_open
 
 if 'NO_LOCAL_GGUF' not in os.environ:
@@ -86,10 +85,10 @@ def main():
     visual_tensors = {}
 
     for sf_path in sorted(safetensor_files):
-        with safe_open(str(sf_path), framework="pt", device="cpu") as f:
+        with safe_open(str(sf_path), framework="numpy") as f:
             for k in f.keys():
                 if "visual" in k or "merger" in k:
-                    tensor = f.get_tensor(k).to(torch.float32).numpy()
+                    tensor = f.get_tensor(k).astype(np.float32)
                     visual_tensors[k] = tensor
 
     print(f"[extract-mmproj] Found {len(visual_tensors)} visual/projector tensors.")
