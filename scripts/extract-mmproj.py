@@ -12,6 +12,10 @@ import sys
 from pathlib import Path
 
 import numpy as np
+try:
+    import ml_dtypes
+except ImportError:
+    pass
 from safetensors import safe_open
 
 if 'NO_LOCAL_GGUF' not in os.environ:

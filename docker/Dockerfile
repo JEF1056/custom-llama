@@ -107,7 +107,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         python3 \
         python3-pip \
-    && pip3 install --no-cache-dir --break-system-packages 'huggingface_hub[cli]' numpy safetensors \
+    && pip3 install --no-cache-dir --break-system-packages 'huggingface_hub[cli]' numpy safetensors ml_dtypes \
     && rm -rf /var/lib/apt/lists/*
 
 # Server binary + quantize/imatrix tools (used by scripts/ for the offline

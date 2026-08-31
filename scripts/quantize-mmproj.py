@@ -86,6 +86,16 @@ def main(src_path: str, dst_path: str) -> None:
         data = t.data
         nbytes_before = data.nbytes
         before += nbytes_before
+        if "v.patch_embd.weight" in t.name and data.ndim == 5:
+            # ik_llama clip.cpp splits Conv3D into two Conv2D kernels:
+            # v.patch_embd.weight (slice 0) and v.patch_embd.weight.1 (slice 1)
+            d0 = data[:, :, 0, :, :].copy()
+            d1 = data[:, :, 1, :, :].copy()
+            writer.add_tensor("v.patch_embd.weight", d0, raw_shape=d0.shape, raw_dtype=t.tensor_type)
+            writer.add_tensor("v.patch_embd.weight.1", d1, raw_shape=d1.shape, raw_dtype=t.tensor_type)
+            after += d0.nbytes + d1.nbytes
+            n_skip += 2
+            continue
         if t.tensor_type.name == 'BF16':
             f32 = data.view(np.uint16).astype(np.uint32)
             f32 = (f32 << 16).view(np.float32)
