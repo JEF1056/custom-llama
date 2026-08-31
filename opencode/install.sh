@@ -96,6 +96,15 @@ rm -rf "$PLUGIN_DIR" "$LEGACY_PLUGIN_DIR"
 rm -f "$TARGET_DIR/opencode.json.bak"*
 mkdir -p "$PLUGIN_DIR" "$LEGACY_PLUGIN_DIR"
 
+# Clear stale GitHub plugin caches so opencode re-fetches the latest on next launch
+PLUGIN_CACHE_BASE="${XDG_CACHE_HOME:-$HOME/.cache}/opencode/packages"
+if [[ -d "$PLUGIN_CACHE_BASE" ]]; then
+    while IFS= read -r -d '' cache_dir; do
+        echo "  ${YELLOW}Clearing stale plugin cache:${NC} $(basename "$cache_dir")"
+        rm -rf "$cache_dir"
+    done < <(find "$PLUGIN_CACHE_BASE" -maxdepth 1 -type d -name "github:*" -print0 2>/dev/null)
+fi
+
 # -----------------------------------------------------------------------------
 # Embedded Plugin: olla-session.js
 # -----------------------------------------------------------------------------
