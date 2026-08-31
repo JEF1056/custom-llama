@@ -292,6 +292,9 @@ fi
 if [[ -n "${REASONING_BUDGET:-}" ]]; then
     SERVER_ARGS+=(--reasoning-budget "$REASONING_BUDGET")
 fi
+if [[ -n "${REASONING_BUDGET_MESSAGE:-}" ]]; then
+    SERVER_ARGS+=(--reasoning-budget-message "$REASONING_BUDGET_MESSAGE")
+fi
 # Preserve prior-turn <think> blocks when re-rendering the chat (template kwarg).
 case "${PRESERVE_THINKING,,}" in
     0|false|no|off|"") PRESERVE_THINKING_ON=0 ;;

@@ -68,6 +68,7 @@ services:
       --reasoning ${REASONING:-on}
       --reasoning-format ${REASONING_FORMAT:-deepseek}
       --reasoning-budget ${REASONING_BUDGET:-4086}
+      --reasoning-budget-message "${REASONING_BUDGET_MESSAGE:-... thinking budget exceeded, let's answer now.}"
       --temp 0.7
       --top-p 0.90
       --top-k 40
