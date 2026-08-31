@@ -51,7 +51,6 @@ services:
       --host 0.0.0.0
       --port 8080
       -m /models/${GGUF_FILE:-qwen38-27b-heretic-ara-iq4_kss.gguf}
-      --mmproj /models/${MMPROJ_FILE:-mmproj-BF16.gguf}
       --alias ${SERVED_NAME:-qwen3.8-27b}
       -c ${CTX_SIZE:-160000}
       -b ${BATCH_SIZE:-4096}
@@ -64,7 +63,6 @@ services:
       --spec-type mtp:n_max=${SPEC_N:-2},p_min=0.5
       --cache-ram ${CACHE_RAM_MIB:-8192}
       --ctx-checkpoints ${CTX_CHECKPOINTS:-16}
-      --checkpoint-every-n-tokens ${CHECKPOINT_INTERVAL:-4096}
       --jinja
       --reasoning ${REASONING:-on}
       --reasoning-format ${REASONING_FORMAT:-deepseek}
