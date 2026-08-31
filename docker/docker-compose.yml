@@ -67,6 +67,7 @@ services:
       --jinja
       --reasoning ${REASONING:-on}
       --reasoning-format ${REASONING_FORMAT:-deepseek}
+      --reasoning-budget ${REASONING_BUDGET:-4086}
       --temp 0.7
       --top-p 0.90
       --top-k 40
