@@ -55,13 +55,13 @@ services:
       --alias ${SERVED_NAME:-qwen3.8-27b}
       -c ${CTX_SIZE:-160000}
       -b ${BATCH_SIZE:-4096}
-      -ub ${UBATCH_SIZE:-256}
+      -ub ${UBATCH_SIZE:-1024}
       -ngl 99
       -fa on
       --cache-type-k ${KV_TYPE:-q4_0}
       --cache-type-v ${KV_TYPE:-q4_0}
       -np ${NP:-1}
-      --spec-type mtp:n_max=${SPEC_N:-2},p_min=0.5
+      --spec-type mtp:n_max=${SPEC_N:-3},p_min=0.5
       --cache-ram ${CACHE_RAM_MIB:-8192}
       --ctx-checkpoints ${CTX_CHECKPOINTS:-16}
       --jinja
