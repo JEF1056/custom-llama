@@ -82,7 +82,6 @@ RUN cmake -B build -G Ninja \
         -DGGML_CUDA=ON \
         -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCH} \
         -DGGML_CUDA_F16=ON \
-        -DGGML_CUDA_NO_VMM=ON \
         -DLLAMA_CURL=ON \
         -DLLAMA_OPENSSL=ON \
         -DLLAMA_BUILD_SERVER=ON \

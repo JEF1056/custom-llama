@@ -1,138 +1,102 @@
-# Docker compose — CUDA server with dev/prod build profiles.
-#
-# BUILD_MODE (default: git) clones our JEF1056/ik_llama.cpp fork's
-# ngram-mtp-vision-chain branch (LLAMA_REPO/LLAMA_REF below) during the
-# image build - a patch on top of stock ikawrakow/ik_llama.cpp allowing an
-# n-gram lookup drafter to chain alongside MTP even when the vision tower is
-# loaded (stock ik_llama.cpp silently disables ALL speculative decoding in
-# that combination - see docs/iqllama-migration-plan.md and repo memory for
-# the full investigation). Override LLAMA_REPO/LLAMA_REF to build stock
-# upstream ikawrakow/ik_llama.cpp@main instead, or set BUILD_MODE=local to
-# build from an external host checkout via a named build context.
-#
-# Profiles:
-#   docker compose up -d --build          # GPU server (dev or prod)
-#   docker compose --profile dev up -d    # GPU server (dev build)
-#   docker compose --profile prod up -d   # GPU server (prod build)
-#   docker compose --profile cpu up -d    # CPU-only server
-#   docker compose --profile prep run     # Full Phase 2 weights pipeline (GPU)
-#   docker compose --profile prep-cpu run # Full Phase 2 weights pipeline (CPU)
-#
-# .env and entrypoint.sh changes take effect on the next `docker compose up -d`
-# with no rebuild. Only Dockerfile, build-arg, or fork-checkout changes require
-# `--build`.
-#
-# Weights live in the qwen36-models NAMED VOLUME, not in the image, so they
-# survive `docker compose up -d --force-recreate` / image rebuilds (only
-# `docker compose down -v` or `docker volume rm` clears them).
-#
-# Requires the NVIDIA Container Toolkit on the host.
-
 services:
-  # GPU server — default profile (runs without --profile flag)
-  server:
+  llama-cpp-qwen38-27b-single:
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        BUILD_MODE: ${BUILD_MODE:-git}
-        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/JEF1056/ik_llama.cpp.git}
-        LLAMA_REF: ${LLAMA_REF:-ngram-mtp-vision-chain}
+        BUILD_MODE: ${BUILD_MODE:-local}
         CUDA_ARCH: ${CUDA_ARCH:-86}
-        CUDA_VERSION: ${CUDA_VERSION:-13.3.0}
+        BUILD_JOBS: 16
       additional_contexts:
         llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
-    image: custom-llama/qwen38-cuda:${BUILD_MODE:-git}
-    container_name: llama-server
-    env_file: .env
-    environment:
-      LLAMA_CACHE: /models
-      MODEL_NAME: qwen3.8-27b
+    image: custom-llama/qwen38-cuda:${BUILD_MODE:-local}
+    container_name: "${ESTATE_CONTAINER:-llama-cpp-qwen38-27b-single}"
+    restart: ${CLUB3090_RESTART:-unless-stopped}
     ports:
-      - "${LLAMA_PORT:-8080}:8080"
+      - "${BIND_HOST:-0.0.0.0}:${ESTATE_PORT:-${PORT:-8080}}:8080"
     volumes:
-      - qwen38-models:/models
-      - qwen38-data:/workspace
-      - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
-    networks:
-      - qwen-net
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
+      - qwen38-models:/models:ro
+    environment:
+      - SPEC_N=${SPEC_N:-}
+      - SPEC=${SPEC:-}
+      - LLAMA_ARG_CHAT_TEMPLATE_KWARGS=${LLAMA_ARG_CHAT_TEMPLATE_KWARGS:-{"reasoning_effort":"${REASONING_EFFORT:-low}"}}
+      - CUDA_VISIBLE_DEVICES=${ESTATE_GPUS:-${CUDA_VISIBLE_DEVICES:-0}}
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        _spec_n="$${SPEC_N:-1}"
+        case "$${SPEC:-}" in off|OFF|Off|false|no|0) _spec_n=0 ;; esac
+        case "$$_spec_n" in ""|*[!0-9]*)
+          echo "[spec] SPEC_N='$$_spec_n' is not a non-negative integer." >&2
+          echo "[spec] Fix: SPEC_N=<n> sets depth; SPEC_N=0 (or SPEC=off) disables." >&2
+          exit 1 ;;
+        esac
+        if [ "$$_spec_n" -gt 0 ]; then
+          echo "[spec] drafter ON (SPEC_N=$$_spec_n)" >&2
+          exec llama-server "$$@"
+        fi
+        ARGS=(); _skip=0
+        for _a in "$$@"; do
+          if [ "$$_skip" = 1 ]; then _skip=0; continue; fi
+          case "$$_a" in
+            --spec-type|--spec-draft-model|--spec-draft-n-max|--spec-draft-n-min|-md|--model-draft) _skip=1; continue ;;
+          esac
+          ARGS+=("$$_a")
+        done
+        echo "[spec] drafter OFF (SPEC_N=0 / SPEC=off) - drafter flags removed" >&2
+        exec llama-server "$${ARGS[@]}"
+      - --
+    command: >-
+      --host 0.0.0.0
+      --port 8080
+      -m /models/${GGUF_FILE:-qwen38-27b-heretic-ara-iq4_kss.gguf}
+      --mmproj /models/${MMPROJ_FILE:-mmproj-BF16.gguf}
+      --alias ${SERVED_NAME:-qwen3.8-27b}
+      -c ${CTX_SIZE:-160000}
+      -b ${BATCH_SIZE:-4096}
+      -ub ${UBATCH_SIZE:-256}
+      -ngl 99
+      -fa on
+      --cache-type-k ${KV_TYPE:-q4_0}
+      --cache-type-v ${KV_TYPE:-q4_0}
+      -np ${NP:-1}
+      --spec-type mtp:n_max=${SPEC_N:-2},p_min=0.5
+      --cache-ram ${CACHE_RAM_MIB:-8192}
+      --ctx-checkpoints ${CTX_CHECKPOINTS:-16}
+      --checkpoint-every-n-tokens ${CHECKPOINT_INTERVAL:-4096}
+      --jinja
+      --reasoning ${REASONING:-on}
+      --reasoning-format ${REASONING_FORMAT:-deepseek}
+      --temp 0.7
+      --top-p 0.90
+      --top-k 40
+      --min-p 0.05
+      --presence-penalty 0.1
+      --repeat-penalty 1.1
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: all
               capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 10
-      start_period: 1800s
-    restart: unless-stopped
 
-  # CPU-only server — profile-gated so it doesn't start alongside GPU by default
-  server-cpu:
-    build:
-      context: .
-      dockerfile: Dockerfile.cpu
-      args:
-        BUILD_MODE: ${BUILD_MODE:-git}
-        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/JEF1056/ik_llama.cpp.git}
-        LLAMA_REF: ${LLAMA_REF:-ngram-mtp-vision-chain}
-      additional_contexts:
-        llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
-    image: custom-llama/qwen36-cpu:${BUILD_MODE:-git}
-    container_name: server-cpu
-    profiles: ["cpu"]
-    env_file: .env
-    environment:
-      LLAMA_CACHE: /models
-      NGL: "0"
-      FLASH_ATTN: "off"
-      KV_HADAMARD: "0"
-      ENABLE_MTP: "0"
-    ports:
-      - "${CPU_PORT:-8083}:8080"
-    volumes:
-      - qwen36-models:/models
-      - qwen36-data:/workspace
-      - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 10
-      start_period: 300s
-    restart: unless-stopped
-
-  # One-shot: full Phase 2 pipeline (BF16 download -> imatrix -> quantize).
-  # Needs GPU for the imatrix pass. Writes into qwen36-models.
-  #   docker compose --profile prep run --rm model-prep
   model-prep:
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        BUILD_MODE: ${BUILD_MODE:-git}
-        LLAMA_REPO: ${LLAMA_REPO:-https://github.com/JEF1056/ik_llama.cpp.git}
-        LLAMA_REF: ${LLAMA_REF:-ngram-mtp-vision-chain}
+        BUILD_MODE: ${BUILD_MODE:-local}
         CUDA_ARCH: ${CUDA_ARCH:-86}
       additional_contexts:
         llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
-    image: custom-llama/qwen38-cuda:${BUILD_MODE:-git}
+    image: custom-llama/qwen38-cuda:${BUILD_MODE:-local}
     container_name: model-prep
     profiles: ["prep"]
     entrypoint: ["/bin/bash", "/scripts/prepare-weights.sh"]
-    env_file: .env
+    environment:
+      - MMPROJ_FILE=mmproj-Q8_0.gguf
     volumes:
       - qwen38-models:/models
       - ../scripts:/scripts:ro
@@ -145,10 +109,5 @@ services:
               capabilities: [gpu]
     restart: "no"
 
-networks:
-  qwen-net:
-    driver: bridge
-
 volumes:
-  qwen38-data:
   qwen38-models:
