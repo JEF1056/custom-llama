@@ -53,7 +53,7 @@ services:
       -m /models/${GGUF_FILE:-qwen38-27b-heretic-ara-iq4_kss.gguf}
       --mmproj /models/${MMPROJ_FILE:-mmproj-BF16.gguf}
       --alias ${SERVED_NAME:-qwen3.8-27b}
-      -c ${CTX_SIZE:-160000}
+      -c ${CTX_SIZE:-200000}
       -b ${BATCH_SIZE:-4096}
       -ub ${UBATCH_SIZE:-1024}
       -ngl 99

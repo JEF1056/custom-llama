@@ -20,7 +20,7 @@
           "tools": true,
           "attachment": true,
           "limit": {
-            "context": 160000,
+            "context": 200000,
             "output": 32768
           }
         }
@@ -39,7 +39,7 @@
           "tools": true,
           "attachment": true,
           "limit": {
-            "context": 160000,
+            "context": 200000,
             "output": 32768
           }
         }
