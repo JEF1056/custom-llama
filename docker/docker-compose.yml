@@ -51,11 +51,11 @@ services:
       --host 0.0.0.0
       --port 8080
       -m /models/${GGUF_FILE:-qwen38-27b-heretic-ara-iq4_kss.gguf}
-      --mmproj /models/${MMPROJ_FILE:-mmproj-BF16.gguf}
+      --mmproj /models/${MMPROJ_FILE:-mmproj-Q8_0.gguf}
       --alias ${SERVED_NAME:-qwen3.8-27b}
       -c ${CTX_SIZE:-200000}
       -b ${BATCH_SIZE:-4096}
-      -ub ${UBATCH_SIZE:-1024}
+      -ub ${UBATCH_SIZE:-512}
       -ngl 99
       -fa on
       --cache-type-k ${KV_TYPE:-q4_0}

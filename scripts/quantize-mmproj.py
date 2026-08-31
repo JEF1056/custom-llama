@@ -97,8 +97,10 @@ def main(src_path: str, dst_path: str) -> None:
             n_skip += 2
             continue
         if t.tensor_type.name == 'BF16':
-            f32 = data.view(np.uint16).astype(np.uint32)
-            f32 = (f32 << 16).view(np.float32)
+            if data.dtype == np.uint16:
+                f32 = (data.astype(np.uint32) << 16).view(np.float32)
+            else:
+                f32 = data.astype(np.float32)
             row_len = f32.shape[-1]
             n_rows = f32.size // row_len
             if row_len % QK8_0 == 0:
