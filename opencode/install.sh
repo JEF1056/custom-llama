@@ -250,6 +250,10 @@ cat << 'EOF' > "$CONFIG_DEST"
           "name": "Qwen3.8-27B (Olla Cluster)",
           "tools": true,
           "attachment": true,
+          "modalities": {
+            "input": ["text", "image"],
+            "output": ["text"]
+          },
           "limit": {
             "context": 200000,
             "output": 32768
@@ -269,6 +273,10 @@ cat << 'EOF' > "$CONFIG_DEST"
           "name": "Qwen3.8-27B (ml-1-wsl Direct)",
           "tools": true,
           "attachment": true,
+          "modalities": {
+            "input": ["text", "image"],
+            "output": ["text"]
+          },
           "limit": {
             "context": 200000,
             "output": 32768
