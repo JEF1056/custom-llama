@@ -6,7 +6,7 @@ services:
       args:
         BUILD_MODE: ${BUILD_MODE:-local}
         CUDA_ARCH: ${CUDA_ARCH:-86}
-        BUILD_JOBS: 16
+        BUILD_JOBS: ${BUILD_JOBS:-4}
       additional_contexts:
         llama-src: ${LLAMA_LOCAL_PATH:-/home/jfan/ik_llama.cpp}
     image: custom-llama/qwen38-cuda:${BUILD_MODE:-local}
