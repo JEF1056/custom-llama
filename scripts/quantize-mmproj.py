@@ -96,16 +96,9 @@ def main(src_path: str, dst_path: str) -> None:
             after += d0.nbytes + d1.nbytes
             n_skip += 2
             continue
-        is_weight = (
-            data.ndim >= 2 and
-            t.name.endswith(".weight") and
-            not any(k in t.name for k in ("ln", "norm", "bias", "position_embd"))
-        )
-        if is_weight and t.tensor_type.name in ('BF16', 'F32', 'F16'):
-            if data.dtype == np.uint16:
-                f32 = (data.astype(np.uint32) << 16).view(np.float32)
-            else:
-                f32 = data.astype(np.float32)
+        if t.tensor_type.name == 'BF16':
+            f32 = data.view(np.uint16).astype(np.uint32)
+            f32 = (f32 << 16).view(np.float32)
             row_len = f32.shape[-1]
             n_rows = f32.size // row_len
             if row_len % QK8_0 == 0:
@@ -116,7 +109,8 @@ def main(src_path: str, dst_path: str) -> None:
                 n_conv += 1
                 after += q8.nbytes
             else:
-                # Not a multiple of the Q8_0 block size (e.g. row_len=4304) - leave untouched
+                # Not a multiple of the Q8_0 block size (e.g. row_len=4304) -
+                # leave as BF16 (F16 would be the same size, no benefit).
                 writer.add_tensor(t.name, data.copy(), raw_shape=t.data.shape,
                                    raw_dtype=t.tensor_type)
                 after += nbytes_before
