@@ -31,23 +31,65 @@ Layers, in order of importance:
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 import random
 import re
+import socket
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 # patchright is a drop-in, CDP-patched replacement for Playwright. Importing it
 # under the same names keeps the rest of the module identical to Playwright.
 from patchright.async_api import async_playwright, Browser, BrowserContext, Page
 import html2text
 
+from src.browser.display import DisplayManager, in_docker
 from src.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Hosts that mean "the machine the browser runs on". Inside a container that is
+# the *host* (where dev servers for local UIs run), not the container itself.
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+
+
+def rewrite_local_url(url: str) -> str:
+    """Rewrite a localhost URL so a containerised browser reaches the host.
+
+    When running inside Docker, ``http://localhost:3000`` resolves to the
+    container, not the host where a local dev UI is running. This rewrites the
+    host portion to ``settings.BROWSER_HOST_TARGET`` (resolving to the Docker
+    host via the compose ``extra_hosts`` mapping) so ``navigate_page``/
+    ``browser_screenshot`` can load local UIs. Outside Docker, or when disabled,
+    the URL is returned unchanged. A missing scheme is normalised to http.
+
+    Args:
+        url: The URL the caller wants to load.
+
+    Returns:
+        The URL to actually navigate to (possibly rewritten / scheme-added).
+    """
+    if not url:
+        return url
+    u = url.strip()
+    if "://" not in u:
+        u = "http://" + u
+    parts = urlsplit(u)
+    host = (parts.hostname or "").lower()
+    if host not in _LOCAL_HOSTS:
+        return u
+    target = settings.BROWSER_HOST_TARGET
+    if host == target.lower():
+        return u
+    if not settings.BROWSER_REWRITE_LOCALHOST or not in_docker():
+        return u
+    netloc = target if not parts.port else f"{target}:{parts.port}"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 # Chromium flags. Deliberately minimal: patchright already strips the
 # automation tells (removes --enable-automation, adds the right
@@ -120,6 +162,11 @@ class BrowserManager:
         self._screenshot_dir = screenshot_dir or settings.SCREENSHOT_DIR
         self._cleanup_task: asyncio.Task | None = None
         self._start_lock = asyncio.Lock()  # Prevents concurrent start() calls from racing
+        # Virtual-display lifecycle (headful anti-detection) + the mode the pool
+        # was actually launched in (headed can degrade to headless on recovery).
+        self._display = DisplayManager(display=settings.XVFB_DISPLAY)
+        self._pool_mode: str | None = None  # "headed" | "headless" | None
+        self._display_watch = True  # watchdog flag, disabled by stop()
         # Ensure screenshot directory exists
         os.makedirs(self._screenshot_dir, exist_ok=True)
 
@@ -138,17 +185,35 @@ class BrowserManager:
             await self._start_unlocked()
 
     async def _start_unlocked(self) -> None:
-        """Internal: launch the browser pool. Must be called with _start_lock held."""
+        """Internal: launch the browser pool. Must be called with _start_lock held.
+
+        For headful mode this first ensures a *live* X display (starting Xvfb if
+        the entrypoint's died). If no display can be brought up it degrades to
+        headless so browsing keeps working instead of failing forever.
+        """
         self._playwright = await async_playwright().start()
-        self._browser_semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_BROWSERS)
+        pool_size = max(1, int(settings.BROWSER_POOL_SIZE))
+        self._browser_semaphore = asyncio.Semaphore(pool_size)
+        self._warn_host_target()
+
+        headed = not settings.BROWSER_HEADLESS
+        if headed:
+            if not await self._display.ensure():
+                logger.warning(
+                    "Headed display unavailable (Xvfb not startable); falling back to headless"
+                )
+                headed = False
+        self._pool_mode = "headed" if headed else "headless"
+        self._display_watch = headed  # only the watchdog-relevant (headed) case
+
         launch_kwargs: dict[str, Any] = {
-            "headless": settings.BROWSER_HEADLESS,
+            "headless": not headed,
             "args": LAUNCH_ARGS,
         }
-        
+
         # Launch multiple browser instances
         channel = None
-        for i in range(self.MAX_CONCURRENT_BROWSERS):
+        for i in range(pool_size):
             try:
                 browser = await self._playwright.chromium.launch(
                     channel="chrome", **launch_kwargs
@@ -163,15 +228,60 @@ class BrowserManager:
                 browser = await self._playwright.chromium.launch(**launch_kwargs)
                 channel = "chromium"
             self._browser_pool.append(browser)
-            logger.info("Browser instance %d/%d launched", i + 1, self.MAX_CONCURRENT_BROWSERS)
+            logger.info("Browser instance %d/%d launched", i + 1, pool_size)
 
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         logger.info(
-            "Browser pool started (%d instances, channel=%s, headless=%s)",
+            "Browser pool started (%d instances, channel=%s, mode=%s)",
             len(self._browser_pool),
             channel,
-            settings.BROWSER_HEADLESS,
+            self._pool_mode,
         )
+
+    def _warn_host_target(self) -> None:
+        """Warn once if local-UI rewriting is on but the host target can't resolve.
+
+        On Docker Desktop / Colima, ``host.docker.internal`` resolves to the host
+        automatically. On plain native Linux it does not, so a localhost rewrite
+        would fail — surface that clearly so the operator can set
+        BROWSER_HOST_TARGET or add an extra_hosts mapping.
+        """
+        if not (in_docker() and settings.BROWSER_REWRITE_LOCALHOST):
+            return
+        target = settings.BROWSER_HOST_TARGET
+        try:
+            socket.gethostbyname(target)
+        except OSError:
+            logger.warning(
+                "BROWSER_REWRITE_LOCALHOST is on but '%s' does not resolve in this "
+                "container, so localhost URLs will not reach the host. On native "
+                "Linux set BROWSER_HOST_TARGET to the host IP or add an "
+                "extra_hosts mapping for host.docker.internal.",
+                target,
+            )
+
+    async def _recycle_pool(self) -> None:
+        """Tear down the browser pool (browsers + sessions) so it can relaunch.
+
+        Called when the X display dies (the Chrome processes die with it) or a
+        pooled browser is found disconnected. Safe to call when not running.
+        """
+        self._display_watch = False
+        for session_id in list(self._sessions.keys()):
+            with contextlib.suppress(Exception):
+                await self.close_session(session_id)
+        self._sessions.clear()
+        self._session_to_browser.clear()
+        for browser in self._browser_pool:
+            with contextlib.suppress(Exception):
+                await browser.close()
+        self._browser_pool.clear()
+        if self._playwright is not None:
+            with contextlib.suppress(Exception):
+                await self._playwright.stop()
+        self._playwright = None
+        self._pool_mode = None
+        logger.info("Browser pool recycled (display/browser recovery)")
 
     async def _create_hardened_context(self, browser: Browser | None = None) -> BrowserContext:
         """Create a browser context that presents a genuine Chrome fingerprint.
@@ -238,6 +348,7 @@ class BrowserManager:
 
     async def stop(self) -> None:
         """Stop the browser pool and close all sessions."""
+        self._display_watch = False
         # Close all sessions
         for session_id, session in list(self._sessions.items()):
             await session.close()
@@ -253,9 +364,12 @@ class BrowserManager:
             except Exception as e:
                 logger.warning("Error closing browser instance %d: %s", i + 1, e)
         self._browser_pool.clear()
-        
+
         if self._playwright:
-            await self._playwright.stop()
+            with contextlib.suppress(Exception):
+                await self._playwright.stop()
+        self._playwright = None
+        self._pool_mode = None
         # Cancel background cleanup task
         if self._cleanup_task:
             self._cleanup_task.cancel()
@@ -264,7 +378,41 @@ class BrowserManager:
             except asyncio.CancelledError:
                 pass
             self._cleanup_task = None
+        # Terminate the Xvfb we may have started (entrypoint's, if any, is left
+        # to the container lifecycle).
+        self._display.stop()
         logger.info("Browser pool stopped")
+
+    async def _get_healthy_browser(self) -> tuple[Browser, int]:
+        """Return a (browser, pool_index) that is actually connected.
+
+        If the pool is empty it is started. If no pooled browser is connected
+        (e.g. the X display died and took the Chrome processes with it), the pool
+        is recycled and relaunched once so the caller gets a working browser.
+
+        Returns:
+            A connected Browser and its index in the pool.
+
+        Raises:
+            RuntimeError: if no browser can be made available.
+        """
+        if not self.is_running:
+            await self.start()
+
+        for idx, browser in enumerate(self._browser_pool):
+            with contextlib.suppress(Exception):
+                if browser.is_connected():
+                    return browser, idx
+
+        # No live browser — recycle (display/browser recovery) and relaunch once.
+        logger.warning("No connected browsers in pool; recycling to recover")
+        await self._recycle_pool()
+        await self.start()
+        for idx, browser in enumerate(self._browser_pool):
+            with contextlib.suppress(Exception):
+                if browser.is_connected():
+                    return browser, idx
+        raise RuntimeError("No browser available after recovery")
 
     async def create_session(self, session_id: str | None = None) -> str:
         """Create a new browser session with a context from a browser in the pool.
@@ -276,12 +424,7 @@ class BrowserManager:
         Returns:
             The session ID.
         """
-        if not self.is_running:
-            await self.start()
-
-        # Select browser from pool using round-robin
-        browser_idx = len(self._sessions) % len(self._browser_pool)
-        browser = self._browser_pool[browser_idx]
+        browser, browser_idx = await self._get_healthy_browser()
 
         session = BrowserSession() if session_id is None else BrowserSession(session_id=session_id)
         session.context = await self._create_hardened_context(browser=browser)
@@ -334,13 +477,33 @@ class BrowserManager:
         if expired:
             logger.info("Expired %d idle session(s)", len(expired))
 
+    async def _watch_display(self) -> None:
+        """Proactively recover when the X display dies.
+
+        If we are running headed and the display is gone, the pooled Chrome
+        processes are already dead. Recycle the pool (frees their memory) and
+        bring the display back up; the pool itself is relaunched lazily on the
+        next browser use. This keeps a memory-starved host from holding onto
+        dead browsers and means the next tool call just works.
+        """
+        if not self._display_watch or self._pool_mode != "headed" or not self._browser_pool:
+            return
+        if not self._display.available:
+            logger.warning(
+                "X display %s is no longer available; recycling browser pool",
+                self._display.display,
+            )
+            await self._recycle_pool()
+            await self._display.ensure()
+
     async def _cleanup_loop(self) -> None:
-        """Background task that periodically expires idle sessions."""
+        """Background task that expires idle sessions and watches the display."""
         interval = min(settings.SESSION_IDLE_TIMEOUT // 4, 60)
         while True:
             await asyncio.sleep(interval)
             try:
                 await self.expire_idle_sessions()
+                await self._watch_display()
             except Exception:
                 logger.exception("Error in session cleanup loop")
 
@@ -386,13 +549,42 @@ class BrowserManager:
             raise RuntimeError("Browser not running")
 
         page = await context.new_page()
+        await self.navigate(page, url, timeout=timeout, wait_until=wait_until)
+        return page
+
+    async def navigate(self, page: Page, url: str, timeout: int | None = None,
+                       wait_until: str = "domcontentloaded") -> Page:
+        """Navigate an existing page to ``url`` with anti-detection behaviour.
+
+        Applies the localhost→host rewrite (so containerised browsing can reach
+        local UIs) and the human-like post-load behaviour. Shared by every
+        navigation path so anti-detection is applied consistently.
+
+        Args:
+            page: The page to navigate.
+            url: Destination URL.
+            timeout: Timeout in seconds (defaults to settings.BROWSER_TIMEOUT).
+            wait_until: When to consider navigation complete.
+
+        Returns:
+            The page.
+        """
         await page.goto(
-            url,
+            rewrite_local_url(url),
             timeout=(timeout or settings.BROWSER_TIMEOUT) * 1000,
             wait_until=wait_until,
         )
-        # A couple of real (trusted) mouse moves — synthetic dispatched events
-        # have isTrusted=false and are ignored by behavioural detectors.
+        await self._humanize(page)
+        return page
+
+    async def _humanize(self, page: Page) -> None:
+        """Add small, trusted, human-like behaviours after a load.
+
+        A couple of real (trusted) mouse moves and a brief scroll-down-and-back
+        avoid the "cursor never moves / always at top" tells that behavioural
+        detectors look for. Synthetic dispatched events are never used (they are
+        ``isTrusted === false`` and get flagged).
+        """
         try:
             for _ in range(random.randint(2, 4)):
                 await page.mouse.move(
@@ -402,18 +594,18 @@ class BrowserManager:
                 )
         except Exception:
             pass
-        # Simulate a scroll down and back up to avoid "always at top" fingerprint
-        await page.evaluate(
-            """() => {
-                const h = Math.floor(window.innerHeight * 0.3);
-                window.scrollTo(0, h);
-                setTimeout(() => window.scrollTo(0, 0), 300);
-            }"""
-        )
-        await asyncio.sleep(0.5)
-        # Add random delay to avoid bot detection
+        try:
+            await page.evaluate(
+                """() => {
+                    const h = Math.floor(window.innerHeight * 0.3);
+                    window.scrollTo(0, h);
+                    setTimeout(() => window.scrollTo(0, 0), 300);
+                }"""
+            )
+            await asyncio.sleep(0.5)
+        except Exception:
+            pass
         await self._add_delay()
-        return page
 
     async def _add_delay(self) -> None:
         """Add a random delay to simulate human behavior.
@@ -464,12 +656,15 @@ class BrowserManager:
         # Capture as bytes
         screenshot_bytes = await page.screenshot(full_page=full_page)
 
-        # Save to disk
-        timestamp = asyncio.get_event_loop().time()
+        # Save to disk. Wall-clock ms + a short uuid avoids collisions between
+        # screenshots taken within the same second (the old loop-time, 1s
+        # resolution, overwrote earlier shots).
+        ts_ms = int(time.time() * 1000)
+        uniq = uuid.uuid4().hex[:6]
         session_prefix = session_id[:8] if session_id else "default"
         path = os.path.join(
             self._screenshot_dir,
-            f"screenshot_{session_prefix}_{timestamp:.0f}.png",
+            f"screenshot_{session_prefix}_{ts_ms}_{uniq}.png",
         )
         os.makedirs(self._screenshot_dir, exist_ok=True)
         with open(path, "wb") as f:

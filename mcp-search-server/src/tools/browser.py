@@ -177,11 +177,9 @@ def browser_handler(server: FastMCP) -> None:
                 await ctx.report_progress(0, 2, "Preparing page\u2026")
             page, sid = await _ensure_page(session_id)
             if url:
-                await page.goto(
-                    url,
-                    timeout=settings.BROWSER_TIMEOUT * 1000,
-                    wait_until="domcontentloaded",
-                )
+                # mgr.navigate applies the localhost→host rewrite (so local UIs
+                # are reachable from the container) plus human-like behaviour.
+                await _get_browser_manager().navigate(page, url)
 
             if ctx:
                 await ctx.report_progress(1, 2, "Capturing screenshot\u2026")
@@ -251,11 +249,11 @@ def browser_handler(server: FastMCP) -> None:
             page, scoped_sid = await _ensure_page(scoped_sid)
             mgr = _get_browser_manager()
             wait = wait_until or "domcontentloaded"
-            await page.goto(url, timeout=settings.BROWSER_TIMEOUT * 1000, wait_until=wait)
+            await mgr.navigate(page, url, wait_until=wait)
             if ctx:
                 await ctx.report_progress(1, 2, "Extracting page state\u2026")
             state = await mgr.get_page_state(page, max_length=8000)
-            snapshot = state.get("snapshot", "")
+            snapshot = state.get("accessibility", "")
             interactables_count = state.get("interactables_count", 0)
             lines = [f"URL: {state.get('url', '')}", f"Title: {state.get('title', '')}"]
             if snapshot:
@@ -343,7 +341,7 @@ def browser_handler(server: FastMCP) -> None:
             if ctx:
                 await ctx.report_progress(1, 2, "Done")
             lines = [f"URL: {state.get('url', '')}", f"Title: {state.get('title', '')}"]
-            snapshot = state.get("snapshot", "")
+            snapshot = state.get("accessibility", "")
             interactables_count = state.get("interactables_count", 0)
             if snapshot:
                 lines.append(format_result(snapshot, footer=f"Interactables: {interactables_count} visible"))

@@ -30,8 +30,21 @@ class Settings(BaseSettings):
         description="Run Chromium headless. Set false (with a virtual display like Xvfb) "
         "for the strongest anti-bot evasion — headful browsers are far harder to fingerprint.",
     )
+    BROWSER_POOL_SIZE: int = Field(default=3, description="Number of browser instances kept in the pool (tune to RAM)")
+    XVFB_DISPLAY: str = Field(default=":99", description="X display name for headful mode (used to start/probe Xvfb)")
     SCREENSHOT_DIR: str = Field(default="/app/mcp-files/screenshots", description="Directory to save screenshots")
     SESSION_IDLE_TIMEOUT: int = Field(default=600, description="Seconds of inactivity before browser session auto-closes")
+
+    # Localhost routing (for debugging local UIs from inside the container)
+    BROWSER_REWRITE_LOCALHOST: bool = Field(
+        default=True,
+        description="When running in Docker, rewrite localhost/127.0.0.1 URLs to BROWSER_HOST_TARGET "
+        "so the container's browser can reach dev servers running on the host.",
+    )
+    BROWSER_HOST_TARGET: str = Field(
+        default="host.docker.internal",
+        description="Hostname that resolves to the Docker host (used for the localhost rewrite).",
+    )
 
     # Result settings
     MAX_RESULTS: int = Field(default=10, description="Maximum number of search results")

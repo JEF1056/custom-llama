@@ -42,6 +42,10 @@ if command -v Xvfb >/dev/null 2>&1; then
     export BROWSER_HEADLESS="${BROWSER_HEADLESS:-false}"
     export DISPLAY="${DISPLAY:-:99}"
     echo "  Browser: headful via Xvfb on ${DISPLAY} (BROWSER_HEADLESS=${BROWSER_HEADLESS})"
+    # Clear stale X state from a previous (possibly OOM-killed) Xvfb so a fresh
+    # start isn't blocked by a leftover lock ("Server is already active"). The
+    # in-server DisplayManager does the same at runtime as a backstop.
+    rm -f "/tmp/.X${DISPLAY#:}-lock" 2>/dev/null || true
     # -ac disables X access control so Chrome can connect without xauth.
     Xvfb "${DISPLAY}" -screen 0 1920x1080x24 -ac +extension GLX +render -noreset -nolisten tcp &
     XVFB_PID=$!

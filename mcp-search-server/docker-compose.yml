@@ -15,8 +15,20 @@ services:
       BROWSER_HEADLESS: ${BROWSER_HEADLESS:-false}
       DISPLAY: :99
       MCP_CORS_ORIGINS: "*"
+      # Let the container's browser reach dev servers on the host (local UIs).
+      # The browser rewrites localhost/127.0.0.1 -> BROWSER_HOST_TARGET.
+      BROWSER_REWRITE_LOCALHOST: ${BROWSER_REWRITE_LOCALHOST:-true}
+      BROWSER_HOST_TARGET: ${BROWSER_HOST_TARGET:-host.docker.internal}
     ports:
       - "3100:3100"
+    # host.docker.internal is provided automatically by Docker Desktop and
+    # Colima/Lima (it resolves to the real host). Do NOT force
+    # "host.docker.internal:host-gateway" here: on those runtimes host-gateway
+    # is the in-VM docker bridge, not the host, and would break local-UI access.
+    # On plain native Linux (no Docker Desktop/Colima), uncomment one of these
+    # to make host.docker.internal resolve to the host:
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
     volumes:
       - mcp-files:/app/mcp-files
     healthcheck:
