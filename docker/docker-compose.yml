@@ -51,7 +51,7 @@ services:
       --host 0.0.0.0
       --port 8080
       -m /models/${GGUF_FILE:-qwen38-27b-heretic-ara-iq4_kss.gguf}
-      --mmproj /models/${MMPROJ_FILE:-mmproj-Q8_0.gguf}
+      --mmproj /models/${MMPROJ_FILE:-mmproj-BF16.gguf}
       --no-mmproj-offload
       --alias ${SERVED_NAME:-qwen3.8-27b}
       -c ${CTX_SIZE:-200000}
@@ -98,7 +98,7 @@ services:
     profiles: ["prep"]
     entrypoint: ["/bin/bash", "/scripts/prepare-weights.sh"]
     environment:
-      - MMPROJ_FILE=mmproj-Q8_0.gguf
+      - MMPROJ_FILE=mmproj-BF16.gguf
     volumes:
       - qwen38-models:/models
       - ../scripts:/scripts:ro

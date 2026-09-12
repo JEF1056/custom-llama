@@ -20,7 +20,7 @@ export IMATRIX="${IMATRIX:-$SRC_DIR/Qwen3.8-27B-heretic-ara.imatrix.dat}"
 
 "$SCRIPT_DIR/quantize.sh"
 
-MMPROJ_FILE=${MMPROJ_FILE:-mmproj-Q8_0.gguf}
+MMPROJ_FILE=${MMPROJ_FILE:-mmproj-BF16.gguf}
 if [[ -f "$SRC_DIR/mmproj-BF16.gguf" ]]; then
     if [[ "$MMPROJ_FILE" == "mmproj-BF16.gguf" ]]; then
         echo "[prepare] Copying $SRC_DIR/mmproj-BF16.gguf -> /models/$MMPROJ_FILE..."
